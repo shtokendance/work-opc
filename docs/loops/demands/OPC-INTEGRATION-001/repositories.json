@@ -38,13 +38,13 @@
     }
   },
   "requirementsVersion": {
-    "commit": null,
+    "commit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
     "sha256": "sha256:9c63a8c01548da0c573c166e3eb64a9bcd7433b770da35bb69f1f6ea7761cac9"
   },
   "releaseChecklist": {
     "path": "release-checklist.md",
     "state": "ready",
-    "sha256": "sha256:018f5f5575d78bded57a00c3022a9b96df84497885bf034cb49e6044f95db3c0",
+    "sha256": "sha256:59ec576dc0170b0bd072f6bbb0993d434f9d07e29a22317f93794f16188619a4",
     "preparedAt": "2026-10-21T11:30:00+08:00"
   },
   "participants": [
@@ -99,13 +99,13 @@
       "status": "confirmed",
       "repositoryUnitPath": "repositories/code-opc/repository-receipt.json",
       "traceExport": {
+        "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+        "state": "verified",
+        "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
+        "participantCommit": "e5358a26a81135d70561ebaefd0d39d4d3787b8f",
+        "packageSha256": "sha256:93d656b76756730cfa2f6410f054ecb7277a2771779cae1055c03be41d426782",
         "required": true,
-        "state": "pending",
-        "packagePath": null,
-        "sourceCommit": null,
-        "packageSha256": null,
-        "participantCommit": null,
-        "verifiedAt": null
+        "verifiedAt": "2026-10-21T19:07:05+08:00"
       }
     },
     {
@@ -129,13 +129,13 @@
       "status": "confirmed",
       "repositoryUnitPath": "repositories/platform-opc/repository-receipt.json",
       "traceExport": {
+        "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+        "state": "verified",
+        "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
+        "participantCommit": "413794cfb9968cd2bde5c49d87ac4115709f29e7",
+        "packageSha256": "sha256:5ac00ad94356644f7c1f2e35407c2ed3ef3f7473bc58f9a6521ef92bc04a089b",
         "required": true,
-        "state": "pending",
-        "packagePath": null,
-        "sourceCommit": null,
-        "packageSha256": null,
-        "participantCommit": null,
-        "verifiedAt": null
+        "verifiedAt": "2026-10-21T19:07:05+08:00"
       }
     },
     {
@@ -158,25 +158,26 @@
       "status": "confirmed",
       "repositoryUnitPath": "repositories/knowledge-opc/repository-receipt.json",
       "traceExport": {
+        "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+        "state": "verified",
+        "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
+        "participantCommit": "fe4b373548713ef6fef0abc6dc16a7d80446fe5d",
+        "packageSha256": "sha256:67eecc5d800806de0c812d3833f21977c4980e76190b46040ce5766452c9e2af",
         "required": true,
-        "state": "pending",
-        "packagePath": null,
-        "sourceCommit": null,
-        "packageSha256": null,
-        "participantCommit": null,
-        "verifiedAt": null
+        "verifiedAt": "2026-10-21T19:07:05+08:00"
       }
     }
   ],
   "excludedCandidates": [],
   "unavailableCandidates": [],
   "closure": {
-    "state": "pending",
+    "state": "ready",
     "aggregateReview": {
-      "outcome": "PENDING",
-      "evidencePath": null,
-      "reviewedAt": null
+      "outcome": "READY_FOR_HUMAN_REVIEW",
+      "evidencePath": "docs/loops/demands/OPC-INTEGRATION-001/repositories/aggregate-review.md",
+      "reviewedAt": "2026-10-21T18:30:00+08:00"
     },
     "receiptPath": "solo-closure-receipt.json"
-  }
+  },
+  "protocol": "sdd-solo@1"
 }

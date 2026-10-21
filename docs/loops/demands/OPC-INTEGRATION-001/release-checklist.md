@@ -1,7 +1,7 @@
 # 上线执行清单：OPC-INTEGRATION-001 OPC 全量集成与双客户端统一接入
 
 - demandId: `OPC-INTEGRATION-001`
-- 清单状态: `ready`（2026-10-21 按最终代码复核；执行动作均未勾选）
+- 清单状态: `ready`
 - 目标环境: 既有测试服务器（knowledge 3001/3003、platform 3002 所在 compose 网络；公网入口按 ADR-012 在安全基线用例通过后开放）
 - 执行负责人: Roger0808
 - 计划窗口: not-scheduled
