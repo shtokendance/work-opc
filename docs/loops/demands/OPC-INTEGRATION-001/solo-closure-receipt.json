@@ -5,29 +5,29 @@
   "deliveryMode": "full",
   "state": "verified",
   "manifestPath": "docs/loops/demands/OPC-INTEGRATION-001/repositories.json",
-  "manifestSha256": "sha256:a614731db674724a0053bf7d4e2c471697d3092d77ce49880e09ac65e2cf298e",
-  "authorityCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
+  "manifestSha256": "sha256:44997defc24df9e63b084d10574be00ba2b6089ebc9f68595e68e77095a26787",
+  "authorityCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
   "participants": [
     {
       "repositoryId": "code-opc",
-      "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
-      "participantCommit": "e5358a26a81135d70561ebaefd0d39d4d3787b8f",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "010c2407065303f1b7949234cde80e77f90c5532",
       "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
-      "packageSha256": "sha256:93d656b76756730cfa2f6410f054ecb7277a2771779cae1055c03be41d426782"
+      "packageSha256": "sha256:3fec9510b2d188a730d0e621e1ecea1222b6f19da82b355f15e068c8b9216f73"
     },
     {
       "repositoryId": "platform-opc",
-      "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
-      "participantCommit": "413794cfb9968cd2bde5c49d87ac4115709f29e7",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "f5a0ea9229f3a32f66f7c73cc0f7207b48ef0a37",
       "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
-      "packageSha256": "sha256:5ac00ad94356644f7c1f2e35407c2ed3ef3f7473bc58f9a6521ef92bc04a089b"
+      "packageSha256": "sha256:8c50da3f800fd519b0b802854779b2c25a50ccdc35d491e175bd8efb57294d8c"
     },
     {
       "repositoryId": "knowledge-opc",
-      "sourceCommit": "3011e55004007f8eaca34b65aba4506be8a5dd49",
-      "participantCommit": "fe4b373548713ef6fef0abc6dc16a7d80446fe5d",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "57f6e8e4bbbbd200498ef6cbd912999da8925dd6",
       "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
-      "packageSha256": "sha256:67eecc5d800806de0c812d3833f21977c4980e76190b46040ce5766452c9e2af"
+      "packageSha256": "sha256:4a2c80e6ee7f2b758da2c9f1bb38d139fc773a89da470cd6cd223aed363c4c6b"
     }
   ],
   "primaryEvidence": [
@@ -38,7 +38,7 @@
     },
     {
       "path": "repositories.json",
-      "sha256": "sha256:a614731db674724a0053bf7d4e2c471697d3092d77ce49880e09ac65e2cf298e"
+      "sha256": "sha256:44997defc24df9e63b084d10574be00ba2b6089ebc9f68595e68e77095a26787"
     },
     {
       "path": "repositories/aggregate-review.md",
@@ -61,5 +61,5 @@
       "sha256": "sha256:36ff98978573c4ebd0cb82e82e09dff74b06251653032fe3ed143cb061013152"
     }
   ],
-  "verifiedAt": "2026-10-21T11:07:48.973Z"
+  "verifiedAt": "2026-10-21T12:10:41.082Z"
 }
