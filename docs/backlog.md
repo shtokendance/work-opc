@@ -15,7 +15,6 @@
 - knowledge SQLite 迁移链未加 000129-000131（versioned 主链已覆盖；本地 SQLite 模式发布技能需补链）。
 - knowledge swag docs 未重新生成（新路由注解已写）。
 - knowledge EXT-002 参数加密：IntegrationConfig ArgsKey 未配置时参数明文存储（digest 绑定完整性；如需强制加密可改无密钥拒 Ask 路径）。
-- work Tauri `Cargo.lock` 未更新（本机无 Rust 工具链；keyring 3.x 待 cargo check 环境验证）。
 - work `agent.py` 的 `extra_skill_dirs` 顺序语义（后写覆盖）已用 `enterprise_skill_dirs` 尾插参数规避——后续若重构 SkillLoader 需保持企业优先测试。
 - work sidecar 回跳路径违反 INT-101a：桌面 DMG 冒烟（2026-10-21，对测试平台 http://10.101.102.116:3002 实测）`POST /v1/enterprise/login/start` 被平台以 `AUTH_STATE_MISMATCH`（redirect_uri must be http://127.0.0.1:<port>/callback）拒绝；`coworker/server/app.py:1935` 的 `_enterprise_redirect_uri` 构造的是 `http://127.0.0.1:<port>/v1/enterprise/oauth/callback`，与规格/平台 allowlist 不符，企业登录全链路因此未通。修复方向：sidecar 回跳改 `/callback` 并同步调整回调路由，修后需重出桌面包复测。
 - 规格措辞待对账澄清两处：BND-140 manifest.sha256=payload digest（zip 内 manifest 无法哈希整包）；BND-150 调用上下文 sub=knowledge 用户 id、immutable_subject 入 user claim（按 knowledge validateContext 事实裁决）。
