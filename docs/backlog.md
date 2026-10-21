@@ -17,6 +17,7 @@
 - knowledge EXT-002 参数加密：IntegrationConfig ArgsKey 未配置时参数明文存储（digest 绑定完整性；如需强制加密可改无密钥拒 Ask 路径）。
 - work Tauri `Cargo.lock` 未更新（本机无 Rust 工具链；keyring 3.x 待 cargo check 环境验证）。
 - work `agent.py` 的 `extra_skill_dirs` 顺序语义（后写覆盖）已用 `enterprise_skill_dirs` 尾插参数规避——后续若重构 SkillLoader 需保持企业优先测试。
+- work sidecar 回跳路径违反 INT-101a：桌面 DMG 冒烟（2026-10-21，对测试平台 http://10.101.102.116:3002 实测）`POST /v1/enterprise/login/start` 被平台以 `AUTH_STATE_MISMATCH`（redirect_uri must be http://127.0.0.1:<port>/callback）拒绝；`coworker/server/app.py:1935` 的 `_enterprise_redirect_uri` 构造的是 `http://127.0.0.1:<port>/v1/enterprise/oauth/callback`，与规格/平台 allowlist 不符，企业登录全链路因此未通。修复方向：sidecar 回跳改 `/callback` 并同步调整回调路由，修后需重出桌面包复测。
 - 规格措辞待对账澄清两处：BND-140 manifest.sha256=payload digest（zip 内 manifest 无法哈希整包）；BND-150 调用上下文 sub=knowledge 用户 id、immutable_subject 入 user claim（按 knowledge validateContext 事实裁决）。
 - code 桌面企业 MCP 人工审批界面：来源 OPC-INTEGRATION-001 / REQ-009；work 端复用既有 Inbox 审批卡，code 桌面本轮未建精确 MCP 审批 UI（企业任务遇需审批写工具结构性拒绝执行，fail-closed 设计）。若试点出现"需在 code 桌面人工批准 MCP 调用"的真实场景，补一块审批界面（knowledge Decide 端点已就绪）。
 - code WS 的 PAT 连接未穿授权版本快照：来源 OPC-INTEGRATION-001 / C-4（审查 R3-2）；HTTP Auth 与 DaemonAuth 的 PAT 已比对 590 版本快照，WebSocket 的 PAT 连接（ResolveTokenEnterprise）仅比对 subject，30s 周期重校验复用同一 checker。纵深防御缺口（推送路径与中间件重锚已覆盖主链路），不阻断本轮；后续把版本快照穿到 WS checker。

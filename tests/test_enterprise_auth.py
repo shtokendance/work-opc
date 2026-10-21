@@ -112,7 +112,7 @@ def test_login_start_requires_loopback_redirect(fake_opc, tmp_path, monkeypatch)
     client = _client(tmp_path, monkeypatch, platform=fake_opc.base_url)
     start = _start(client, fake_opc)
     req = fake_opc.authorize_requests[start["txn_id"]]
-    assert req["redirect_uri"] == "http://127.0.0.1:8765/v1/enterprise/oauth/callback"
+    assert req["redirect_uri"] == "http://127.0.0.1:8765/callback"
     assert req["code_challenge_method"] == "S256"
     assert req["code_challenge"]  # PKCE challenge present
 

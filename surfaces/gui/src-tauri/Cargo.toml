@@ -26,6 +26,8 @@ uuid = { version = "1", features = ["v4"] }
 # Enterprise refresh token storage (BND-160): the macOS Keychain backend keeps the
 # enterprise credential out of secrets.json entirely; on other OSes the crate's
 # native backend is used the same way. Values never leave the main process in logs.
-keyring = "3"
+# keyring 3.x gates every platform backend behind a feature ("apple-native" selects
+# the Keychain store on macOS); without it Entry::new compiles but fails at runtime.
+keyring = { version = "3", features = ["apple-native"] }
 # Kept outside the Tauri shell so another product can depend on the same local STT engine.
 ocw-stt = { path = "../../../stt" }

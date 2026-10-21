@@ -236,6 +236,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         # carries no sidecar token. Every OTHER /v1/enterprise/* route stays
         # behind the token gate like the rest of the API.
         "/v1/enterprise/oauth/callback",
+        "/callback",
     }
 
     def _request_authenticated(request: Request) -> bool:
@@ -1933,10 +1934,11 @@ def create_app(manager: SessionManager) -> FastAPI:
     manager.enterprise_auth = enterprise_auth
 
     def _enterprise_redirect_uri(request: Request) -> str:
+        # INT-101a 契约：平台只接受 http://127.0.0.1:<port>/callback 回环地址。
         base = str(request.base_url).rstrip("/")
         if base.startswith("http://localhost:"):
             base = "http://127.0.0.1:" + base.rsplit(":", 1)[1]
-        return f"{base}/v1/enterprise/oauth/callback"
+        return f"{base}/callback"
 
     @app.post("/v1/enterprise/login/start")
     async def enterprise_login_start(request: Request) -> Any:
@@ -1949,6 +1951,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         status = 400 if code == "ENTERPRISE_NOT_CONFIGURED" else 502
         return JSONResponse(out, status_code=status)
 
+    @app.get("/callback")
     @app.get("/v1/enterprise/oauth/callback")
     async def enterprise_oauth_callback(
         code: str = "", state: str = "", error: str = ""
