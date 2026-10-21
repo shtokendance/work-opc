@@ -126,6 +126,8 @@ export function scopeNote(
   // OPE-219: the ask is to let commands OUT, so the corner says what it changes.
   if (name === "request_network_access") return { text: tt("approval.scope.network_access"), external: true };
   if (category === "connector") return { text: tt("approval.scope.connector"), external: true };
+  // TASK-W04: an enterprise approval executes at the OPC platform, not on this Mac.
+  if (category === "enterprise") return { text: tt("approval.scope.enterprise"), external: true };
   // MCP tools (OPE-136 finding 4): the one family the old fallthrough mislabeled
   // "stays on this computer". The destination comes from the server DEF — the user's
   // own config — never from anything the server claims. No destination known (e.g. a

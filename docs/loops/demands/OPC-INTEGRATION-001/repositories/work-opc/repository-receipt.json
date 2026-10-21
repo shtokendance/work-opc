@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "demandId": "OPC-INTEGRATION-001",
+  "repositoryId": "work-opc",
+  "baseline": {
+    "branch": "main",
+    "commit": "5bf0d2fb8c728932fdbc6b49a24113aebc2a4ddd"
+  },
+  "branch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+  },
+  "implementation": {
+    "ref": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "fingerprint": "sha256:a35d1e161c3c0fdee004e7de6663180ded046b15037a20334d4533b225595870"
+  },
+  "verification": {
+    "outcome": "PASS",
+    "evidence": [
+      "verification.md"
+    ]
+  },
+  "review": {
+    "outcome": "READY_FOR_HUMAN_REVIEW",
+    "evidence": "review.md"
+  },
+  "dependencies": [],
+  "ready": true,
+  "generatedAt": "2026-10-21T18:47:54+08:00"
+}

@@ -293,6 +293,10 @@ def build_engine(
     # Persona-carried skill folders (OPE-58): the bundle's skills/ dir joins the loader so
     # its skills are readable by load_skill, not just listed by the filter.
     extra_skill_dirs: Optional[list[str | Path]] = None,
+    # Enterprise managed skill dirs (BND-142 opc/<tenant>/<publish_id>). These go
+    # LAST: the loader lets a LATER dir win a name collision, so a managed copy
+    # shadows a personal skill of the same name — never the reverse (BND-120).
+    enterprise_skill_dirs: Optional[list[str | Path]] = None,
 ) -> TurnEngine:
     ws = Path(workspace).expanduser().resolve() if workspace else None
     if agent.requires_folder and ws is None:
@@ -556,8 +560,13 @@ def build_engine(
             instructions = f"{instructions}\n\n{block}"
 
     # Persona dirs come FIRST so a user's global/workspace copy of the same name shadows
-    # the bundle's (later dirs overwrite earlier in the loader).
-    skill_loader = SkillLoader([Path(d) for d in (extra_skill_dirs or [])] + _skill_dirs(ws))
+    # the bundle's (later dirs overwrite earlier in the loader). Enterprise managed
+    # dirs come LAST, the same collision rule running in the opposite direction: a
+    # managed copy wins over a personal same-named skill (BND-120/142).
+    enterprise_dirs = [Path(d) for d in (enterprise_skill_dirs or [])]
+    skill_loader = SkillLoader(
+        [Path(d) for d in (extra_skill_dirs or [])] + _skill_dirs(ws) + enterprise_dirs
+    )
     # Per-session effective menu (SKILLS-SPEC §3). The manager passes a CALLABLE so
     # load_skill consults the LIVE state per call (a Settings disable applies to running
     # sessions; a skill created after this build is still loadable). The catalog itself
@@ -858,6 +867,7 @@ def build_engine(
         "workspace": str(ws) if ws else "",
     }
     engine.skill_loader = skill_loader  # type: ignore[attr-defined]
+    engine.enterprise_skill_dirs = enterprise_dirs  # type: ignore[attr-defined]
     _engine_box.append(engine)  # late-bind for the countermand (see context_provider)
     return engine
 

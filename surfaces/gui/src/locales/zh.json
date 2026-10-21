@@ -117,6 +117,12 @@
     "manage_personas": "管理角色…",
     "group_and_filter_short": "分组与筛选会话",
     "unseen_new_other": "{{count}} 次新运行",
+    "enterprise_sign_in": "企业登录",
+    "enterprise_signing_in": "企业登录进行中…",
+    "enterprise_signed_in": "企业：{{subject}}",
+    "enterprise_failed": "企业登录失败：{{error}}",
+    "enterprise_sign_out": "退出企业登录",
+    "enterprise_desktop_only": "企业登录仅在桌面应用可用。",
     "unseen_failed_other": "{{count}} 次新运行 —— 最新一次失败"
   },
   "topbar": {
@@ -666,7 +672,8 @@
       "mcp_server_fallback": "MCP 服务器",
       "mcp_local": "在本机运行一个本地程序",
       "mcp_unknown": "通过 MCP 服务器执行操作",
-      "network_access": "让沙盒可以访问一个网站"
+      "network_access": "让沙盒可以访问一个网站",
+      "enterprise": "离开本机 → OPC 平台"
     },
     "btn": {
       "allow_every_time": "每次都允许",
@@ -863,6 +870,7 @@
     "approve": "批准",
     "reject": "拒绝",
     "dismiss": "忽略",
+    "enterprise_chip": "企业操作",
     "always_task_title": "为「{{task}}」总是允许针对 {{target}} —— 可在其自动化页面随时撤销",
     "send_count": "发送 ({{count}})",
     "or_type_answer": "或输入你自己的回答…",

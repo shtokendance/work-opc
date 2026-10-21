@@ -115,6 +115,7 @@ class ConversationStore:
             "ALTER TABLE sessions ADD COLUMN actor TEXT",
             "ALTER TABLE sessions ADD COLUMN usage TEXT",
             "ALTER TABLE sessions ADD COLUMN spawn TEXT",
+            "ALTER TABLE sessions ADD COLUMN enterprise TEXT",
         ):
             try:
                 self._conn.execute(ddl)
@@ -347,8 +348,8 @@ class ConversationStore:
             title = record.title or title_from(record.messages)
             self._conn.execute(
                 """
-                INSERT INTO sessions (session_id, workspace, model, mode, title, agent, n_msgs, messages, extra_roots, grants, compaction, team, bindings, actor, usage, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO sessions (session_id, workspace, model, mode, title, agent, n_msgs, messages, extra_roots, grants, compaction, team, bindings, actor, usage, enterprise, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(session_id) DO UPDATE SET
                     workspace = excluded.workspace, model = excluded.model, mode = excluded.mode,
                     title = COALESCE(sessions.title, excluded.title), agent = excluded.agent,
@@ -356,6 +357,15 @@ class ConversationStore:
                     grants = excluded.grants, compaction = excluded.compaction,
                     actor = COALESCE(NULLIF(sessions.actor, ''), excluded.actor),
                     usage = excluded.usage,
+                    -- An incoming empty binding ({}) means "no in-memory truth"
+                    -- (e.g. the manager restarted and rebuilt the record), not
+                    -- "switch to personal" — preserve the stored binding. A real
+                    -- switch to personal writes {} through set_enterprise directly.
+                    enterprise = CASE
+                        WHEN excluded.enterprise IN ('', '{}')
+                        THEN COALESCE(NULLIF(sessions.enterprise, ''), excluded.enterprise)
+                        ELSE excluded.enterprise
+                    END,
                     updated_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE sessions.updated_at END
                 """,
                 (
@@ -373,6 +383,7 @@ class ConversationStore:
                     json.dumps(record.bindings or {}),
                     record.actor or "",
                     json.dumps(record.usage or {}),
+                    json.dumps(record.enterprise or {}),
                     touch,
                 ),
             )
@@ -426,7 +437,24 @@ class ConversationStore:
             ),
             usage=_load_grants(row["usage"] if "usage" in row.keys() else None),
             spawn=_load_grants(row["spawn"] if "spawn" in row.keys() else None),
+            enterprise=_load_grants(
+                row["enterprise"] if "enterprise" in row.keys() else None
+            ),
         )
+
+    def set_enterprise(self, session_id: str, enterprise: dict) -> None:
+        """Persist the session's enterprise binding (BND-160/DATA-120c). The
+        per-turn upsert also writes this column from the record, but preserves
+        the stored value when the incoming record carries no binding ({}) — so
+        a post-restart save with an empty in-memory map can't silently unbind
+        an enterprise session. A deliberate switch to personal still lands: it
+        writes {} through THIS method before the next turn-save runs."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET enterprise = ? WHERE session_id = ?",
+                (json.dumps(enterprise or {}), session_id),
+            )
+            self._conn.commit()
 
     def set_spawn(self, session_id: str, spawn: dict) -> None:
         """Persist what a configuration started this session with (spec §10). Like

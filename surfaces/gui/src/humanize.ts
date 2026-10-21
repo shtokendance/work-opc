@@ -160,6 +160,16 @@ export function humanizeApprovalTitle(name: string, args: any): HumanLine {
       if (!hosts.length) return { pre: "Let commands reach a site" };
       return { pre: "Let commands reach ", obj: hosts.length > 2 ? `${hosts[0]} and ${hosts.length - 1} more` : hosts.join(" and ") };
     }
+    // TASK-W04: precise MCP invocation through the OPC platform — name the tool
+    // and the managed service, like the parked card's own title.
+    case "mcp_invoke":
+      return a.tool_name
+        ? {
+            pre: "Run ",
+            obj: String(a.tool_name),
+            post: a.service_id ? ` on ${a.service_id}` : "",
+          }
+        : { pre: "Run a managed tool" };
     default:
       return { pre: `Use ${name}` };
   }

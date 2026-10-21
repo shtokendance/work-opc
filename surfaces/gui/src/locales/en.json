@@ -118,6 +118,12 @@
     "group_and_filter_short": "Group & filter conversations",
     "unseen_new_one": "{{count}} new run",
     "unseen_new_other": "{{count}} new runs",
+    "enterprise_sign_in": "Enterprise sign in",
+    "enterprise_signing_in": "Enterprise sign-in in progress…",
+    "enterprise_signed_in": "Enterprise: {{subject}}",
+    "enterprise_failed": "Enterprise sign-in failed: {{error}}",
+    "enterprise_sign_out": "Enterprise sign out",
+    "enterprise_desktop_only": "Enterprise sign-in is available in the desktop app only.",
     "unseen_failed_one": "{{count}} new run — the latest failed",
     "unseen_failed_other": "{{count}} new runs — the latest failed"
   },
@@ -676,7 +682,8 @@
       "mcp_server_fallback": "the MCP server",
       "mcp_local": "runs a local program on this computer",
       "mcp_unknown": "acts through an MCP server",
-      "network_access": "opens the sandbox to a site"
+      "network_access": "opens the sandbox to a site",
+      "enterprise": "leaves this computer → the OPC platform"
     },
     "btn": {
       "allow_every_time": "Allow every time",
@@ -875,6 +882,7 @@
     "approve": "Approve",
     "reject": "Reject",
     "dismiss": "Dismiss",
+    "enterprise_chip": "Enterprise action",
     "always_task_title": "Always allow against {{target}} for \"{{task}}\" — revoke any time on its Automations page",
     "send_count": "Send ({{count}})",
     "or_type_answer": "Or type your own answer…",

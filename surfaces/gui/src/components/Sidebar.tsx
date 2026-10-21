@@ -21,6 +21,17 @@ import {
   type RecentWorkspace,
   type SurfaceVisibility, Machine } from "../api";
 import { cloudMe } from "../cloudAuth";
+import {
+  createEnterpriseSession,
+  type EnterpriseState,
+} from "../enterprise";
+import {
+  enterpriseSecretDelete,
+  enterpriseSecretGet,
+  enterpriseSecretPut,
+  isTauri,
+  openExternal,
+} from "../tauri";
 import type { SessionInfo } from "../types";
 import { isProjectScoped, shortPersonaName } from "../personaScope";
 import { ConnectorIcon } from "../connectors/ConnectorIcon";
@@ -201,6 +212,35 @@ export function Sidebar(props: Props) {
     () => localStorage.getItem("ocw:inbox-unlocked") === "1",
   );
   const refreshCloud = () => getCloudStatus().then(setCloud).catch(() => {});
+  // Enterprise (OPC platform) sign-in — three states: idle / logging in /
+  // signed in / failed. The refresh token never lives in this page's storage
+  // (Keychain via the Tauri commands); this component carries only the
+  // short-lived UI state (TASK-W02).
+  const [ent, setEnt] = useState<EnterpriseState>({ kind: "idle" });
+  const enterprise = useMemo(
+    () =>
+      createEnterpriseSession({
+        isDesktop: isTauri,
+        open: openExternal,
+        secrets: {
+          put: enterpriseSecretPut,
+          get: enterpriseSecretGet,
+          delete: enterpriseSecretDelete,
+        },
+        pollDelayMs: 1000,
+        maxPolls: 120, // ~2min, matching the cloud sign-in bound
+        refreshSkewMs: 120_000, // rotate the access token ~2min before it dies
+      }),
+    [],
+  );
+  useEffect(() => {
+    const unsubscribe = enterprise.subscribe(setEnt);
+    void enterprise.syncFromServer();
+    return () => {
+      unsubscribe();
+      enterprise.dispose();
+    };
+  }, [enterprise]);
   useEffect(() => {
     refreshCloud();
     const onFocus = () => refreshCloud();
@@ -1329,6 +1369,58 @@ export function Sidebar(props: Props) {
                     })}
                   </>
                 )}
+                {/* Enterprise (OPC platform) sign-in — desktop only: the refresh
+                    token's home is the macOS Keychain, the browser has none. */}
+                {!hostedActor && (
+                  <>
+                    <div className="h-px bg-line my-1 mx-2" />
+                    {ent.kind === "signed_in" ? (
+                      <>
+                        <div
+                          className="px-3 py-1.5 mb-1 text-label text-faint truncate border-b border-line"
+                          title={ent.subject}
+                          data-testid="enterprise-status"
+                        >
+                          {t("sidebar.enterprise_signed_in", { subject: ent.subject })}
+                        </div>
+                        {appMenuItem("signOut", t("sidebar.enterprise_sign_out"), async () => {
+                          setAppMenuOpen(false);
+                          await enterprise.logout();
+                        })}
+                      </>
+                    ) : (
+                      <>
+                        {(ent.kind === "logging_in" || ent.kind === "failed") && (
+                          <div
+                            className={
+                              "px-3 py-1.5 text-label " +
+                              (ent.kind === "failed" ? "text-warnInk" : "text-faint")
+                            }
+                            data-testid="enterprise-status"
+                          >
+                            {ent.kind === "logging_in"
+                              ? t("sidebar.enterprise_signing_in")
+                              : ent.error === "desktop-only"
+                                ? t("sidebar.enterprise_desktop_only")
+                                : t("sidebar.enterprise_failed", { error: ent.error })}
+                          </div>
+                        )}
+                        <button
+                          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-ui text-left text-accent hover:bg-paper disabled:opacity-50"
+                          data-testid="enterprise-sign-in"
+                          disabled={ent.kind === "logging_in"}
+                          onClick={async () => {
+                            // Menu stays open so the logging-in / failed state is visible.
+                            await enterprise.beginLogin();
+                          }}
+                        >
+                          <Icon name="user" size={15} className="shrink-0" />{" "}
+                          {t("sidebar.enterprise_sign_in")}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1340,7 +1432,10 @@ export function Sidebar(props: Props) {
             }
             data-testid="account-row"
             onClick={() => {
-              if (!appMenuOpen) refreshCloud();
+              if (!appMenuOpen) {
+                refreshCloud();
+                void enterprise.syncFromServer();
+              }
               setAppMenuOpen((v) => !v);
             }}
             aria-haspopup="menu"
