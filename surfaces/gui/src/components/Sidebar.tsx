@@ -4,7 +4,6 @@ import {
   announceCloudChanged,
   AUTOMATIONS_CHANGED,
   CLOUD_CHANGED,
-  cloudLogin,
   cloudLogout,
   getAutomations,
   getCloudStatus,
@@ -14,7 +13,6 @@ import {
   isCloudMode,
   PERSONAS_CHANGED,
   setNavLayout,
-  waitForCloudSignIn,
   type Automation,
   type CloudStatus,
   type Persona,
@@ -440,6 +438,21 @@ export function Sidebar(props: Props) {
     ? accountEmail.split("@")[0].replace(/^./, (c) => c.toUpperCase())
     : "";
   const accountSignedIn = Boolean(hostedActor) || Boolean(cloud?.signed_in);
+  // 企业登录同样算"已登录"：未登录云账号时账户行展示企业身份。
+  const entSignedIn = ent.kind === "signed_in";
+  const entLabel =
+    entSignedIn && (ent.name || ent.email)
+      ? [ent.name, ent.email].filter(Boolean).join(" ")
+      : entSignedIn
+        ? ent.subject
+        : "";
+  const entLabelDetail = entSignedIn ? (entLabel || ent.subject) : "";
+  const accountDisplayName = accountSignedIn
+    ? accountName
+    : entSignedIn
+      ? (ent.name || ent.email?.split("@")[0] || ent.subject)
+      : "";
+  const rowSignedIn = accountSignedIn || entSignedIn;
 
   // Roll the per-session attention/liveness up to the persona header and the footer Inbox: the
   // accent count bubbles (sum), the liveness dot aggregates (working wins over sleeping).
@@ -1317,31 +1330,7 @@ export function Sidebar(props: Props) {
                   >
                     {accountEmail}
                   </div>
-                ) : (
-                  <>
-                    <div className="px-3 py-1.5 text-label text-faint border-b border-line">
-                      {t("sidebar.not_signed_in")}
-                    </div>
-                    <button
-                      className="w-full flex items-center gap-2.5 px-3 py-1.5 mb-1 text-ui text-left text-accent hover:bg-paper"
-                      data-testid="account-sign-in"
-                      onClick={async () => {
-                        setAppMenuOpen(false);
-                        // Opens the system browser server-side; completion lands out-of-band,
-                        // so poll until it flips (refocusing the window also refetches).
-                        await cloudLogin().catch(() => {});
-                        waitForCloudSignIn((s) => {
-                          if (s) setCloud(s);
-                          // Other always-mounted consumers (Settings' telemetry card,
-                          // connector panes) refetch on this.
-                          if (s?.signed_in) announceCloudChanged();
-                        });
-                      }}
-                    >
-                      <Icon name="plug" size={15} className="shrink-0" /> {t("sidebar.sign_in")}
-                    </button>
-                  </>
-                )}
+                ) : null}
                 {appMenuItem(
                   "inbox",
                   t("nav.inbox"),
@@ -1378,10 +1367,10 @@ export function Sidebar(props: Props) {
                       <>
                         <div
                           className="px-3 py-1.5 mb-1 text-label text-faint truncate border-b border-line"
-                          title={ent.subject}
+                          title={entLabelDetail}
                           data-testid="enterprise-status"
                         >
-                          {t("sidebar.enterprise_signed_in", { subject: ent.subject })}
+                          {t("sidebar.enterprise_signed_in", { label: entLabel })}
                         </div>
                         {appMenuItem("signOut", t("sidebar.enterprise_sign_out"), async () => {
                           setAppMenuOpen(false);
@@ -1440,23 +1429,23 @@ export function Sidebar(props: Props) {
             }}
             aria-haspopup="menu"
             aria-expanded={appMenuOpen}
-            aria-label={accountSignedIn ? t("sidebar.account_aria", { email: accountEmail }) : t("sidebar.account_not_signed_in_aria")}
+            aria-label={rowSignedIn ? t("sidebar.account_aria", { email: accountEmail || entLabelDetail }) : t("sidebar.account_not_signed_in_aria")}
           >
             <span
               className={
                 "w-6 h-6 rounded-full grid place-items-center text-label font-semibold shrink-0 " +
-                (accountSignedIn
+                (rowSignedIn
                   ? "bg-accentSoft text-accent"
                   : "bg-panel text-faint border border-line")
               }
               aria-hidden
             >
-              {accountSignedIn ? accountName.slice(0, 1).toUpperCase() : "?"}
+              {rowSignedIn ? (accountDisplayName || accountName).slice(0, 1).toUpperCase() : "?"}
             </span>
-            <span className={"truncate " + (accountSignedIn ? "" : "text-muted")}>
-              {accountSignedIn ? accountName : t("sidebar.not_signed_in_row")}
+            <span className={"truncate " + (rowSignedIn ? "" : "text-muted")}>
+              {rowSignedIn ? accountDisplayName || accountName : t("sidebar.not_signed_in_row")}
             </span>
-            {accountSignedIn && (
+            {rowSignedIn && (
               <span
                 className="w-[7px] h-[7px] rounded-full bg-ok shrink-0"
                 title={t("sidebar.signed_in_tooltip")}

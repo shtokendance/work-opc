@@ -119,7 +119,7 @@
     "unseen_new_other": "{{count}} 次新运行",
     "enterprise_sign_in": "企业登录",
     "enterprise_signing_in": "企业登录进行中…",
-    "enterprise_signed_in": "企业：{{subject}}",
+    "enterprise_signed_in": "企业：{{label}}",
     "enterprise_failed": "企业登录失败：{{error}}",
     "enterprise_sign_out": "退出企业登录",
     "enterprise_desktop_only": "企业登录仅在桌面应用可用。",

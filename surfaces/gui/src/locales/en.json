@@ -120,7 +120,7 @@
     "unseen_new_other": "{{count}} new runs",
     "enterprise_sign_in": "Enterprise sign in",
     "enterprise_signing_in": "Enterprise sign-in in progress…",
-    "enterprise_signed_in": "Enterprise: {{subject}}",
+    "enterprise_signed_in": "Enterprise: {{label}}",
     "enterprise_failed": "Enterprise sign-in failed: {{error}}",
     "enterprise_sign_out": "Enterprise sign out",
     "enterprise_desktop_only": "Enterprise sign-in is available in the desktop app only.",

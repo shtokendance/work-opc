@@ -72,6 +72,8 @@ class EnterpriseContext:
     generation: int
     authz_version: int
     spaces: list[str]
+    email: str = ""
+    display_name: str = ""
     access_token: str = field(repr=False, default="")  # memory-only, never logged
     obtained_at: float = field(default_factory=time.time)
     expires_in: int = 900
@@ -113,6 +115,8 @@ class EnterpriseContext:
             "generation": self.generation,
             "authz_version": self.authz_version,
             "spaces": list(self.spaces),
+            "email": self.email,
+            "name": self.display_name,
             "epoch": self.epoch,
             "obtained_at": self.obtained_at,
             "expires_in": self.expires_in,
@@ -356,6 +360,8 @@ class EnterpriseAuthService:
             generation=int(body.get("generation") or 0),
             authz_version=int(body.get("authz_version") or 0),
             spaces=[str(s) for s in body.get("spaces") or []],
+            email=str(body.get("email") or ""),
+            display_name=str(body.get("name") or ""),
             access_token=access,
             expires_in=int(body.get("expires_in") or 900),
             epoch=self._epoch,

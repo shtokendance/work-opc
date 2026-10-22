@@ -15,7 +15,7 @@ export const ENTERPRISE_KEYCHAIN_PROFILE = "default";
 export type EnterpriseState =
   | { kind: "idle" }
   | { kind: "logging_in" } // browser flow in flight
-  | { kind: "signed_in"; subject: string; tenant: string }
+  | { kind: "signed_in"; subject: string; tenant: string; email?: string; name?: string }
   | { kind: "failed"; error: string };
 
 export type EnterpriseErrorBody = { error?: { code?: string; message?: string } };
@@ -131,7 +131,7 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
         state?: string;
         error?: { code?: string };
         refresh_token?: string;
-        context?: ({ subject?: string; tenant?: string } & EnterpriseExpiryHint) | null;
+        context?: ({ subject?: string; tenant?: string; email?: string; name?: string } & EnterpriseExpiryHint) | null;
       };
       if (body.state === "succeeded") {
         if (body.refresh_token) {
@@ -142,6 +142,8 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
           kind: "signed_in",
           subject: body.context?.subject || "",
           tenant: body.context?.tenant || "",
+          email: body.context?.email || "",
+          name: body.context?.name || "",
         });
         scheduleRefresh(body.context);
         return;
@@ -171,8 +173,16 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
         const body = (await res.json()) as {
           subject?: string;
           tenant?: string;
+          email?: string;
+          name?: string;
         } & EnterpriseExpiryHint;
-        setState({ kind: "signed_in", subject: body.subject || "", tenant: body.tenant || "" });
+        setState({
+          kind: "signed_in",
+          subject: body.subject || "",
+          tenant: body.tenant || "",
+          email: body.email || "",
+          name: body.name || "",
+        });
         scheduleRefresh(body);
       } else if (state.kind === "signed_in") {
         stopRefreshTimer();
