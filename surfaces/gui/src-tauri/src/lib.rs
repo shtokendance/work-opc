@@ -639,6 +639,48 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+// -- Enterprise secrets (BND-160) ---------------------------------------------------------------
+// The enterprise refresh token lives in the macOS Keychain, service
+// "com.openworker.desktop.enterprise", account = profile. These commands are the ONLY
+// path between the renderer and that entry; the secrets NEVER touch the SPA's logs,
+// localStorage, or the sidecar's secrets.json. The main process never prints a value.
+
+const ENTERPRISE_KEYCHAIN_SERVICE: &str = "com.openworker.desktop.enterprise";
+
+fn enterprise_entry(profile: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(ENTERPRISE_KEYCHAIN_SERVICE, profile)
+        .map_err(|e| format!("keychain entry unavailable: {e}"))
+}
+
+#[tauri::command]
+fn enterprise_secret_put(profile: String, secret: String) -> Result<bool, String> {
+    let entry = enterprise_entry(&profile)?;
+    entry
+        .set_password(&secret)
+        .map_err(|e| format!("keychain write failed: {e}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn enterprise_secret_get(profile: String) -> Result<Option<String>, String> {
+    let entry = enterprise_entry(&profile)?;
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("keychain read failed: {e}")),
+    }
+}
+
+#[tauri::command]
+fn enterprise_secret_delete(profile: String) -> Result<bool, String> {
+    let entry = enterprise_entry(&profile)?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(format!("keychain delete failed: {e}")),
+    }
+}
+
 // --- Auto-update (tauri-plugin-updater) -------------------------------------------
 // The GUI drives updates through these commands (same invoke bridge as everything
 // else — no global plugin JS): check, background pre-download, install. Update
@@ -781,7 +823,10 @@ pub fn run() {
             check_for_update,
             download_update,
             clear_pending_update,
-            install_update
+            install_update,
+            enterprise_secret_put,
+            enterprise_secret_get,
+            enterprise_secret_delete
         ])
         .setup(move |app| {
             // 1. Start the Python server sidecar on the chosen port (inherits our env).

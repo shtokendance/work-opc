@@ -119,6 +119,20 @@ export type UpdateInfo = { version: string; notes: string };
  * null = up to date, unreachable endpoint, or not the desktop app. */
 export const checkForUpdate = () => invoke<UpdateInfo | null>("check_for_update");
 
+// --- Enterprise refresh token (BND-160): the macOS Keychain bridge ------------
+// These commands are the ONLY path between the SPA and the Keychain entry
+// (service com.openworker.desktop.enterprise). In the browser there is no
+// bridge — callers check isTauri() first and degrade to "desktop only".
+
+export const enterpriseSecretPut = (profile: string, secret: string) =>
+  invokeStrict<boolean>("enterprise_secret_put", { profile, secret });
+
+export const enterpriseSecretGet = (profile: string) =>
+  invokeStrict<string | null>("enterprise_secret_get", { profile });
+
+export const enterpriseSecretDelete = (profile: string) =>
+  invokeStrict<boolean>("enterprise_secret_delete", { profile });
+
 /** Pre-fetch + verify the update bytes in the background so the install is instant.
  * The shell caches them keyed by version; calling again for the same version is a no-op.
  * Rejects when there is no update or the download fails — callers fall back to the

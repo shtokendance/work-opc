@@ -4,7 +4,6 @@ import {
   announceCloudChanged,
   AUTOMATIONS_CHANGED,
   CLOUD_CHANGED,
-  cloudLogin,
   cloudLogout,
   getAutomations,
   getCloudStatus,
@@ -14,13 +13,23 @@ import {
   isCloudMode,
   PERSONAS_CHANGED,
   setNavLayout,
-  waitForCloudSignIn,
   type Automation,
   type CloudStatus,
   type Persona,
   type RecentWorkspace,
   type SurfaceVisibility, Machine } from "../api";
 import { cloudMe } from "../cloudAuth";
+import {
+  createEnterpriseSession,
+  type EnterpriseState,
+} from "../enterprise";
+import {
+  enterpriseSecretDelete,
+  enterpriseSecretGet,
+  enterpriseSecretPut,
+  isTauri,
+  openExternal,
+} from "../tauri";
 import type { SessionInfo } from "../types";
 import { isProjectScoped, shortPersonaName } from "../personaScope";
 import { ConnectorIcon } from "../connectors/ConnectorIcon";
@@ -203,6 +212,35 @@ export function Sidebar(props: Props) {
     () => localStorage.getItem("ocw:inbox-unlocked") === "1",
   );
   const refreshCloud = () => getCloudStatus().then(setCloud).catch(() => {});
+  // Enterprise (OPC platform) sign-in — three states: idle / logging in /
+  // signed in / failed. The refresh token never lives in this page's storage
+  // (Keychain via the Tauri commands); this component carries only the
+  // short-lived UI state (TASK-W02).
+  const [ent, setEnt] = useState<EnterpriseState>({ kind: "idle" });
+  const enterprise = useMemo(
+    () =>
+      createEnterpriseSession({
+        isDesktop: isTauri,
+        open: openExternal,
+        secrets: {
+          put: enterpriseSecretPut,
+          get: enterpriseSecretGet,
+          delete: enterpriseSecretDelete,
+        },
+        pollDelayMs: 1000,
+        maxPolls: 120, // ~2min, matching the cloud sign-in bound
+        refreshSkewMs: 120_000, // rotate the access token ~2min before it dies
+      }),
+    [],
+  );
+  useEffect(() => {
+    const unsubscribe = enterprise.subscribe(setEnt);
+    void enterprise.syncFromServer();
+    return () => {
+      unsubscribe();
+      enterprise.dispose();
+    };
+  }, [enterprise]);
   useEffect(() => {
     refreshCloud();
     const onFocus = () => refreshCloud();
@@ -402,6 +440,21 @@ export function Sidebar(props: Props) {
     ? accountEmail.split("@")[0].replace(/^./, (c) => c.toUpperCase())
     : "";
   const accountSignedIn = Boolean(hostedActor) || Boolean(cloud?.signed_in);
+  // 企业登录同样算"已登录"：未登录云账号时账户行展示企业身份。
+  const entSignedIn = ent.kind === "signed_in";
+  const entLabel =
+    entSignedIn && (ent.name || ent.email)
+      ? [ent.name, ent.email].filter(Boolean).join(" ")
+      : entSignedIn
+        ? ent.subject
+        : "";
+  const entLabelDetail = entSignedIn ? (entLabel || ent.subject) : "";
+  const accountDisplayName = accountSignedIn
+    ? accountName
+    : entSignedIn
+      ? (ent.name || ent.email?.split("@")[0] || ent.subject)
+      : "";
+  const rowSignedIn = accountSignedIn || entSignedIn;
 
   // Roll the per-session attention/liveness up to the persona header and the footer Inbox: the
   // accent count bubbles (sum), the liveness dot aggregates (working wins over sleeping).
@@ -1294,31 +1347,7 @@ export function Sidebar(props: Props) {
                   >
                     {accountEmail}
                   </div>
-                ) : (
-                  <>
-                    <div className="px-3 py-1.5 text-label text-faint border-b border-line">
-                      {t("sidebar.not_signed_in")}
-                    </div>
-                    <button
-                      className="w-full flex items-center gap-2.5 px-3 py-1.5 mb-1 text-ui text-left text-accent hover:bg-paper"
-                      data-testid="account-sign-in"
-                      onClick={async () => {
-                        setAppMenuOpen(false);
-                        // Opens the system browser server-side; completion lands out-of-band,
-                        // so poll until it flips (refocusing the window also refetches).
-                        await cloudLogin().catch(() => {});
-                        waitForCloudSignIn((s) => {
-                          if (s) setCloud(s);
-                          // Other always-mounted consumers (Settings' telemetry card,
-                          // connector panes) refetch on this.
-                          if (s?.signed_in) announceCloudChanged();
-                        });
-                      }}
-                    >
-                      <Icon name="plug" size={15} className="shrink-0" /> {t("sidebar.sign_in")}
-                    </button>
-                  </>
-                )}
+                ) : null}
                 {appMenuItem(
                   "inbox",
                   t("nav.inbox"),
@@ -1346,6 +1375,58 @@ export function Sidebar(props: Props) {
                     })}
                   </>
                 )}
+                {/* Enterprise (OPC platform) sign-in — desktop only: the refresh
+                    token's home is the macOS Keychain, the browser has none. */}
+                {!hostedActor && (
+                  <>
+                    <div className="h-px bg-line my-1 mx-2" />
+                    {ent.kind === "signed_in" ? (
+                      <>
+                        <div
+                          className="px-3 py-1.5 mb-1 text-label text-faint truncate border-b border-line"
+                          title={entLabelDetail}
+                          data-testid="enterprise-status"
+                        >
+                          {t("sidebar.enterprise_signed_in", { label: entLabel })}
+                        </div>
+                        {appMenuItem("signOut", t("sidebar.enterprise_sign_out"), async () => {
+                          setAppMenuOpen(false);
+                          await enterprise.logout();
+                        })}
+                      </>
+                    ) : (
+                      <>
+                        {(ent.kind === "logging_in" || ent.kind === "failed") && (
+                          <div
+                            className={
+                              "px-3 py-1.5 text-label " +
+                              (ent.kind === "failed" ? "text-warnInk" : "text-faint")
+                            }
+                            data-testid="enterprise-status"
+                          >
+                            {ent.kind === "logging_in"
+                              ? t("sidebar.enterprise_signing_in")
+                              : ent.error === "desktop-only"
+                                ? t("sidebar.enterprise_desktop_only")
+                                : t("sidebar.enterprise_failed", { error: ent.error })}
+                          </div>
+                        )}
+                        <button
+                          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-ui text-left text-accent hover:bg-paper disabled:opacity-50"
+                          data-testid="enterprise-sign-in"
+                          disabled={ent.kind === "logging_in"}
+                          onClick={async () => {
+                            // Menu stays open so the logging-in / failed state is visible.
+                            await enterprise.beginLogin();
+                          }}
+                        >
+                          <Icon name="user" size={15} className="shrink-0" />{" "}
+                          {t("sidebar.enterprise_sign_in")}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1357,28 +1438,31 @@ export function Sidebar(props: Props) {
             }
             data-testid="account-row"
             onClick={() => {
-              if (!appMenuOpen) refreshCloud();
+              if (!appMenuOpen) {
+                refreshCloud();
+                void enterprise.syncFromServer();
+              }
               setAppMenuOpen((v) => !v);
             }}
             aria-haspopup="menu"
             aria-expanded={appMenuOpen}
-            aria-label={accountSignedIn ? t("sidebar.account_aria", { email: accountEmail }) : t("sidebar.account_not_signed_in_aria")}
+            aria-label={rowSignedIn ? t("sidebar.account_aria", { email: accountEmail || entLabelDetail }) : t("sidebar.account_not_signed_in_aria")}
           >
             <span
               className={
                 "w-6 h-6 rounded-full grid place-items-center text-label font-semibold shrink-0 " +
-                (accountSignedIn
+                (rowSignedIn
                   ? "bg-accentSoft text-accent"
                   : "bg-panel text-faint border border-line")
               }
               aria-hidden
             >
-              {accountSignedIn ? accountName.slice(0, 1).toUpperCase() : "?"}
+              {rowSignedIn ? (accountDisplayName || accountName).slice(0, 1).toUpperCase() : "?"}
             </span>
-            <span className={"truncate " + (accountSignedIn ? "" : "text-muted")}>
-              {accountSignedIn ? accountName : t("sidebar.not_signed_in_row")}
+            <span className={"truncate " + (rowSignedIn ? "" : "text-muted")}>
+              {rowSignedIn ? accountDisplayName || accountName : t("sidebar.not_signed_in_row")}
             </span>
-            {accountSignedIn && (
+            {rowSignedIn && (
               <span
                 className="w-[7px] h-[7px] rounded-full bg-ok shrink-0"
                 title={t("sidebar.signed_in_tooltip")}

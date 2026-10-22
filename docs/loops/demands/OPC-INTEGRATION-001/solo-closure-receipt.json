@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "protocol": "sdd-solo@1",
+  "demandId": "OPC-INTEGRATION-001",
+  "deliveryMode": "full",
+  "state": "verified",
+  "manifestPath": "docs/loops/demands/OPC-INTEGRATION-001/repositories.json",
+  "manifestSha256": "sha256:44997defc24df9e63b084d10574be00ba2b6089ebc9f68595e68e77095a26787",
+  "authorityCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+  "participants": [
+    {
+      "repositoryId": "code-opc",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "010c2407065303f1b7949234cde80e77f90c5532",
+      "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+      "packageSha256": "sha256:3fec9510b2d188a730d0e621e1ecea1222b6f19da82b355f15e068c8b9216f73"
+    },
+    {
+      "repositoryId": "platform-opc",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "f5a0ea9229f3a32f66f7c73cc0f7207b48ef0a37",
+      "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+      "packageSha256": "sha256:8c50da3f800fd519b0b802854779b2c25a50ccdc35d491e175bd8efb57294d8c"
+    },
+    {
+      "repositoryId": "knowledge-opc",
+      "sourceCommit": "806a40a5e7d0c623d66d92e37830b769bfc3d5e4",
+      "participantCommit": "57f6e8e4bbbbd200498ef6cbd912999da8925dd6",
+      "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+      "packageSha256": "sha256:4a2c80e6ee7f2b758da2c9f1bb38d139fc773a89da470cd6cd223aed363c4c6b"
+    }
+  ],
+  "primaryEvidence": [
+    {
+      "path": "release-checklist.md",
+      "sha256": "sha256:59ec576dc0170b0bd072f6bbb0993d434f9d07e29a22317f93794f16188619a4",
+      "hashMode": "checkbox-state-insensitive-v1"
+    },
+    {
+      "path": "repositories.json",
+      "sha256": "sha256:44997defc24df9e63b084d10574be00ba2b6089ebc9f68595e68e77095a26787"
+    },
+    {
+      "path": "repositories/aggregate-review.md",
+      "sha256": "sha256:60154cc5fa4582fc95d859d3233e89467007b61a8a8e45be2b0082d2c747382a"
+    },
+    {
+      "path": "repositories/code-opc/repository-receipt.json",
+      "sha256": "sha256:5238233d933a8a9f1455ced890067d147a5e19844dbd663ff632bf519e4949cc"
+    },
+    {
+      "path": "repositories/knowledge-opc/repository-receipt.json",
+      "sha256": "sha256:33476b7881e34f1c331970059f63f5dd11d224e2945aa308c3af48656bb3e9d9"
+    },
+    {
+      "path": "repositories/platform-opc/repository-receipt.json",
+      "sha256": "sha256:eddaed5688422c165f11192b084645a9d69b08ffcfff95b241b5193850b20535"
+    },
+    {
+      "path": "repositories/work-opc/repository-receipt.json",
+      "sha256": "sha256:36ff98978573c4ebd0cb82e82e09dff74b06251653032fe3ed143cb061013152"
+    }
+  ],
+  "verifiedAt": "2026-10-21T12:10:41.082Z"
+}

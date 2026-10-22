@@ -1,0 +1,183 @@
+{
+ "schemaVersion": 1,
+ "demandId": "OPC-INTEGRATION-001",
+ "naming": {
+  "demandTitle": "OPC 全量集成与双客户端统一接入",
+  "shortTitle": "opc-integration",
+  "conversationTitle": "[SDD Solo][OPC-INTEGRATION-001] OPC 全量集成与双客户端统一接入",
+  "branchDate": "261020",
+  "branchTemplate": "feature/{yyMMdd}_{demandId}_{shortTitle}",
+  "canonicalBranch": "feature/261020_OPC-INTEGRATION-001_opc-integration"
+ },
+ "primaryRepository": "work-opc",
+ "deliveryMode": "full",
+ "modeDecision": {
+  "recommendedMode": "full",
+  "confirmedMode": "full",
+  "confirmedBy": "yj198788@hotmail.com",
+  "confirmedAt": "2026-10-20T17:54:10+08:00",
+  "reasons": [
+   "v3 全阶段纳入本次规划和实施，首批验收为 macOS 与 Claude Code/Codex/Kimi Code。",
+   "个人身份、组织撤权、任务租约、云审批涉及实质安全语义；技能归档和精确 MCP 需要独立原型及架构决策；需完整 SDD 门禁。",
+   "用户已确认保留全量目标、先复用现有接口、必要 knowledge-opc 源码修改单独确认；不以关闭能力冒充全量完成。登录和权限为实施首要顺序。",
+   "2026-10-20 后续范围决定优先于上述联合卡初始全量说明：技能和精确 MCP 必做；组织同步仅受保护接口手动触发；云端 Agent 委托及 C 后置；不引入 OpenBao，必要时先说明并获同意；固定版本必要发布/回滚。full + loop、四仓及基线、分支和平台范围不变。"
+  ],
+  "riskAssessment": {
+   "requirementsResolved": true,
+   "scopeAndAcceptanceClear": true,
+   "repositoriesInspected": true,
+   "verificationPlanClear": false,
+   "rollbackPlanClear": false,
+   "architectureDecisionRisk": "present",
+   "breakingContractOrCutoverRisk": "unknown",
+   "complexDataMigrationRisk": "unknown",
+   "materialSensitiveDomainRisk": "present",
+   "complexReleaseCoordinationRisk": "present",
+   "irreversibleOrHighBlastRadiusRisk": "unknown",
+   "explicitFullGovernanceRequired": "present"
+  }
+ },
+ "requirementsVersion": {
+  "commit": "3f858592729e12bd82033044d47c4ccee7a7e0be",
+  "sha256": "sha256:9c63a8c01548da0c573c166e3eb64a9bcd7433b770da35bb69f1f6ea7761cac9"
+ },
+ "releaseChecklist": {
+  "path": "release-checklist.md",
+  "state": "ready",
+  "sha256": "sha256:59ec576dc0170b0bd072f6bbb0993d434f9d07e29a22317f93794f16188619a4",
+  "preparedAt": "2026-10-21T11:30:00+08:00"
+ },
+ "participants": [
+  {
+   "repositoryId": "work-opc",
+   "remote": "https://github.com/Roger0808/work-opc.git",
+   "role": "primary",
+   "baseline": {
+    "branch": "main",
+    "commit": "5bf0d2fb8c728932fdbc6b49a24113aebc2a4ddd"
+   },
+   "workingBranch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+   },
+   "discoveryEvidence": [
+    "办公执行端；coworker/agent.py:224 build_engine 支持 extra_tools、extra_skill_dirs、skill_filter",
+    "用户于 2026-10-20 确认联合卡；从本次已核实并固定的远程 commit 创建标准分支，既有未跟踪文件字节未变。"
+   ],
+   "status": "confirmed",
+   "repositoryUnitPath": "repositories/work-opc/repository-receipt.json",
+   "traceExport": {
+    "required": false,
+    "state": "not-required",
+    "packagePath": null,
+    "sourceCommit": null,
+    "packageSha256": null,
+    "participantCommit": null,
+    "verifiedAt": null
+   }
+  },
+  {
+   "repositoryId": "code-opc",
+   "remote": "https://github.com/Roger0808/code-opc.git",
+   "role": "participant",
+   "baseline": {
+    "branch": "main",
+    "commit": "2f247cc92f0c5cbf604097e57012b572046d7a6f"
+   },
+   "workingBranch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+   },
+   "discoveryEvidence": [
+    "代码执行端；server/internal/middleware/auth.go 存在 JWT/PAT/task token；server/internal/handler/daemon.go:2555 有 MCP 配置失败回退",
+    "用户于 2026-10-20 确认联合卡；从本次已核实并固定的远程 commit 创建标准分支，既有未跟踪文件字节未变。"
+   ],
+   "status": "confirmed",
+   "repositoryUnitPath": "repositories/code-opc/repository-receipt.json",
+   "traceExport": {
+    "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+    "state": "verified",
+    "sourceCommit": "3f858592729e12bd82033044d47c4ccee7a7e0be",
+    "participantCommit": "2e3883db4257f1ef621ec6cc19d51def217aaa95",
+    "packageSha256": "sha256:53fda0ddced44cf05e785f0b5a32e94fd78e2d05895dd29e849f953110206801",
+    "required": true,
+    "verifiedAt": "2026-10-22T13:10:17+08:00"
+   }
+  },
+  {
+   "repositoryId": "platform-opc",
+   "remote": "https://github.com/Roger0808/wecom-opc.git",
+   "role": "participant",
+   "baseline": {
+    "branch": "main",
+    "commit": "d6a07bf02fd7aeded69fca810c9c7e4f2f07d74c"
+   },
+   "workingBranch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+   },
+   "discoveryEvidence": [
+    "统一接入网关；main.go:87-125 管理路由；pkg/syncer/syncer.go:258 停用用户跳过；已入 Git",
+    "用户于 2026-10-20 确认联合卡；从本次已核实并固定的远程 commit 创建标准分支，既有未跟踪文件字节未变。"
+   ],
+   "status": "confirmed",
+   "repositoryUnitPath": "repositories/platform-opc/repository-receipt.json",
+   "traceExport": {
+    "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+    "state": "verified",
+    "sourceCommit": "3f858592729e12bd82033044d47c4ccee7a7e0be",
+    "participantCommit": "0a543a3313919146f1e575dd220d745e3a12b313",
+    "packageSha256": "sha256:c120d278626016bd882b2f710afc1efe07c5a4673dbf0d6eb5fd55d0ebfc653e",
+    "required": true,
+    "verifiedAt": "2026-10-22T13:10:17+08:00"
+   }
+  },
+  {
+   "repositoryId": "knowledge-opc",
+   "remote": "https://github.com/Roger0808/OPC-2.0.git",
+   "role": "participant",
+   "baseline": {
+    "branch": "release",
+    "commit": "628d974dd68736c39e09a2cc8a077047f5d486f4"
+   },
+   "workingBranch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+   },
+   "discoveryEvidence": [
+    "用户于 2026-10-20 确认联合卡；从本次已核实并固定的远程 commit 创建标准分支，既有未跟踪文件字节未变。"
+   ],
+   "status": "confirmed",
+   "repositoryUnitPath": "repositories/knowledge-opc/repository-receipt.json",
+   "traceExport": {
+    "packagePath": "docs/sdd/demands/OPC-INTEGRATION-001",
+    "state": "verified",
+    "sourceCommit": "3f858592729e12bd82033044d47c4ccee7a7e0be",
+    "participantCommit": "45fc71d13a581eb8dc5017354cb87b89ed653dd7",
+    "packageSha256": "sha256:46055e161405a34343b5059548e0ab4f7fbf28163c6f23ba33c0bd752e513ca7",
+    "required": true,
+    "verifiedAt": "2026-10-22T13:10:17+08:00"
+   }
+  }
+ ],
+ "excludedCandidates": [],
+ "unavailableCandidates": [],
+ "closure": {
+  "state": "ready",
+  "aggregateReview": {
+   "outcome": "READY_FOR_HUMAN_REVIEW",
+   "evidencePath": "docs/loops/demands/OPC-INTEGRATION-001/repositories/aggregate-review.md",
+   "reviewedAt": "2026-10-21T18:30:00+08:00"
+  },
+  "receiptPath": "solo-closure-receipt.json"
+ },
+ "protocol": "sdd-solo@1"
+}

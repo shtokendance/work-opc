@@ -56,6 +56,10 @@ class SessionRecord:
     # user's standing rules for this session only; `worktree` is removed on archive
     # or delete (the clone stays). {} for every other session.
     spawn: dict[str, Any] = field(default_factory=dict)
+    # Enterprise binding (BND-160/DATA-120c): {issuer, subject, tenant, generation}
+    # of the enterprise context this session runs under; {} = personal/legacy.
+    # Sessions are never auto-migrated between accounts.
+    enterprise: dict[str, Any] = field(default_factory=dict)
 
 
 USAGE_FIELDS = ("input", "output", "cache_read", "cache_write")

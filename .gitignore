@@ -11,3 +11,5 @@ dist/
 .env
 .claude/settings.local.json
 uv.lock
+.DS_Store
+.codegraph/
