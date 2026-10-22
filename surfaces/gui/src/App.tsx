@@ -94,6 +94,7 @@ import { SettingsView, type SetTab } from "./components/SettingsView";
 import { PersonaView } from "./components/PersonaView";
 import { AuditView } from "./components/AuditView";
 import { InboxView } from "./components/InboxView";
+import { AppsView } from "./components/AppsView";
 import {
   approvalItemFromPayload,
   connectorItemFromPayload,
@@ -368,7 +369,7 @@ export function App() {
   // load; corrected by loadSettings.
   const [modelReady, setModelReady] = useState(true);
   const [surface, setSurface] = useState<
-    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings"
+    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps"
   >("session");
   // The active session rides the URL (#/s/{id}) so refresh and bookmarks
   // come back here. Deep-link intent (approve) wins until consumed, and the
@@ -1916,7 +1917,7 @@ export function App() {
         {overlay && (
           <div className="titlebar-drag" data-tauri-drag-region>
             <span className="titlebar-brand brand-wordmark">
-              <Icon name="logo" size={13} className="mark" /> OpenWorker<span className="beta-tag">beta</span>
+              <Icon name="logo" size={13} className="mark" /> OPC Work<span className="beta-tag">beta</span>
             </span>
           </div>
         )}
@@ -2068,10 +2069,12 @@ export function App() {
         onOpenIntegrations={() => openSettings("connectors")}
         onOpenAudit={() => setSurface("audit")}
         onOpenInbox={() => setSurface("inbox")}
+        onOpenApps={() => setSurface("apps")}
         scheduledActive={surface === "scheduled"}
         integrationsActive={surface === "settings" && settingsTab === "connectors"}
         auditActive={surface === "audit"}
         inboxActive={surface === "inbox"}
+        appsActive={surface === "apps"}
         collapsed={navCollapsed}
         onCollapse={toggleNav}
         onPeekLeave={() => setNavPeek(false)}
@@ -2128,6 +2131,8 @@ export function App() {
           }
           onOpenIntegrations={() => openSettings("connectors")}
         />
+      ) : surface === "apps" ? (
+        <AppsView onBack={() => setSurface("session")} />
       ) : (
       <div className={"main" + (surface === "session" && agent !== "chat" && !railHidden ? " rail-open" : "")}>
         <div className="main-topbar">

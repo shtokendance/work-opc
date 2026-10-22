@@ -4148,3 +4148,131 @@ export async function forgetConnectorOnMachine(sourceMachineId: string, name: st
   );
   return res.json();
 }
+
+// ==============================================================================
+// OPC V3.0 应用部署与转技能 API
+// ==============================================================================
+
+export const platformBase = (): string =>
+  (globalThis as any).__PLATFORM_HTTP__ ||
+  (import.meta as any).env?.VITE_PLATFORM_HTTP ||
+  "http://127.0.0.1:3002";
+
+export interface AppConfigItem {
+  key: string;
+  value: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface ResourceSummary {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  env_keys: string[];
+}
+
+export interface DeployedApp {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  app_url: string;
+  container_port: number;
+  status: "building" | "running" | "failed";
+  app_config: AppConfigItem[];
+  resource_ids: string[];
+  skill_name: string;
+  catalog_skill_id?: string;
+  skill_synced: boolean;
+  build_log?: string;
+  error_message?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function checkAppSlug(slug: string): Promise<{
+  available: boolean;
+  slug: string;
+  app_url: string;
+  skill_name: string;
+  message?: string;
+}> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/check-slug`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  return res.json();
+}
+
+export async function listOnlineResources(): Promise<{ resources: ResourceSummary[] }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/resources`);
+  return res.json();
+}
+
+export async function listDeployedApps(): Promise<{ apps: DeployedApp[] }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps`);
+  return res.json();
+}
+
+export async function getDeployedApp(slug: string): Promise<DeployedApp> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`);
+  return res.json();
+}
+
+export async function updateDeployedAppConfig(
+  slug: string,
+  body: { container_port?: number; app_config: AppConfigItem[]; resource_ids: string[] }
+): Promise<{ message: string; slug: string }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function transformApp(params: {
+  slug: string;
+  name: string;
+  description: string;
+  app_url: string;
+  container_port?: number;
+  data_b64?: string;
+}): Promise<{ ok: boolean; slug?: string; name?: string; manifest?: any; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/transform`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return res.json();
+}
+
+export async function publishAppToPlatform(params: {
+  slug: string;
+  platform_url?: string;
+  app_config: AppConfigItem[];
+  resource_ids: string[];
+}): Promise<{ ok: boolean; data?: any; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/publish-to-platform`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform_url: platformBase(),
+      ...params,
+    }),
+  });
+  return res.json();
+}
+
+export async function enableLocalSkill(slug: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/enable-skill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  return res.json();
+}
