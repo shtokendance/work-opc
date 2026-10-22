@@ -34,6 +34,7 @@ logger = logging.getLogger("coworker.enterprise.auth")
 
 PLATFORM_TIMEOUT = 15.0  # seconds, per TASK-W02 (all platform calls)
 CLIENT_ID = "work-desktop"  # INT-101a pre-registered id
+AUDIENCE = "work"  # token 兑换必须回显 authorize 时按 client_id 推导的受众
 
 # BND-180 stable codes reused/passed through (platform is the source of truth
 # for its own codes; these two are produced locally).
@@ -316,6 +317,7 @@ class EnterpriseAuthService:
                 "code": code,
                 "code_verifier": txn.code_verifier,
                 "device": self._device_fingerprint(),
+                "audience": AUDIENCE,
             },
         )
         if status >= 400:

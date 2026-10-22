@@ -249,6 +249,13 @@ class FakeOpc:
             verifier = body.get("code_verifier", "")
             if txn["code_challenge"] and _s256(verifier) != txn["code_challenge"]:
                 return JSONResponse(_err("AUTH_STATE_MISMATCH", "PKCE verification failed"), status_code=400)
+            # 平台 token 端点按 client_id 推导受众并要求兑换回显（INT-101c）；
+            # 缺字段/错值一律 AUTH_STATE_MISMATCH，与真平台契约对齐。
+            if body.get("audience", "") != "work":
+                return JSONResponse(
+                    _err("AUTH_STATE_MISMATCH", "audience mismatch with transaction"),
+                    status_code=400,
+                )
             family_id = str(uuid.uuid4())
             access = "opc-access-" + pysecrets.token_urlsafe(12)
             refresh = "opc-refresh-" + pysecrets.token_urlsafe(16)
