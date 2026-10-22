@@ -88,10 +88,19 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
     }
   };
 
+  // 认证头与 api.ts 同一来源：企业端点也在 sidecar token 门后（联调实测：
+  // 缺 x-openworker-token 一律 401，前端读到无 code 的响应体而报 start failed）。
+  const launchToken = (): string =>
+    (globalThis as any).__COWORKER_API_TOKEN__ ||
+    (import.meta as any).env?.VITE_COWORKER_API_TOKEN ||
+    "";
   const post = async (path: string, body?: unknown): Promise<Response> =>
     fetch(`${httpBase()}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-openworker-token": launchToken(),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
@@ -110,7 +119,9 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
       return;
     }
     try {
-      const res = await fetch(`${httpBase()}/v1/enterprise/login/result?login_txn_id=${loginTxnId}`);
+      const res = await fetch(`${httpBase()}/v1/enterprise/login/result?login_txn_id=${loginTxnId}`, {
+        headers: { "x-openworker-token": launchToken() },
+      });
       if (res.status === 404) {
         // Unknown/failed terminal state — the body carries the BND-180 code.
         setState({ kind: "failed", error: await readError(res, "login failed") });
@@ -153,7 +164,9 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
 
   const syncFromServer = async (): Promise<void> => {
     try {
-      const res = await fetch(`${httpBase()}/v1/enterprise/session`);
+      const res = await fetch(`${httpBase()}/v1/enterprise/session`, {
+        headers: { "x-openworker-token": launchToken() },
+      });
       if (res.status === 200) {
         const body = (await res.json()) as {
           subject?: string;
