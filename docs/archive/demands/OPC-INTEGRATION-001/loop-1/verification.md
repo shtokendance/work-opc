@@ -2,7 +2,7 @@
 demandId: OPC-INTEGRATION-001
 loop: 1
 document: verification
-status: confirmed
+status: archived
 confirmedBy: Roger0808 <yj198788@hotmail.com>
 confirmedAt: 2026-10-22
 confirmedVersion: "本文件 v1.0（2026-10-22 收口轮）；验证事实截至四仓 HEAD：work-opc 3f85859、platform-opc 0a543a3、code-opc 2e3883db、knowledge-opc 45fc71d1"

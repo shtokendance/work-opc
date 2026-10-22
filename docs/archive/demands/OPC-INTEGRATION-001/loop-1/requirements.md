@@ -3,7 +3,7 @@ project: work-opc
 demandId: OPC-INTEGRATION-001
 loop: 1
 document: requirements
-status: confirmed
+status: archived
 version: 1.3
 updatedAt: 2026-10-20
 ---
