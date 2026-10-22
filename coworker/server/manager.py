@@ -30,8 +30,12 @@ from ..connections import (
     SessionConnectionStore,
     effective as effective_connections,
 )
-from ..inbox import VIS_INBOX, InboxStore, args_preview
+from ..inbox import STATE_PENDING, VIS_INBOX, VIS_INLINE, InboxStore, args_preview
 from ..inbox_routing import InboxRouting
+from ..enterprise.auth import EnterpriseAuthService, EnterpriseContext
+from ..enterprise import skills as enterprise_skills
+from ..enterprise.skills import build_enterprise_skill_dirs, managed_skills
+from ..enterprise.tools import EnterpriseBridge
 from ..personas import PersonaRegistry
 from ..personas.registry import set_registry as set_persona_registry
 from ..selfwake import WakeStore
@@ -402,6 +406,18 @@ class SessionManager:
         # drained once by the WS handler to append a transcript notice.
         self._mcp_session_failures: dict[str, list[str]] = {}
         self.gateway: Optional[Gateway] = None
+        # Enterprise (OPC) integration: the auth service is attached by create_app
+        # (BND-120/160); the bridge (INT-120/150 tools + the MCP approval bridge) is
+        # built lazily. `_enterprise_context_key` is the last context seen by the
+        # manager — a change drives the switch semantics (orphan approvals, drop
+        # cache shards, close connections).
+        self.enterprise_auth: Optional[EnterpriseAuthService] = None
+        self._enterprise_context_key: Optional[str] = None
+        self._enterprise_bridge: Optional[EnterpriseBridge] = None
+        self._enterprise_refusals_audited: set[str] = set()
+        # session_id -> binding dict — the source of truth for save(); seeded at
+        # engine build and re-pointed on every context switch.
+        self._enterprise_bindings: dict[str, dict[str, Any]] = {}
         self._data_base = base
         # Desktop/UI prefs (default model, onboarding state) — not secrets; a plain JSON file.
         self._prefs = self._load_prefs()
@@ -888,6 +904,10 @@ class SessionManager:
                     ):
                         if not any(Path(r["path"]).resolve() == Path(path).resolve() for r in roots):
                             roots.append({"path": path, "writable": True, "label": label})
+        # Enterprise (BND-120/160): bind THIS build to the live context. None =
+        # personal mode — no enterprise tools, no managed dirs, and the skill
+        # filter resolves exactly as before.
+        enterprise_context = self.enterprise_context()
         engine = build_engine(
             agent=ag,
             workspace=ws,
@@ -914,6 +934,8 @@ class SessionManager:
             extra_tools=[
                 *(extra_tools or []),
                 *self._team_tools_for(session_id, ag, record, ws),
+                *(self._get_enterprise_bridge().build_tools(session_id)
+                  if enterprise_context is not None else []),
             ]
             or None,
             secrets=self.secrets,
@@ -948,13 +970,22 @@ class SessionManager:
             connector_filter=self.effective_connectors(session_id, agent_name),
             # Per-session skill menu, LIVE (SKILLS-SPEC §3): a callable so load_skill sees
             # disables/new skills immediately; the catalog snapshot is taken at build.
+            # The enterprise union is computed live too — a context switch or a failed
+            # distribution-grant refresh changes the menu from the next call on.
             skill_filter=lambda sid=session_id, w=ws, a=agent_name: (
-                self.effective_skill_names(sid, w, agent=a)
+                self._live_skill_filter(sid, w, a)
             ),
             # Persona-carried skills (OPE-58): the bundle's skills/ dir joins the loader
             # so its skills are readable, not just listed.
             extra_skill_dirs=(
                 [d] if (d := self.persona_skill_scope(agent_name)[0]) is not None else None
+            ),
+            # Enterprise managed skills (BND-142): opc/<tenant>/<publish_id> dirs,
+            # injected LAST so a managed copy shadows a personal same-named skill.
+            enterprise_skill_dirs=(
+                build_enterprise_skill_dirs(enterprise_context)
+                if enterprise_context is not None
+                else None
             ),
             # Auto-Approve (spec §1.5): prefs-backed, so the Settings toggle takes effect on
             # the next session build without a config.toml edit.
@@ -964,6 +995,9 @@ class SessionManager:
         engine.delegated_approval = lambda args: self.worker_review_context(session_id, args)
         engine.reviewer_context = lambda: self.approval_context(session_id)
         engine.reviewer_owner_history = lambda: self.approval_owner_history(session_id, engine)
+        # The session's enterprise binding (BND-160/DATA-120c): what the session
+        # runs under RIGHT NOW. Re-marked on every build and on context switch.
+        self._persist_enterprise_binding(session_id, enterprise_context)
         # An automation run rebuilt here (manual "Run now" over WS, durable resume) still
         # carries its task's standing allowances — the rules live on the task record.
         owning_task = self.task_store.task_for_run_session(session_id)
@@ -6452,6 +6486,9 @@ class SessionManager:
         ag = get_agent(task.agent)
         Path(task.workspace).mkdir(parents=True, exist_ok=True)
         task_model = self.resolve_persona_model(task.agent, task.model)
+        # Scheduled runs are background deliveries: they get the enterprise
+        # surface too when a context is live (same binding rules as live builds).
+        enterprise_context = self.enterprise_context()
         engine = build_engine(
             agent=ag,
             workspace=task.workspace,
@@ -6469,6 +6506,11 @@ class SessionManager:
             user_rules=lambda: self.memory_settings.user_rules,
             on_memory_saved=self._memory_saved_notifier(session_id),
             secrets=self.secrets,
+            extra_tools=(
+                self._get_enterprise_bridge().build_tools(session_id)
+                if enterprise_context is not None
+                else None
+            ),
             # No scheduling tools inside a scheduled run: the executing agent's job is to DO the
             # task, and instructions that mention timing ("every day at 5:32pm…") otherwise tempt
             # it to create another automation instead of running this one.
@@ -6479,13 +6521,19 @@ class SessionManager:
             # expose only the persona's effective-enabled connectors' tools (§4.3).
             connector_filter=self.effective_connectors(session_id, task.agent),
             skill_filter=lambda sid=session_id, w=task.workspace, a=task.agent: (
-                self.effective_skill_names(sid, w, agent=a)
+                self._live_skill_filter(sid, w, a)
             ),
             extra_skill_dirs=(
                 [d] if (d := self.persona_skill_scope(task.agent)[0]) is not None else None
             ),
+            enterprise_skill_dirs=(
+                build_enterprise_skill_dirs(enterprise_context)
+                if enterprise_context is not None
+                else None
+            ),
         )
         self._seed_task_permissions(engine, task)
+        self._persist_enterprise_binding(session_id, enterprise_context)
         return engine
 
     # -- mirroring inbox items to a bound channel -------------------------------
@@ -7569,6 +7617,7 @@ class SessionManager:
                 ),
                 actor=self.session_actor(session_id),
                 usage=usage_totals(engine.messages),
+                enterprise=self._enterprise_bindings.get(session_id, {}),
             ),
             touch=touch,
         )
@@ -8405,6 +8454,267 @@ class SessionManager:
                     }
                 )
         return {"skills": rows}
+
+    # -- enterprise (OPC) context binding + switch semantics (BND-120) ------------
+
+    def enterprise_context(self) -> Optional[EnterpriseContext]:
+        """The live enterprise context, or None (personal mode)."""
+        auth = self.enterprise_auth
+        return auth.context if auth is not None else None
+
+    def _enterprise_platform_base(self) -> str:
+        auth = self.enterprise_auth
+        return (auth.platform_base if auth is not None else "") or ""
+
+    def _enterprise_audit(self, row: dict[str, Any]) -> None:
+        try:
+            self.audit_store.append(row)
+        except Exception:  # noqa: BLE001 - audit must never break the caller
+            logger.warning("enterprise audit append failed: %s", row)
+
+    def _prompt_router(self, session_id: str) -> dict[str, str]:
+        """Where an enterprise approval lands — the same routing/visibility the
+        manager uses for every other parked prompt (BND-163 复用)."""
+        agent = self._persona_of(session_id)
+        return {
+            "inbox": self.inbox_routing.route_for(session_id, agent),
+            "visibility": (
+                VIS_INBOX if self.unattended.is_unattended(session_id) else VIS_INLINE
+            ),
+        }
+
+    def _get_enterprise_bridge(self) -> EnterpriseBridge:
+        if self._enterprise_bridge is None:
+            self._enterprise_bridge = EnterpriseBridge(
+                context_getter=self.enterprise_context,
+                platform_base_getter=self._enterprise_platform_base,
+                prompt_router=self._prompt_router,
+                inbox=self.inbox,
+                audit=self._enterprise_audit,
+            )
+        return self._enterprise_bridge
+
+    def _live_skill_filter(
+        self,
+        session_id: str,
+        workspace: Optional[str | Path] = None,
+        agent: Optional[str] = None,
+    ) -> set[str]:
+        """The skill menu callable (SKILLS-SPEC §3) plus the enterprise union,
+        evaluated per call: personal names are always unchanged; managed names
+        join only while the distribution grant is fresh (BND-142 — a failed or
+        unrefreshed grant fails closed and the enterprise names leave the menu)."""
+        names = self.effective_skill_names(session_id, workspace, agent=agent)
+        context = self.enterprise_context()
+        if context is None:
+            return names
+        if not enterprise_skills.grant_allows(context):
+            self._schedule_grant_refresh(context)
+            # Fail closed at the LOADER too, not just the menu: the managed
+            # dirs come out of every live SkillLoader, so a same-named skill
+            # resolves to the personal copy again (the loader's later-wins
+            # rule would otherwise keep serving the managed copy).
+            self._suspend_enterprise_dirs()
+            if context.key not in self._enterprise_refusals_audited:
+                self._enterprise_refusals_audited.add(context.key)
+                self._enterprise_audit(
+                    {
+                        "session_id": session_id,
+                        "tool": "enterprise_skills",
+                        "arguments": {"tenant": context.tenant},
+                        "stage": "distribution_grant_refused",
+                        "status": "refused",
+                        "reason": enterprise_skills.grant_detail(context),
+                    }
+                )
+            return names
+        # A grant that recovered after a refusal: put the managed dirs back
+        # (the refusal had stripped them) so load_skill can resolve the names
+        # the menu now admits again.
+        self._restore_enterprise_dirs(context)
+        try:
+            managed = {m.name for m in managed_skills(context) if m.name}
+        except Exception:  # noqa: BLE001 - a bad shard must not break the menu
+            logger.exception("enterprise managed skill scan failed for %s", context.key)
+            managed = set()
+        return names | managed
+
+    def _persist_enterprise_binding(
+        self, session_id: str, context: Optional[EnterpriseContext]
+    ) -> None:
+        """Record which enterprise context the session runs under (BND-160,
+        DATA-120c fields). {} = personal; sessions are never migrated between
+        accounts by anything but a live context switch. The binding rides the
+        in-memory map (save() picks it up from there); when the session row
+        already exists it is also written through immediately."""
+        binding = (
+            {
+                "issuer": context.issuer,
+                "subject": context.subject,
+                "tenant": context.tenant,
+                "generation": context.generation,
+            }
+            if context is not None
+            else {}
+        )
+        self._enterprise_bindings[session_id] = binding
+        try:
+            self.session_store.set_enterprise(session_id, binding)
+        except Exception:  # noqa: BLE001 - binding must not break the build
+            logger.warning("persisting enterprise binding for %s failed", session_id)
+
+    def sync_enterprise_context(self) -> None:
+        """The BND-120 switch hook — compare the live context with the last one
+        seen and, on ANY change (including back to personal), run the switch
+        semantics: orphan the old context's pending enterprise approvals, drop
+        its cache shards and grants, close its connections, re-point every live
+        engine's managed dirs, and queue grant refresh + catalog sync for the
+        new context. Cheap no-op when nothing changed."""
+        context = self.enterprise_context()
+        new_key = context.key if context is not None else None
+        if new_key == self._enterprise_context_key:
+            return
+        old_key = self._enterprise_context_key
+        self._enterprise_context_key = new_key
+        logger.info("enterprise context switch: %s -> %s", old_key, new_key)
+        if old_key is not None:
+            self._orphan_enterprise_approvals(old_key)
+            enterprise_skills.clear_context_cache(old_key)
+            enterprise_skills.drop_grant(old_key)
+            self._close_enterprise_connections(old_key)
+            self._enterprise_refusals_audited.discard(old_key)
+        self._apply_enterprise_dirs(context)
+        if context is not None:
+            self._schedule_grant_refresh(context, force=True)
+            self._schedule_catalog_sync(context)
+        # Engines built under the old truth rebuild at their next idle mark.
+        for session_id in list(self._engines):
+            self._stale_engines.add(session_id)
+
+    def _orphan_enterprise_approvals(self, old_key: str) -> int:
+        """Resolve the old context's still-pending enterprise approvals with
+        `orphaned` — a waiter woken this way returns an unknown outcome and
+        never posts a decision under a dead context (BND-152)."""
+        orphaned = 0
+        for item in self.inbox.list(state=STATE_PENDING):
+            data = item.data if isinstance(item.data, dict) else {}
+            if not data.get("enterprise"):
+                continue
+            if data.get("context_key") and data["context_key"] != old_key:
+                continue
+            if self.inbox.resolve(item.id, "orphaned", by="system:enterprise-context-switch"):
+                orphaned += 1
+        if orphaned:
+            logger.info(
+                "enterprise switch orphaned %d pending approval(s) of %s",
+                orphaned,
+                old_key,
+            )
+        return orphaned
+
+    def _apply_enterprise_dirs(self, context: Optional[EnterpriseContext]) -> None:
+        """Re-point every live engine's SkillLoader at the new context's managed
+        dirs (or none). The managed segment always sits at the TAIL of the dir
+        list — the loader's later-wins rule is what makes a managed copy shadow
+        a personal same-named skill."""
+        dirs = build_enterprise_skill_dirs(context) if context is not None else []
+        for session_id, engine in list(self._engines.items()):
+            self._set_engine_enterprise_dirs(engine, dirs)
+            self._persist_enterprise_binding(session_id, context)
+
+    @staticmethod
+    def _set_engine_enterprise_dirs(engine: Any, dirs: list[Path]) -> None:
+        """Swap one engine's managed skill segment in place (idempotent)."""
+        loader = getattr(engine, "skill_loader", None)
+        if loader is None:
+            return
+        previous = list(getattr(engine, "enterprise_skill_dirs", None) or [])
+        if previous == list(dirs):
+            return
+        base = [d for d in loader._dirs if d not in set(previous)]
+        loader.set_dirs(base + list(dirs))
+        engine.enterprise_skill_dirs = list(dirs)  # type: ignore[attr-defined]
+
+    def _suspend_enterprise_dirs(self) -> None:
+        """BND-142 fail-closed at the loader level: a refused or stale
+        distribution grant strips the managed dirs from every live SkillLoader
+        (the menu alone is not enough — a same-named personal skill must
+        resolve to the personal copy again). The binding is untouched: the
+        session is still enterprise-bound, the grant is just unverified."""
+        for engine in list(self._engines.values()):
+            self._set_engine_enterprise_dirs(engine, [])
+
+    def _restore_enterprise_dirs(self, context: EnterpriseContext) -> None:
+        """The grant allows again after a refusal: re-attach this context's
+        managed dirs to live engines that had them stripped."""
+        dirs = build_enterprise_skill_dirs(context)
+        for engine in list(self._engines.values()):
+            self._set_engine_enterprise_dirs(engine, dirs)
+
+    def _close_enterprise_connections(self, old_key: str) -> None:
+        bridge = self._enterprise_bridge
+        if bridge is None:
+            return
+
+        async def _close() -> None:
+            await bridge.aclose_context(old_key)
+
+        self._run_enterprise_background(_close(), "opc-close-context")
+
+    def _run_enterprise_background(self, coro: Any, name: str) -> None:
+        """Run an enterprise side-effect (grant refresh, catalog sync, connection
+        close) on a dedicated daemon thread with its own event loop. Deliberately
+        NOT a task on the request loop: the work outlives the request that
+        triggered it (a switch must survive TestClient's per-request portal
+        teardown just as it survives uvicorn's request boundaries)."""
+
+        def _run() -> None:
+            try:
+                asyncio.run(coro)
+            except Exception:  # noqa: BLE001 - best-effort, already audited inside
+                logger.exception("enterprise background job %s failed", name)
+
+        threading.Thread(target=_run, name=name, daemon=True).start()
+
+    def _schedule_grant_refresh(
+        self, context: EnterpriseContext, *, force: bool = False
+    ) -> None:
+        """BND-142 执行前刷新: re-query the platform session; failure fails
+        closed (managed names leave the menu)."""
+        if not force and not enterprise_skills.grant_is_stale(context):
+            return
+        if enterprise_skills.refresh_in_flight(context.key):
+            return
+        enterprise_skills.set_refresh_in_flight(context.key, True)
+
+        async def _refresh() -> None:
+            try:
+                await enterprise_skills.refresh_distribution_grant(
+                    context, platform_base=self._enterprise_platform_base()
+                )
+            finally:
+                enterprise_skills.set_refresh_in_flight(context.key, False)
+
+        self._run_enterprise_background(_refresh(), "opc-grant-refresh")
+
+    def _schedule_catalog_sync(self, context: EnterpriseContext) -> None:
+        """INT-142: list the subject's visible skills and install what's new —
+        never blocks the switch, never removes existing installs (BND-141)."""
+
+        async def _sync() -> None:
+            await enterprise_skills.sync_enterprise_catalog(
+                context,
+                platform_base=self._enterprise_platform_base(),
+                access_token=context.access_token,
+                audit=self._enterprise_audit,
+            )
+            # Installs may have landed: re-point live engines' managed dirs —
+            # but only while THIS context is still the live one (a switch
+            # mid-sync orphaned it, and the newer sync owns the re-apply).
+            if self._enterprise_context_key == context.key:
+                self._apply_enterprise_dirs(context)
+
+        self._run_enterprise_background(_sync(), "opc-catalog-sync")
 
     def _scratch_workspace_error(self, workspace: Any) -> Optional[dict[str, Any]]:
         """Refuse skill WRITES into a per-conversation scratch dir — a skill saved there is

@@ -184,6 +184,7 @@ def _session_sandbox(engine: Any) -> dict[str, Any]:
 from ..teams.model import AuthorityError as TeamsAuthorityError
 from ..teams.model import BoardError as TeamsBoardError
 from ..teams.model import BoardNotFoundError as TeamsBoardNotFoundError
+from ..enterprise.auth import EnterpriseAuthService
 from .manager import SessionManager, _approval_body
 
 
@@ -231,6 +232,11 @@ def create_app(manager: SessionManager) -> FastAPI:
         # auth join`): the box holds no sidecar token. Approval stays gated.
         "/v1/remote/device/start",
         "/v1/remote/device/poll",
+        # Enterprise login loopback (INT-101b → work): the browser redirect
+        # carries no sidecar token. Every OTHER /v1/enterprise/* route stays
+        # behind the token gate like the rest of the API.
+        "/v1/enterprise/oauth/callback",
+        "/callback",
     }
 
     def _request_authenticated(request: Request) -> bool:
@@ -1913,6 +1919,101 @@ def create_app(manager: SessionManager) -> FastAPI:
                 "You can close this tab and return to OpenWorker.",
             )
         )
+
+    # -- Enterprise (OPC platform) login: INT-101 against the configured gateway --
+    # The refresh token never touches this process's disk (BND-160): the login/refresh
+    # responses hand it to the GUI exactly once, and the GUI writes it to the macOS
+    # Keychain via the Tauri main process. The sidecar holds only the in-memory access
+    # token + enterprise profile metadata.
+    from ..config import load_config
+
+    enterprise_auth = EnterpriseAuthService.from_config(load_config())
+    app.state.enterprise = enterprise_auth
+    # The manager drives the BND-120 switch semantics (orphan approvals, cache
+    # shards, connections) off this service's live context.
+    manager.enterprise_auth = enterprise_auth
+
+    def _enterprise_redirect_uri(request: Request) -> str:
+        # INT-101a 契约：平台只接受 http://127.0.0.1:<port>/callback 回环地址。
+        base = str(request.base_url).rstrip("/")
+        if base.startswith("http://localhost:"):
+            base = "http://127.0.0.1:" + base.rsplit(":", 1)[1]
+        return f"{base}/callback"
+
+    @app.post("/v1/enterprise/login/start")
+    async def enterprise_login_start(request: Request) -> Any:
+        """INT-101a: mint PKCE + state, build the platform authorize URL. The GUI
+        opens it in the system browser; the loopback callback finishes the flow."""
+        out = await enterprise_auth.start_login(_enterprise_redirect_uri(request))
+        if out.get("ok"):
+            return JSONResponse(out, status_code=200)
+        code = (out.get("error") or {}).get("code", "")
+        status = 400 if code == "ENTERPRISE_NOT_CONFIGURED" else 502
+        return JSONResponse(out, status_code=status)
+
+    @app.get("/callback")
+    @app.get("/v1/enterprise/oauth/callback")
+    async def enterprise_oauth_callback(
+        code: str = "", state: str = "", error: str = ""
+    ) -> Any:
+        from fastapi.responses import HTMLResponse
+
+        result = await enterprise_auth.complete_callback(code, state, error)
+        manager.sync_enterprise_context()  # BND-120: a new context orphans the old one
+        if result.get("ok"):
+            return HTMLResponse(
+                _browser_page(
+                    "Enterprise sign-in complete",
+                    "You can close this tab and return to OpenWorker.",
+                    ok=True,
+                )
+            )
+        return HTMLResponse(
+            _browser_page(
+                "Enterprise sign-in failed",
+                "Close this tab and try again from OpenWorker.",
+                ok=False,
+                error=(result.get("error") or {}).get("code", ""),
+            ),
+            status_code=400,
+        )
+
+    @app.get("/v1/enterprise/login/result")
+    def enterprise_login_result(login_txn_id: str) -> Any:
+        """The GUI polls this while the browser flow runs; carries the one-time
+        refresh_token handoff once the exchange succeeds."""
+        manager.sync_enterprise_context()
+        out = enterprise_auth.login_result(login_txn_id)
+        return JSONResponse(out, status_code=200 if out.get("ok") else 404)
+
+    @app.get("/v1/enterprise/session")
+    def enterprise_session() -> Any:
+        """Current enterprise context (INT-101f view); 404 when signed out. Also
+        the manager's switch-sync point — the GUI polls this on mount/menu."""
+        manager.sync_enterprise_context()
+        view = enterprise_auth.session_view()
+        if view is None:
+            return JSONResponse({"error": "no enterprise session"}, status_code=404)
+        return view
+
+    @app.post("/v1/enterprise/session/refresh")
+    async def enterprise_session_refresh(body: dict) -> Any:
+        """INT-101d: renderer presents the Keychain-held refresh (one-time); the
+        rotated refresh comes back for the GUI to store again."""
+        out = await enterprise_auth.refresh(str((body or {}).get("refresh_token", "")))
+        manager.sync_enterprise_context()  # reuse-detection clears the context too
+        if out.get("ok"):
+            return out
+        status = 401 if (out.get("error") or {}).get("code") == "REFRESH_REUSE_DETECTED" else 502
+        return JSONResponse(out, status_code=status)
+
+    @app.post("/v1/enterprise/logout")
+    async def enterprise_logout(body: dict) -> Any:
+        """INT-101e: revoke at the platform, drop the local context. The GUI then
+        deletes the Keychain entry (its half of the cleanup)."""
+        out = await enterprise_auth.logout(str((body or {}).get("refresh_token", "")))
+        manager.sync_enterprise_context()  # back to personal: orphan + clear
+        return out
 
     @app.post("/v1/connectors/{name}/connect-managed")
     async def connector_connect_managed(

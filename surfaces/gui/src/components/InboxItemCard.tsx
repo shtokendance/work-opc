@@ -439,22 +439,34 @@ export function InboxItemCard({
       {item.kind === "approval" && item.data?.tool ? (
         <div className="flex items-center justify-between gap-3">
           <TitleText line={humanizeApprovalTitle(item.data.tool, item.data.arguments)} />
-          {(() => {
-            // OPE-136 §35 parity: the parked chip gets the same category + MCP
-            // destination the live card gets — "leaves this computer → host", not
-            // the vague fallback. Older parked rows lack both and fall back honestly.
-            const s = scopeNote(
-              item.data.tool,
-              item.data.arguments,
-              item.data.category,
-              item.data.mcp_destination,
-            );
-            return (
-              <span className={"text-label whitespace-nowrap pt-0.5 " + (s.external ? "text-warnInk" : "text-faint")}>
-                {s.text}
+          <div className="flex items-center gap-2 shrink-0 pt-0.5">
+            {/* TASK-W04: an enterprise (platform) approval names itself — the
+                decision crosses to the OPC platform, not just this machine. */}
+            {item.data?.enterprise ? (
+              <span
+                data-testid="enterprise-chip"
+                className="text-label font-medium text-accent bg-accentSoft border border-accent rounded-full px-1.5 py-px whitespace-nowrap"
+              >
+                {t("inbox.enterprise_chip")}
               </span>
-            );
-          })()}
+            ) : null}
+            {(() => {
+              // OPE-136 §35 parity: the parked chip gets the same category + MCP
+              // destination the live card gets — "leaves this computer → host", not
+              // the vague fallback. Older parked rows lack both and fall back honestly.
+              const s = scopeNote(
+                item.data.tool,
+                item.data.arguments,
+                item.data.category,
+                item.data.mcp_destination,
+              );
+              return (
+                <span className={"text-label whitespace-nowrap " + (s.external ? "text-warnInk" : "text-faint")}>
+                  {s.text}
+                </span>
+              );
+            })()}
+          </div>
         </div>
       ) : isQuestion ? null : ( // QuestionCard owns its header + title (stepper needs them)
         <>

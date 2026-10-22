@@ -112,6 +112,12 @@ class Config:
     # the signed-in desktop"). Empty override ⇒ the cloud machines surface is
     # off entirely; dev/BYO deployments point elsewhere.
     cloud_machines_base: str = "https://machines.openworker.com"
+    # OPC platform base URL for enterprise login (INT-101a-f). Empty ⇒ the enterprise
+    # login surface is off entirely (start returns ENTERPRISE_NOT_CONFIGURED); the
+    # enterprise deployment points this at its gateway. Machine-level, like the cloud
+    # endpoints — a repository must not be able to redirect the desktop's enterprise
+    # identity flow. Environment override: OPC_PLATFORM_BASE.
+    opc_platform_base: str = ""
     # Where agents' commands and file tools run: "direct" (in this process, unconfined),
     # "seatbelt" (macOS: a process on this Mac under the system sandbox), "openshell" (one
     # OpenShell sandbox per agent). Sessions are refused when the chosen sandbox is not
@@ -164,6 +170,7 @@ _FIELDS = {
     "cloud_audience",
     "cloud_relay_ws_url",
     "cloud_machines_base",
+    "opc_platform_base",
 }
 
 # These fields change what consequential actions can run without a prompt, so the normal
@@ -397,6 +404,11 @@ def load_config(
         "compaction_summary_max_tokens",
         COMPACTION_SUMMARY_MAX_TOKENS_ENV,
     )
+    # OPC_PLATFORM_BASE beats config.toml (deployment standard; tests point it
+    # at the fake platform this way too).
+    raw_opc = (os.environ.get("OPC_PLATFORM_BASE") or "").strip()
+    if raw_opc:
+        cfg.opc_platform_base = raw_opc
     return cfg
 
 

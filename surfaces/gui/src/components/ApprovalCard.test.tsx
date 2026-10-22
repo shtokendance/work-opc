@@ -410,6 +410,65 @@ describe("InboxItemCard — parked MCP approvals carry the live card's evidence 
     expect(screen.getByText("the reviewer wasn't sure this edit was asked for")).toBeTruthy();
   });
 
+  it("a redelivered enterprise MCP approval shows the chip, the platform scope, and resolves", () => {
+    const onResolve = vi.fn();
+    render(
+      <InboxItemCard
+        item={mcpItem(
+          {
+            enterprise: true,
+            tool: "mcp_invoke",
+            category: "enterprise",
+            arguments: {
+              service_id: "svc-hr",
+              tool_name: "fire_employee",
+              arguments: { who: "bob", effective: "2026-11-01" },
+            },
+            invocation_id: "inv-9",
+            context_key: "issuer|sub|tenant-a|1",
+          },
+          "service: svc-hr · tool: fire_employee\nwho: bob · effective: 2026-11-01",
+        )}
+        onResolve={onResolve}
+      />,
+    );
+    // The enterprise chip + the platform scope note — the decision leaves this Mac.
+    expect(screen.getByTestId("enterprise-chip").textContent).toBe("Enterprise action");
+    expect(screen.getByText("leaves this computer → the OPC platform")).toBeTruthy();
+    // Humanized title names the tool + managed service.
+    expect(screen.getByText("fire_employee")).toBeTruthy();
+    expect(screen.getAllByText(/svc-hr/).length).toBeGreaterThan(0);
+    // The final-argument summary is on the card body.
+    expect(screen.getByText(/who: bob/)).toBeTruthy();
+    // Approve/Deny resolve the item — same vocabulary every other approval uses.
+    fireEvent.click(screen.getByText("Allow once"));
+    expect(onResolve).toHaveBeenCalledWith("i2", "allow");
+    cleanup();
+    render(
+      <InboxItemCard
+        item={mcpItem({ enterprise: true, tool: "mcp_invoke", category: "enterprise", arguments: { service_id: "s", tool_name: "t", arguments: {} } })}
+        onResolve={onResolve}
+      />,
+    );
+    fireEvent.click(screen.getByText("Deny"));
+    expect(onResolve).toHaveBeenCalledWith("i2", "deny");
+  });
+
+  it("non-enterprise approvals do not wear the enterprise chip", () => {
+    render(
+      <InboxItemCard
+        item={mcpItem({
+          tool: "mcp__my_jira__getVisibleJiraProjects",
+          arguments: { cloudId: "0bbb" },
+          category: "mcp",
+          mcp_destination: { transport: "http", host: "mcp.atlassian.com" },
+        })}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("enterprise-chip")).toBeNull();
+  });
+
   it("a redelivered parked approval rebuilds the REAL card — full trust ladder included", () => {
     // OPE-136 one-renderer fix: the session view maps parked data back into the live
     // ApprovalCard, so a reconnect/navigation can never lose evidence or buttons again.

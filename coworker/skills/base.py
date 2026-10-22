@@ -69,6 +69,12 @@ class SkillLoader:
                 continue
             self._skills[skill.name] = skill
 
+    def set_dirs(self, dirs: list[str | Path]) -> None:
+        """Replace the search dirs (e.g. the enterprise managed dirs changed
+        under a live session when the account switched) and re-read them."""
+        self._dirs = [Path(d) for d in dirs]
+        self.rescan()
+
     def names(self) -> list[str]:
         return list(self._skills)
 
@@ -140,11 +146,14 @@ def skill_tools(loader: SkillLoader, allowed: AllowedSkills = None) -> list:
     def load_skill(name: str) -> dict:
         """Load a skill's full instructions + resources path by name. Call this when a
         skill from the catalog is relevant to the current task."""
+        # The gate runs BEFORE resolution: a callable gate may narrow the
+        # loader's dirs (enterprise fail-closed strips managed dirs), and this
+        # call must already resolve against the narrowed set.
+        gate = _allowed_now()
         skill = loader.get(name)
         if skill is None:
             loader.rescan()  # created after this session started? pick it up now
             skill = loader.get(name)
-        gate = _allowed_now()
         if skill is None or (gate is not None and name not in gate):
             available = sorted(
                 n for n in loader.names() if gate is None or n in gate
