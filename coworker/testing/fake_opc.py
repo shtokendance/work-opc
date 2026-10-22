@@ -349,6 +349,13 @@ class FakeOpc:
                 code, status = self._fail_next_knowledge_search
                 self._fail_next_knowledge_search = None
                 return JSONResponse(_err(code, f"injected failure {code}"), status_code=status)
+            # 与真平台 INT-120a 对齐：tenant_id（或 space 别名）+ query 为必需，
+            # 客户端必须从企业上下文缺省填充租户，防止回归。
+            if not (body.get("tenant_id") or body.get("space")) or not body.get("query"):
+                return JSONResponse(
+                    _err("INVALID_REQUEST", "tenant_id and query are required"),
+                    status_code=400,
+                )
             return JSONResponse({"results": list(self.knowledge_search_results)})
 
         async def knowledge_read(request: Request) -> JSONResponse:

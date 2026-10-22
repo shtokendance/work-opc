@@ -97,8 +97,16 @@ async def test_knowledge_search_round_trip(fake_opc, inbox):
     out = await bridge.knowledge_search("离职", space="space-技术交付中心")
     assert out["results"][0]["knowledge_id"] == "kn-1"
     assert fake_opc.knowledge_search_calls[0]["query"] == "离职"
-    assert fake_opc.knowledge_search_calls[0]["space"] == "space-技术交付中心"
+    # space 覆盖上下文租户，统一以 tenant_id 发出（INT-120a 必需字段）。
+    assert fake_opc.knowledge_search_calls[0]["tenant_id"] == "space-技术交付中心"
     assert "opc-access-test" in fake_opc.seen_tokens  # context token injected
+
+
+async def test_knowledge_search_defaults_context_tenant(fake_opc, inbox):
+    bridge = _bridge(_ctx(), base_url=fake_opc.base_url, inbox=inbox)
+    await bridge.knowledge_search("离职")
+    # 未显式给 space 时从企业上下文租户缺省填充（真平台拒绝无 tenant 请求）。
+    assert fake_opc.knowledge_search_calls[0]["tenant_id"] == "tenant-a"
 
 
 async def test_knowledge_search_4xx_passes_through(fake_opc, inbox):

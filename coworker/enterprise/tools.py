@@ -220,14 +220,22 @@ class EnterpriseBridge:
 
     # -- INT-120 -------------------------------------------------------------------
     async def knowledge_search(
-        self, query: str, space: Optional[str] = None
+        self,
+        query: str,
+        space: Optional[str] = None,
+        knowledge_base_id: Optional[str] = None,
     ) -> dict[str, Any]:
         context, failure = self._require_context()
         if failure is not None:
             return failure
         payload: dict[str, Any] = {"query": str(query or "")}
-        if space:
-            payload["space"] = str(space)
+        # tenant 缺省取当前企业上下文租户（平台 INT-120a 必需 tenant_id，
+        # space 为其别名）；knowledge_base_id 缺省时平台检索租户内全部可见库。
+        tenant = str(space or "").strip() or context.tenant
+        if tenant:
+            payload["tenant_id"] = tenant
+        if knowledge_base_id:
+            payload["knowledge_base_id"] = str(knowledge_base_id)
         status, body = await self._request(
             context, "POST", "/integration/v1/knowledge/search", json_body=payload
         )
@@ -546,8 +554,14 @@ class EnterpriseBridge:
         call — the engine already runs sync tools on worker threads)."""
         bridge = self
 
-        def knowledge_search(query: str, space: Optional[str] = None) -> Any:
-            return asyncio.run(bridge.knowledge_search(query, space))
+        def knowledge_search(
+            query: str,
+            space: Optional[str] = None,
+            knowledge_base_id: Optional[str] = None,
+        ) -> Any:
+            return asyncio.run(
+                bridge.knowledge_search(query, space, knowledge_base_id)
+            )
 
         def knowledge_read(knowledge_id: str) -> Any:
             return asyncio.run(bridge.knowledge_read(knowledge_id))
@@ -569,8 +583,9 @@ class EnterpriseBridge:
         knowledge_search.__name__ = KNOWLEDGE_SEARCH_TOOL
         knowledge_search.__doc__ = (
             "Search the enterprise knowledge base through the OPC platform "
-            "(current subject + space, server-side re-authorized). Requires an "
-            "active enterprise context."
+            "(current subject + tenant, server-side re-authorized). Searches all "
+            "visible knowledge bases in the tenant unless knowledge_base_id pins "
+            "one. Requires an active enterprise context."
         )
         knowledge_search.__aisuite_tool_metadata__ = ai.ToolMetadata(
             name=KNOWLEDGE_SEARCH_TOOL,
@@ -589,7 +604,11 @@ class EnterpriseBridge:
                         "query": {"type": "string", "description": "The search query."},
                         "space": {
                             "type": "string",
-                            "description": "Optional knowledge space to search within.",
+                            "description": "Optional tenant/space override; defaults to the current enterprise tenant.",
+                        },
+                        "knowledge_base_id": {
+                            "type": "string",
+                            "description": "Optional knowledge base id; omit to search every visible base in the tenant.",
                         },
                     },
                     "required": ["query"],
