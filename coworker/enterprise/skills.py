@@ -134,7 +134,12 @@ def build_enterprise_skill_dirs(context: EnterpriseContext) -> list[Path]:
     publish_id), or [] when the tenant has no installs. Only the current
     tenant is ever visible (BND-120); a subfolder counts only while it holds
     a SKILL.md (a half-removed install degrades to absent, never to an error).
+    A context without a tenant (platform returned none — e.g. no active
+    entitlement) simply has no managed dirs: skill setup must never break the
+    login callback.
     """
+    if not (context.tenant or "").strip():
+        return []
     root = managed_root(context.tenant)
     try:
         entries = sorted(root.iterdir())
