@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "protocol": "sdd-solo@1",
+  "demandId": "WORK-RESOURCES-001",
+  "deliveryMode": "full",
+  "state": "verified",
+  "manifestPath": "docs/loops/demands/WORK-RESOURCES-001/repositories.json",
+  "manifestSha256": "sha256:28eb51b8e1079f92170222edbd53cfc92c5208f21ba03364d5665a90361fffa8",
+  "authorityCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+  "participants": [
+    {
+      "repositoryId": "platform-opc",
+      "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+      "participantCommit": "bb919d310832101297884d4de686c9618d38de97",
+      "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+      "packageSha256": "sha256:11d984dd524da05de0fcee397579d5e09b92ea24dc354d45c09efbce9d3fc36a"
+    },
+    {
+      "repositoryId": "knowledge-opc",
+      "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+      "participantCommit": "525c6129f4bcb8ec2f0c203e2398838b083bbd8a",
+      "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+      "packageSha256": "sha256:97f46b58707484ff20190d0ce26407483bbc73e20f438ff16716992c2587f030"
+    }
+  ],
+  "primaryEvidence": [
+    {
+      "path": "release-checklist.md",
+      "sha256": "sha256:3693d1011c5502d3a936f89f56747b19e3cb58a6e1fa5aa4e19831ec549d1d60",
+      "hashMode": "checkbox-state-insensitive-v1"
+    },
+    {
+      "path": "repositories.json",
+      "sha256": "sha256:28eb51b8e1079f92170222edbd53cfc92c5208f21ba03364d5665a90361fffa8"
+    },
+    {
+      "path": "repositories/aggregate-review.md",
+      "sha256": "sha256:2cba9108a965df27467a0b0b39d4d4e474494f92ff22ac7d4ae211a58589f6b7"
+    },
+    {
+      "path": "repositories/knowledge-opc/repository-receipt.json",
+      "sha256": "sha256:99b6c139e5d95514b9950a684bb8d0557989a7ad8bf1b77a1c4d2a1069e36d49"
+    },
+    {
+      "path": "repositories/platform-opc/repository-receipt.json",
+      "sha256": "sha256:261c829f48d4ecc3507664e1d8e9306501169ca82c9a95010c40afefdcf3f996"
+    },
+    {
+      "path": "repositories/work-opc/repository-receipt.json",
+      "sha256": "sha256:f1c0ea5e4b9f1ea865299139d9346ca9978d023cee1a70a5aed1b84bedd0571e"
+    }
+  ],
+  "verifiedAt": "2026-10-23T05:21:08.001Z"
+}
