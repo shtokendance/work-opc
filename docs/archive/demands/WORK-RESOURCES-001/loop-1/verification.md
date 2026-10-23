@@ -4,7 +4,7 @@ document: verification
 demandId: WORK-RESOURCES-001
 loop: 1
 version: "1.0"
-status: confirmed
+status: archived
 updatedAt: 2026-10-23
 ---
 

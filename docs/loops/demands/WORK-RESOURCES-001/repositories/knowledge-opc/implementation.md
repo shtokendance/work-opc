@@ -30,6 +30,17 @@ updatedAt: 2026-10-22
 - **TASK-005**：新增 `frontend/src/utils/resourceDeepLink.ts`（catalog_id/tenant_id 校验、safeLoginRedirect 只认可同 origin `/platform` 相对路径）；router 未登录跳 /login 携带 redirect；Login.vue 登录成功回跳（hasValidTenant 前提）；SkillSettings 依 catalog_id 精确定位并滚动、未找到明确报错不按同名替代、tenant_id 经成员校验后切空间；Toolbox 深链优先 skills 页签；6 语种 i18n 补齐。
 - **TASK-008**：verification.md 记录四包 go test、frontend type-check/build/全量 test、PBT P4（seed=20261025，两处各 600 case）、VAL 映射与未执行项。
 
+### Review 修复轮（2026-10-23，回应 CHANGES_REQUIRED）
+
+独立 reviewer 结论 CHANGES_REQUIRED，同轮修复四处，改动仍留在 worktree 未提交：
+
+- **M-1（major，真实竞态缺陷）**：`trySkillBundle` 缓存写入前无摘要校验——读行（h1）与读对象之间 re-register 原地覆盖对象时，h2 字节会按 tenant:h1 入缓存，而缓存命中路径（`skillBundleArchive` 首路径，注释原称 "needs no digest check"）不再校验摘要，之后 pinned h1 安装的 ListSkillFiles/ReadSkillFile 会拿到 h2 文件树（违反 BND-007/VAL-213）。修复：tenant_skill_files.go 在 `storeSkillBundle` 前校验 `archiveMatchesSHA(archive, 键 SHA)`，不一致返回哨兵错误，不缓存也不把字节交给任何调用方（调用方回落到各自摘要校验路径或诚实失败）；`skillBundleArchive` 首路径注释同步修正（缓存条目写入时已验证，命中可信任）。新增回归测试 `TestOpenCatalogArchiveRacingReRegisterDoesNotPoisonPinnedInstalls`（交错构造仿 VAL-210 竞态：re-register 提交 + 目录对象原地覆盖，断言 pinned h1 安装此后仍读到 h1 树），并完成变异验证（临时去掉校验则测试红、恢复则绿）。连带：`OpenCatalogArchive` 的 !ok 分支升级为「重读行区分 moved/未动；未动时二次探测区分 422（对象字节确实不符摘要）与 409（暂不可取）」，保留 VAL-211 的 422 语义；既有夹具 `storeSkillBundle` 改为写入真实摘要（此前用占位 "aaa…" 摘要，依赖无校验行为）。
+- **m-2**：`catalogSHAChanged` 重读行失败的 moveErr 不再落入 422；只有确实摘要不符才返回 ErrCatalogArchiveHashMismatch，重读故障返回原始错误走共享中间件 500。!ok 分支的重读失败不改变答案（取不到归档即 409 NOT_READY，超时/故障不应冒充服务端错误）。
+- **m-3**：归档路由错误信封 request_id 移入 error 对象内（INT-105 形状 `{error:{code,message,request_id}}`），新增 `TestGetCatalogArchiveErrorNestsRequestID` 断言嵌套位置且顶层不出现。
+- **m-4**：新增 `TestPBT_P4_ArchiveSizeBoundary`（seed=20261025，600 in-limit 例 + 2 边界例：恰好上限接受、上限+1 拒绝且不截断），覆盖新路由复用的 downloadSkillBundle LimitReader 大小门。
+
+Review 修复轮 change surface（2026-10-23）：修改 `internal/application/service/tenant_skill_files.go`（M-1 缓存写入摘要校验 + 注释）、`tenant_skill_catalog_archive.go`（!ok 分支分类、m-2）、`internal/handler/skill_catalog_archive.go`（m-3 信封）、`tenant_skill_files_test.go`（夹具真实摘要）；新增回归/断言/属性测试于 `tenant_skill_catalog_archive_test.go`、`skill_catalog_archive_test.go`、`tenant_skill_catalog_archive_pbt_test.go`，夹具 `catalog_archive_fixture_test.go` 增加 putRaw/rawReaders。
+
 ## Change surface
 
 新增：`internal/application/service/tenant_skill_catalog_archive.go`、`tenant_skill_catalog_archive{,_pbt}_test.go`、`catalog_archive_fixture_test.go`、`internal/handler/skill_catalog_archive.go`、`skill_catalog_archive{,_pbt}_test.go`、`internal/router/skill_catalog_archive_route_test.go`、`skill_release_removal_test.go`、`internal/database/skill_release_cleanup{,_test}.go`、`migrations/versioned/000133_drop_skill_release.{up,down}.sql`、`migrations/sqlite/000047_drop_skill_release.{up,down}.sql`、`frontend/src/utils/resourceDeepLink.ts`、`frontend/src/utils/resourceDeepLink.test.mjs`、`frontend/src/router/loginRedirect.test.mjs`。

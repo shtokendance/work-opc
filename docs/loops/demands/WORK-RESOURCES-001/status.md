@@ -3,11 +3,11 @@ project: work-opc
 document: loop-status
 demandId: WORK-RESOURCES-001
 branch: feature/261022_WORK-RESOURCES-001_resource-entry
-activeLoop: 1
-lastClosedLoop: null
+activeLoop: null
+lastClosedLoop: 1
 nextLoop: 2
-nextPhase: implementation
-updatedAt: 2026-10-22
+nextPhase: null
+updatedAt: 2026-10-23
 governanceVersion: 2
 enabledExtensions: testing,pbt,security,resiliency
 roleRequester: yj198788@hotmail.com
@@ -86,3 +86,7 @@ TASK-001～024 已全部完成：三仓隔离 worktree 中从固定基线实施�
 - D2 进行中：work 客户端对接测试 gateway（10.101.102.116:3002），业务闭环 + VAL-215 真实 60 秒撤权计时。
 - D3 排队：浏览器/DMG 手测。
 - 待授权：三仓提交与追溯包推送；最终签署关闭。
+
+## Loop 1 已关闭（2026-10-23）
+
+候选 b1bd98a1-ab9c-4765-992d-e7c5b98da2b4 → final_test/reconciliation/review → 用户签署「确认签署」（signoff event 0c0bedd2）→ 机器收口凭据复核通过（workflow close）。六份阶段文档与审计链归档至 docs/archive/demands/WORK-RESOURCES-001/loop-1/（status=archived）。三仓交付为本地提交（work f3e67108、platform 13e7b628、knowledge 85d216c6），未推送未合并；参与仓追溯包 commit platform bb919d31 / knowledge 525c6129 同样未推送。测试环境 knowledge/platform 新版本在跑（镜像 tag wr001-20261023），生产未动。后续推送/合并/生产部署需用户单独授权。

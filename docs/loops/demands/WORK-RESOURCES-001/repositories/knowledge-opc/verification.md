@@ -4,14 +4,27 @@ document: verification
 demandId: WORK-RESOURCES-001
 repositoryId: knowledge-opc
 loop: 1
-version: "1.0"
+version: "1.1"
 status: draft
-updatedAt: 2026-10-22
+updatedAt: 2026-10-23
 ---
 
 # knowledge-opc 本仓验证证据（TASK-008）
 
 实施分支 `feature/261022_WORK-RESOURCES-001_resource-entry`（worktree，未提交）。本文件只记录本仓命令级证据；跨仓联调（TASK-025/027）不在此重复。
+
+## Review 修复轮证据（2026-10-23，M-1/m-2/m-3/m-4）
+
+独立 reviewer 给出 CHANGES_REQUIRED 后的同轮修复验证（frontend 未受影响，未重跑）：
+
+- `go build ./...` → 退出码 0；`gofmt -l internal/` 无输出。
+- `go test ./internal/application/service -skip 'TestSkillPythonVerifier' -count=1` → **ok（43.898s，退出码 0）**；不 skip 时唯一失败仍为基线既有 `TestSkillPythonVerifier`（已在 071fd96c 基线复核）。
+- `go test ./internal/handler/ -count=1` → **ok（退出码 0）**，含新增 `TestGetCatalogArchiveErrorNestsRequestID`（m-3）。
+- `go test ./internal/router/ ./internal/database/ ./internal/application/repository/ -count=1` → 全部 ok（回归确认）。
+- 新增测试命令与结果：
+  - `go test ./internal/application/service/ -run 'TestOpenCatalogArchive' -count=1` → ok（含 M-1 回归 `TestOpenCatalogArchiveRacingReRegisterDoesNotPoisonPinnedInstalls`；已完成变异验证：临时移除 trySkillBundle 摘要校验该测试失败，恢复后通过）。
+  - `go test ./internal/application/service/ -run 'TestPBT_P4' -count=1 -v` → PASS，`PBT P4 (size boundary): seed=20261025 cases=600+2`（m-4：恰好上限接受、上限+1 拒绝）。
+- 连带修复：`tenant_skill_files_test.go` 夹具 `storeSkillBundle` 改写入真实字节摘要（原先占位摘要依赖无校验缓存行为），service 包全部相关用例通过。
 
 ## 环境
 
@@ -57,6 +70,7 @@ PostgreSQL（真实引擎，psql + 门控测试）：
 
 - `internal/handler/skill_catalog_archive_pbt_test.go::TestPBT_P4_CatalogArchiveInputsNeverEscape`：**seed=20261025，cases=600**。属性：被接受的 catalog id 永不包含分隔符/dot-dot/换行（对照独立参考实现）；被接受的 expected_sha256 规范化后恒为 64 位小写 hex。PASS。
 - `internal/application/service/tenant_skill_catalog_archive_pbt_test.go::TestPBT_P4_DownloadNameNeverEscapes`：**seed=20261025，cases=600**。属性：下载文件名（来自工作区可控的技能名）对照独立参考净化器逐例一致，永不含 `/ \` CR LF、永不含 `..`、长度 ≤64、首尾无 `-/.`。PASS。过程中属性测试抓到并固化了两个真实缺陷修复（截断后重新引入尾部 `-`、连续点号产生 `..`），实现已修复并通过全部 600 例。
+- `internal/application/service/tenant_skill_catalog_archive_pbt_test.go::TestPBT_P4_ArchiveSizeBoundary`：**seed=20261025，cases=600+2**（review 修复轮 m-4 新增）。属性：限内随机大小归档逐字节精确下载；恰好等于 downloadSkillBundle 上限（512 MiB）接受；上限+1 字节拒绝且不截断。PASS。
 
 ## VAL 映射（本仓可证部分）
 
