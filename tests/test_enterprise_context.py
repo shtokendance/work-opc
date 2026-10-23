@@ -1,19 +1,16 @@
-"""TASK-W03 — manager/session-layer switch semantics for the enterprise context.
+"""WORK-RESOURCES-001 — manager/session-layer switch semantics (BND-007/008/120).
 
 End-to-end through the real app + fake platform: a login binds live sessions
-(tools, managed skill dirs, the persisted binding), a context switch orphans
-the old context's pending enterprise approvals while leaving personal
-approvals alone, bumps the generation into the new key, re-points live
-engines' managed dirs, and logout returns everything to personal mode.
+(enterprise tools + the persisted binding), the personal SkillLoader NEVER
+carries enterprise dirs (no name shadowing), a context switch orphans the old
+context's pending enterprise approvals while leaving personal approvals alone,
+and logout returns everything to personal mode. The retired auto catalog sync
+is gone — nothing downloads on login/refresh (TASK-023).
 """
 
 from __future__ import annotations
 
-import hashlib
-import io
-import json
 import time
-import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,32 +18,7 @@ from fastapi.testclient import TestClient
 from coworker.enterprise import skills as es
 from coworker.inbox import STATE_RESOLVED
 from coworker.server import SessionManager, create_app
-from coworker.testing.fake_opc import FakeOpc
-
-
-def _skill_bundle(skill_name: str = "opc-hr", body: str = "managed body") -> bytes:
-    files = {
-        "SKILL.md": f"---\nname: {skill_name}\ndescription: d\n---\n\n{body}\n".encode(),
-    }
-    h = hashlib.sha256()
-    for name in sorted(files):
-        h.update(name.encode())
-        h.update(b"\x00")
-        h.update(files[name])
-        h.update(b"\x00")
-    manifest = {
-        "skill_id": "opc.hr",
-        "version": "1.0.0",
-        "sha256": h.hexdigest(),
-        "exec_mode": "local_instruction",
-        "clients": ["work"],
-    }
-    files["opc-client.json"] = json.dumps(manifest).encode()
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        for name, content in files.items():
-            z.writestr(name, content)
-    return buf.getvalue()
+from coworker.testing.fake_opc import FakeOpc, add_work_resources_samples
 
 
 @pytest.fixture
@@ -86,21 +58,27 @@ def _wait_for(predicate, timeout: float = 8.0, interval: float = 0.02):
     raise AssertionError("condition not met in time")
 
 
+def _samples_cache(fake):
+    if not hasattr(fake, "_wr001_samples"):
+        fake._wr001_samples = add_work_resources_samples(fake)
+    return fake._wr001_samples
+
+
 # -- login binds live sessions -----------------------------------------------------
 
 
-def test_login_binds_sessions_and_syncs_managed_skills(fake_opc, tmp_path, monkeypatch):
-    fake_opc.skill_bundles["pub-1"] = _skill_bundle()
+def test_login_binds_sessions_without_touching_the_personal_loader(
+    fake_opc, tmp_path, monkeypatch
+):
+    _samples_cache(fake_opc)
     client = _client(tmp_path, monkeypatch, fake_opc.base_url)
     _login(client, fake_opc)
     session_view = client.get("/v1/enterprise/session")
     assert session_view.status_code == 200
+    assert session_view.json()["context_id"]
     manager = client.app.state.manager
     key1 = manager._enterprise_context_key
     assert key1 and f"|{fake_opc.generation}" in key1
-
-    # The switch hook installs the listed managed skill in the background.
-    _wait_for(lambda: es.managed_skills(manager.enterprise_context()))
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -109,16 +87,14 @@ def test_login_binds_sessions_and_syncs_managed_skills(fake_opc, tmp_path, monke
     assert "knowledge_search" in tools
     assert "knowledge_read" in tools
     assert "mcp_invoke" in tools
-    # The managed dir rides at the TAIL of the loader dir list.
-    managed_root = es.managed_root(fake_opc.tenant)
-    assert list(engine.enterprise_skill_dirs) == [managed_root]
-    assert list(engine.skill_loader._dirs)[-1] == managed_root
-    engine.skill_loader.rescan()
-    skill = engine.skill_loader.get("opc-hr")
-    assert skill is not None and str(managed_root) in skill.path
+    assert "enterprise_load_skill" in tools
+    # BND-007: the personal loader never carries enterprise dirs.
+    assert list(engine.enterprise_skill_dirs) == []
+    personal_dirs = list(engine.skill_loader._dirs)
+    assert not any("enterprise-skills" in str(d) for d in personal_dirs)
 
-    # The live filter admits the managed name (grant refresh succeeded).
-    assert "opc-hr" in manager._live_skill_filter("sess-1", str(ws), "code")
+    # The menu stays personal-only even with a fresh grant.
+    assert "summarizer" not in manager._live_skill_filter("sess-1", str(ws), "code")
 
     # The session record carries the binding (BND-160/DATA-120c).
     manager.persist_session("sess-1")
@@ -128,6 +104,19 @@ def test_login_binds_sessions_and_syncs_managed_skills(fake_opc, tmp_path, monke
     assert record.enterprise["generation"] == fake_opc.generation
 
 
+def test_login_never_downloads_anything(fake_opc, tmp_path, monkeypatch):
+    """VAL-208 / TASK-023: login + refresh must not issue install or release
+    traffic — the fake trips on any release/publish route."""
+    _samples_cache(fake_opc)
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    _login(client, fake_opc)
+    client.get("/v1/enterprise/session")
+    client.get("/v1/enterprise/resources/skills")
+    client.get("/v1/enterprise/resources/knowledge-bases")
+    assert fake_opc.catalog_archive_calls == []
+    fake_opc.assert_no_release_calls()
+
+
 def test_personal_mode_unchanged(fake_opc, tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch, fake_opc.base_url)
     manager = client.app.state.manager
@@ -135,6 +124,7 @@ def test_personal_mode_unchanged(fake_opc, tmp_path, monkeypatch):
     ws.mkdir()
     engine = manager.get_engine("sess-1", workspace=str(ws))
     assert "mcp_invoke" not in engine.registry.names()
+    assert "enterprise_load_skill" not in engine.registry.names()
     assert engine.enterprise_skill_dirs == []
     assert manager._live_skill_filter("sess-1", str(ws), "code") == set(
         manager.effective_skill_names("sess-1", str(ws), agent="code")
@@ -143,15 +133,14 @@ def test_personal_mode_unchanged(fake_opc, tmp_path, monkeypatch):
     assert manager.session_store.load("sess-1").enterprise == {}
 
 
-# -- offline refusal (BND-142) ------------------------------------------------------
+# -- offline refusal (BND-008) ------------------------------------------------------
 
 
-def test_offline_grant_refusal_hides_enterprise_skills(fake_opc, tmp_path, monkeypatch):
-    fake_opc.skill_bundles["pub-1"] = _skill_bundle()
+def test_offline_grant_refusal_keeps_personal_menu(fake_opc, tmp_path, monkeypatch):
+    _samples_cache(fake_opc)
     client = _client(tmp_path, monkeypatch, fake_opc.base_url)
     _login(client, fake_opc)
     manager = client.app.state.manager
-    _wait_for(lambda: es.managed_skills(manager.enterprise_context()))
     ws = tmp_path / "ws"
     ws.mkdir()
     manager.get_engine("sess-1", workspace=str(ws))
@@ -165,27 +154,29 @@ def test_offline_grant_refusal_hides_enterprise_skills(fake_opc, tmp_path, monke
         )
     )
     names = manager._live_skill_filter("sess-1", str(ws), "code")
-    assert "opc-hr" not in names  # enterprise skills refuse to start
-    # personal skills are untouched by the refusal
+    # personal menu untouched by the refusal
     assert names == manager.effective_skill_names("sess-1", str(ws), agent="code")
 
 
 # -- switch semantics (BND-120) ------------------------------------------------------
 
 
-def test_context_switch_orphans_approvals_and_rebinds(fake_opc, tmp_path, monkeypatch):
-    fake_opc.skill_bundles["pub-1"] = _skill_bundle()
+def test_context_switch_orphans_approvals_and_clears_authz(fake_opc, tmp_path, monkeypatch):
+    _samples_cache(fake_opc)
     client = _client(tmp_path, monkeypatch, fake_opc.base_url)
     refresh1 = _login(client, fake_opc)
     manager = client.app.state.manager
     key1 = manager._enterprise_context_key
-    _wait_for(lambda: es.managed_skills(manager.enterprise_context()))
 
     ws = tmp_path / "ws"
     ws.mkdir()
     engine = manager.get_engine("sess-1", workspace=str(ws))
 
-    # Park one ENTERPRISE approval and one PERSONAL approval.
+    # Seed a resource-grant cache entry, then park one ENTERPRISE approval and
+    # one PERSONAL approval.
+    from coworker.enterprise.resources import AUTHZ
+
+    AUTHZ.record(manager.enterprise_context(), "T1", "cat-c1", True)
     ent = manager.inbox.add_approval(
         "sess-1", "Allow `fire` on `svc-hr`?", data={"enterprise": True, "context_key": key1}
     )
@@ -198,23 +189,18 @@ def test_context_switch_orphans_approvals_and_rebinds(fake_opc, tmp_path, monkey
     client.get("/v1/enterprise/session")
     key2 = manager._enterprise_context_key
     assert key2 != key1
-    assert key2.endswith("|tenant-b|2")  # generation bump is part of the key
+    assert key2.endswith("|tenant-b|2")
 
-    # Old context's enterprise approval is orphaned; the personal one stays pending.
+    # Old context's enterprise approval is orphaned; the personal one stays.
     assert manager.inbox.get(ent.id).state == STATE_RESOLVED
     assert manager.inbox.get(ent.id).resolution == "orphaned"
     assert manager.inbox.get(per.id).state == "pending"
 
-    # The old context's cache shard and grant are gone; the live engine's
-    # managed dirs were re-pointed at the new tenant (sync installs in the
-    # background, so the tail dir follows tenant-b once it lands).
-    with es._lock:
-        assert key1 not in es._catalog_cache
-    _wait_for(
-        lambda: engine.enterprise_skill_dirs
-        and engine.enterprise_skill_dirs[0] == es.managed_root("tenant-b")
-    )
-    assert "sess-1" in manager._stale_engines  # rebuilt at next idle
+    # The resource authz shard is gone; the loader stays personal-only.
+    with AUTHZ._lock:
+        assert all(k[0] != key1 for k in AUTHZ._grants)
+    assert list(engine.enterprise_skill_dirs) == []
+    assert "sess-1" in manager._stale_engines
     manager.persist_session("sess-1")
     record = manager.session_store.load("sess-1")
     assert record.enterprise["tenant"] == "tenant-b"
@@ -253,63 +239,50 @@ def test_refresh_reuse_clears_context_and_orphans(fake_opc, tmp_path, monkeypatc
     assert manager.inbox.get(ent.id).resolution == "orphaned"
 
 
-# -- fail-closed at the loader (BND-142 reviewer finding) ---------------------------
+# -- same-name skills: personal vs enterprise resolution (BND-007) -------------------
 
 
-def test_grant_refusal_unshadows_personal_same_name(fake_opc, tmp_path, monkeypatch):
-    """Reviewer scenario: with the grant refused, `load_skill` must NOT resolve
-    a same-named skill to the MANAGED copy — the managed dirs leave the live
-    loader, and the personal copy is visible again."""
-    import asyncio
+def test_personal_load_skill_never_resolves_enterprise_same_name(
+    fake_opc, tmp_path, monkeypatch
+):
+    """VAL-212: a personal skill named `summarizer` loads the PERSONAL copy;
+    enterprise C1/C2 resolve only through the stable registry."""
+    from coworker.enterprise import installer
+    from coworker.enterprise.registry import REGISTRY, SkillRef
 
-    fake_opc.skill_bundles["pub-1"] = _skill_bundle(body="managed copy")
+    samples = _samples_cache(fake_opc)
     client = _client(tmp_path, monkeypatch, fake_opc.base_url)
     _login(client, fake_opc)
     manager = client.app.state.manager
-    _wait_for(lambda: es.managed_skills(manager.enterprise_context()))
 
-    # A personal skill with the SAME name as the managed one.
-    personal = es.state_dir() / "skills" / "opc-hr"
+    # Personal skill with the SAME display name as C1/C2.
+    personal = manager.skill_store.global_dir / "summarizer"
     personal.mkdir(parents=True)
     (personal / "SKILL.md").write_text(
-        "---\nname: opc-hr\ndescription: d\n---\n\npersonal copy\n", encoding="utf-8"
+        "---\nname: summarizer\ndescription: d\n---\n\npersonal copy\n",
+        encoding="utf-8",
     )
+
+    # Install C1 (h1) into the current identity shard.
+    ctx = manager.enterprise_context()
+    out = installer.install(
+        ctx, "T1", "cat-c1", samples.h1_bytes,
+        expected_sha256=samples.h1,
+        name="summarizer", version="1.0.0",
+    )
+    assert out["ok"], out
 
     ws = tmp_path / "ws"
     ws.mkdir()
     engine = manager.get_engine("sess-1", workspace=str(ws))
-    # Grant fresh: the managed copy shadows the personal one.
-    asyncio.run(
-        es.refresh_distribution_grant(
-            manager.enterprise_context(), platform_base=fake_opc.base_url
-        )
-    )
-    loaded = engine.registry.execute("load_skill", {"name": "opc-hr"})
-    assert "managed copy" in loaded["instructions"], loaded
-
-    # Grant refused: the menu drops the managed name AND the loader stops
-    # resolving to the managed copy — this very call already sees the
-    # stripped dirs (the gate runs before resolution).
-    fake_opc.session_check_ok = False
-    asyncio.run(
-        es.refresh_distribution_grant(
-            manager.enterprise_context(), platform_base=fake_opc.base_url
-        )
-    )
-    assert not es.grant_allows(manager.enterprise_context())
-    loaded = engine.registry.execute("load_skill", {"name": "opc-hr"})
+    loaded = engine.registry.execute("load_skill", {"name": "summarizer"})
     assert "personal copy" in loaded["instructions"], loaded
-    assert list(engine.enterprise_skill_dirs) == []
 
-    # Grant recovers: the managed copy shadows again from the next call.
-    fake_opc.session_check_ok = True
-    asyncio.run(
-        es.refresh_distribution_grant(
-            manager.enterprise_context(), platform_base=fake_opc.base_url
-        )
-    )
-    loaded = engine.registry.execute("load_skill", {"name": "opc-hr"})
-    assert "managed copy" in loaded["instructions"], loaded
+    # The enterprise copy resolves via the registry to the exact version dir.
+    ref = SkillRef(tenant_id="T1", catalog_id="cat-c1", bundle_sha256=samples.h1)
+    resolved = REGISTRY.resolve(ctx, ref)
+    assert "总结给定文本" in resolved["instructions"]
+    assert "personal copy" not in resolved["instructions"]
 
 
 # -- binding persistence across restarts (BND-160/DATA-120c) -------------------------
@@ -349,3 +322,100 @@ def test_turn_save_preserves_persisted_enterprise_binding(tmp_path):
     store.save(rebound)
     assert store.load("sess-1").enterprise == binding
     store.close()
+
+
+# -- 增量：企业技能并入 Composer「/」菜单（session_skills_view，BND-009） -------------
+
+
+def _install_skill_direct(manager, samples, enabled=True):
+    from coworker.enterprise import installer
+
+    ctx = manager.enterprise_context()
+    out = installer.install(
+        ctx, "T1", "cat-c1", samples.h1_bytes,
+        expected_sha256=samples.h1, name="summarizer", version="1.0.0",
+    )
+    assert out["ok"], out
+    if not enabled:
+        assert installer.set_enabled(ctx, "T1", "cat-c1", False)["ok"]
+    return ctx
+
+
+def test_menu_merges_installed_enterprise_skill(fake_opc, tmp_path, monkeypatch):
+    samples = _samples_cache(fake_opc)
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    _login(client, fake_opc)
+    manager = client.app.state.manager
+    _install_skill_direct(manager, samples)
+
+    view = manager.session_skills_view("sess-menu", None)
+    ent = [r for r in view["skills"] if r["scope"] == "enterprise"]
+    assert len(ent) == 1
+    row = ent[0]
+    assert row["name"] == "summarizer"
+    assert row["enabled"] is True
+    assert row["enterprise"] == {
+        "tenant_id": "T1",
+        "catalog_id": "cat-c1",
+        "bundle_sha256": samples.h1,
+        "version": "1.0.0",
+        "context_id": manager.enterprise_context().context_id,
+    }
+    # 未安装目录不在菜单
+    assert all(r["enterprise"]["catalog_id"] != "cat-c2" for r in ent)
+
+
+def test_menu_disabled_enterprise_row_not_enabled(fake_opc, tmp_path, monkeypatch):
+    samples = _samples_cache(fake_opc)
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    _login(client, fake_opc)
+    manager = client.app.state.manager
+    _install_skill_direct(manager, samples, enabled=False)
+    view = manager.session_skills_view("sess-menu", None)
+    ent = [r for r in view["skills"] if r["scope"] == "enterprise"]
+    assert len(ent) == 1 and ent[0]["enabled"] is False
+
+
+def test_menu_no_enterprise_without_context(fake_opc, tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    manager = client.app.state.manager
+    view = manager.session_skills_view("sess-menu", None)
+    assert all(r["scope"] != "enterprise" for r in view["skills"])
+
+
+def test_menu_same_name_personal_and_enterprise_coexist(fake_opc, tmp_path, monkeypatch):
+    samples = _samples_cache(fake_opc)
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    _login(client, fake_opc)
+    manager = client.app.state.manager
+    # 同名个人技能
+    personal = manager.skill_store.global_dir / "summarizer"
+    personal.mkdir(parents=True, exist_ok=True)
+    (personal / "SKILL.md").write_text(
+        "---\nname: summarizer\ndescription: 个人\n---\n\n个人版\n", encoding="utf-8"
+    )
+    _install_skill_direct(manager, samples)
+    view = manager.session_skills_view("sess-menu", None)
+    rows = [r for r in view["skills"] if r["name"] == "summarizer"]
+    scopes = {r["scope"] for r in rows}
+    assert "global" in scopes and "enterprise" in scopes  # 并存不覆盖
+    # 个人 mute 不影响企业行
+    manager.session_skills.set("sess-menu", "summarizer", False)
+    view2 = manager.session_skills_view("sess-menu", None)
+    ent = [r for r in view2["skills"] if r["scope"] == "enterprise" and r["name"] == "summarizer"]
+    assert ent and ent[0]["enabled"] is True
+    per = [r for r in view2["skills"] if r["scope"] == "global" and r["name"] == "summarizer"]
+    assert per and per[0]["enabled"] is False
+
+
+def test_menu_uninstall_removes_enterprise_row(fake_opc, tmp_path, monkeypatch):
+    samples = _samples_cache(fake_opc)
+    client = _client(tmp_path, monkeypatch, fake_opc.base_url)
+    _login(client, fake_opc)
+    manager = client.app.state.manager
+    ctx = _install_skill_direct(manager, samples)
+    from coworker.enterprise import installer
+
+    assert installer.uninstall(ctx, "T1", "cat-c1")["ok"]
+    view = manager.session_skills_view("sess-menu", None)
+    assert all(r["scope"] != "enterprise" for r in view["skills"])

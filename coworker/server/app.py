@@ -2015,6 +2015,233 @@ def create_app(manager: SessionManager) -> FastAPI:
         manager.sync_enterprise_context()  # back to personal: orphan + clear
         return out
 
+    # -- Enterprise resources (WORK-RESOURCES-001, INT-101/103, BND-002/008) ----
+    from ..enterprise import installer as _installer
+    from ..enterprise.registry import SkillRef, SkillRefError, REGISTRY
+    from ..enterprise.scope import TurnScope
+    from ..enterprise import resources as _resources
+
+    def _enterprise_or_401() -> tuple[Optional[Any], Optional[Any]]:
+        """The resources family requires the LIVE enterprise context. Returns
+        (context, error_response)."""
+        manager.sync_enterprise_context()
+        context = manager.enterprise_context()
+        if context is None:
+            return None, JSONResponse(
+                _resources._err("SESSION_REVOKED", "no active enterprise session"),
+                status_code=401,
+            )
+        return context, None
+
+    def _resources_client(context: Any) -> Any:
+        return manager.enterprise_resource_client(context)
+
+    def _error_status(err: dict[str, Any], default: int = 502) -> int:
+        code = (err.get("error") or {}).get("code", "")
+        return {
+            "INVALID_REQUEST": 400,
+            "SESSION_REVOKED": 401,
+            "SPACE_FORBIDDEN": 403,
+            "RESOURCE_NOT_ACCESSIBLE": 404,
+            "CONTEXT_CHANGED": 409,
+            "SKILL_VERSION_CHANGED": 409,
+            "ARCHIVE_NOT_READY": 409,
+            "OPERATION_IN_PROGRESS": 409,
+            "SKILL_NOT_AVAILABLE": 409,
+            "SKILL_HASH_MISMATCH": 422,
+            "SKILL_PACKAGE_UNSAFE": 422,
+            "SKILL_PACKAGE_TOO_LARGE": 413,
+            "RESOURCE_API_UNSUPPORTED": 501,
+        }.get(code, default)
+
+    @app.get("/v1/enterprise/resources/knowledge-bases")
+    async def enterprise_resources_knowledge_bases(
+        request: Request, q: str = "", tenant_id: str = "", offset: int = 0, limit: int = 50
+    ) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        try:
+            if tenant_id:
+                tenant_id = _resources.validate_resource_id(tenant_id, "tenant_id")
+            if len(q) > 200:
+                raise ValueError("q must be at most 200 characters")
+            if not (0 <= offset and 1 <= limit <= 100):
+                raise ValueError("offset must be >= 0 and limit within 1..100")
+        except ValueError as exc:
+            return JSONResponse(_resources._err("INVALID_REQUEST", str(exc)), status_code=400)
+        out = await _resources_client(context).list_resources(
+            "knowledge-bases", q=q.strip(), tenant_id=tenant_id, offset=offset, limit=limit
+        )
+        if "error" in out:
+            return JSONResponse(out, status_code=_error_status(out, 502))
+        out["context_id"] = context.context_id
+        return out
+
+    @app.get("/v1/enterprise/resources/skills")
+    async def enterprise_resources_skills(
+        request: Request, q: str = "", tenant_id: str = "", offset: int = 0, limit: int = 50
+    ) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        try:
+            if tenant_id:
+                tenant_id = _resources.validate_resource_id(tenant_id, "tenant_id")
+            if len(q) > 200:
+                raise ValueError("q must be at most 200 characters")
+            if not (0 <= offset and 1 <= limit <= 100):
+                raise ValueError("offset must be >= 0 and limit within 1..100")
+        except ValueError as exc:
+            return JSONResponse(_resources._err("INVALID_REQUEST", str(exc)), status_code=400)
+        out = await _resources_client(context).list_resources(
+            "skills", q=q.strip(), tenant_id=tenant_id, offset=offset, limit=limit
+        )
+        if "error" in out:
+            return JSONResponse(out, status_code=_error_status(out, 502))
+        out["items"] = _resources.merge_local_skill_state(context, out.get("items") or [])
+        out["context_id"] = context.context_id
+        # 旧 publish_id 安装：保留作回退材料，提示需重装，永不可执行。
+        out["legacy_installs"] = _installer.legacy_installs(context)
+        return out
+
+    @app.get("/v1/enterprise/resources/skills/{catalog_id}")
+    async def enterprise_resources_skill_item(catalog_id: str, tenant_id: str = "") -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        try:
+            tenant_id = _resources.validate_resource_id(tenant_id, "tenant_id")
+            catalog_id = _resources.validate_resource_id(catalog_id, "catalog_id")
+        except ValueError as exc:
+            return JSONResponse(_resources._err("INVALID_REQUEST", str(exc)), status_code=400)
+        allowed, problem = await _resources.authorize_catalog(
+            _resources_client(context), context, tenant_id, catalog_id
+        )
+        if not allowed:
+            err = (problem or {}).get("error") or _resources._err(
+                "RESOURCE_NOT_ACCESSIBLE", "skill catalog is not accessible"
+            )
+            return JSONResponse({"error": err}, status_code=_error_status({"error": err}, 404))
+        out = await _resources_client(context).get_skill_catalog(tenant_id, catalog_id)
+        if "error" in out:
+            return JSONResponse(out, status_code=_error_status(out, 404))
+        out["context_id"] = context.context_id
+        return out
+
+    @app.post("/v1/enterprise/resources/skills/{catalog_id}/install")
+    async def enterprise_resources_skill_install(catalog_id: str, body: dict) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        body = body or {}
+        bad = _resources.check_context_id(context, body.get("context_id"))
+        if bad is not None:
+            return JSONResponse(bad, status_code=409)
+        status, out = await manager.resource_operations.request_install(
+            context,
+            _resources_client(context),
+            tenant_id=str(body.get("tenant_id") or ""),
+            catalog_id=catalog_id,
+            expected_sha256=str(body.get("expected_sha256") or ""),
+            name=str(body.get("name") or ""),
+            version=str(body.get("version") or ""),
+            current_context_getter=manager.enterprise_context,
+        )
+        return JSONResponse(out, status_code=status)
+
+    @app.patch("/v1/enterprise/resources/skills/{catalog_id}")
+    async def enterprise_resources_skill_patch(catalog_id: str, body: dict) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        body = body or {}
+        bad = _resources.check_context_id(context, body.get("context_id"))
+        if bad is not None:
+            return JSONResponse(bad, status_code=409)
+        if not isinstance(body.get("enabled"), bool):
+            return JSONResponse(
+                _resources._err("INVALID_REQUEST", "enabled must be a boolean"), status_code=400
+            )
+        try:
+            tenant_id = _resources.validate_resource_id(body.get("tenant_id"), "tenant_id")
+            catalog_id = _resources.validate_resource_id(catalog_id, "catalog_id")
+        except ValueError as exc:
+            return JSONResponse(_resources._err("INVALID_REQUEST", str(exc)), status_code=400)
+        # 启用是资源级操作：先复核目录仍可见（BND-008）。
+        allowed, problem = await _resources.authorize_catalog(
+            _resources_client(context), context, tenant_id, catalog_id
+        )
+        if not allowed:
+            err = (problem or {}).get("error") or _resources._err(
+                "RESOURCE_NOT_ACCESSIBLE", "skill catalog is not accessible"
+            )
+            return JSONResponse({"error": err}, status_code=_error_status({"error": err}, 404))
+        # M5 修复：启用/停用与写 active 同锁语义——进行中安装时拒绝（INT-103）。
+        inflight = manager.resource_operations.get_for(context, tenant_id, catalog_id)
+        if inflight is not None and inflight.status not in ("succeeded", "failed"):
+            return JSONResponse(
+                _resources._err("OPERATION_IN_PROGRESS", "wait for the current operation to finish"),
+                status_code=409,
+            )
+        out = _installer.set_enabled(context, tenant_id, catalog_id, body["enabled"])
+        if not out.get("ok"):
+            return JSONResponse(out, status_code=_error_status(out, 409))
+        out["context_id"] = context.context_id
+        return out
+
+    @app.delete("/v1/enterprise/resources/skills/{catalog_id}")
+    async def enterprise_resources_skill_delete(
+        catalog_id: str, tenant_id: str = "", context_id: str = ""
+    ) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        bad = _resources.check_context_id(context, context_id)
+        if bad is not None:
+            return JSONResponse(bad, status_code=409)
+        try:
+            tenant_id = _resources.validate_resource_id(tenant_id, "tenant_id")
+            catalog_id = _resources.validate_resource_id(catalog_id, "catalog_id")
+        except ValueError as exc:
+            return JSONResponse(_resources._err("INVALID_REQUEST", str(exc)), status_code=400)
+        # 进行中的安装与卸载冲突（INT-103）。
+        inflight = manager.resource_operations.get_for(context, tenant_id, catalog_id)
+        if inflight is not None and inflight.status not in ("succeeded", "failed"):
+            return JSONResponse(
+                _resources._err("OPERATION_IN_PROGRESS", "wait for the current operation to finish"),
+                status_code=409,
+            )
+        # M6 修复：运行中 turn 钉住的版本引用归零前禁止卸载（BND-007
+        # 引用结束才回收）——否则 rmtree 会把正在执行的版本目录删掉。
+        pinned = REGISTRY.pinned_versions(context, tenant_id, catalog_id)
+        if pinned:
+            return JSONResponse(
+                _resources._err(
+                    "SKILL_NOT_AVAILABLE",
+                    "a running turn still references this skill; wait for it to finish",
+                ),
+                status_code=409,
+            )
+        out = _installer.uninstall(context, tenant_id, catalog_id)
+        if not out.get("ok"):
+            return JSONResponse(out, status_code=_error_status(out, 500))
+        out["context_id"] = context.context_id
+        return out
+
+    @app.get("/v1/enterprise/resources/operations/{operation_id}")
+    async def enterprise_resources_operation(operation_id: str) -> Any:
+        context, failure = _enterprise_or_401()
+        if failure is not None:
+            return failure
+        op = manager.resource_operations.get(operation_id, context)
+        if op is None:
+            return JSONResponse(
+                _resources._err("RESOURCE_NOT_ACCESSIBLE", "unknown operation for this identity"),
+                status_code=404,
+            )
+        return op.view()
+
     @app.post("/v1/connectors/{name}/connect-managed")
     async def connector_connect_managed(
         name: str, body: Optional[dict] = None
@@ -3195,15 +3422,30 @@ def create_app(manager: SessionManager) -> FastAPI:
             "iteration_end",
         }
 
-        async def run_turn(content, *, retry: bool = False, display=None) -> None:
-            # The receive loop atomically claims this session before scheduling the task.
+        async def run_turn(content, *, retry: bool = False, display=None, turn_meta=None) -> None:            # The receive loop atomically claims this session before scheduling the task.
             # Keeping the claim outside prevents two back-to-back frames from both starting.
+            # turn_meta (WORK-RESOURCES-001): {"scope": TurnScope|None, "ref": SkillRef|None,
+            # "resources": persisted metadata}. The scope/ref are pushed onto the bridge
+            # for THIS session for the duration of the turn (per-session keys — two
+            # concurrent sessions never see each other's window, BND-005) and released
+            # in the finally below; the next scope-less message restores the default.
+            bridge = manager._get_enterprise_bridge()
+            scope = (turn_meta or {}).get("scope")
+            ref = (turn_meta or {}).get("ref")
+            if scope is not None:
+                bridge.set_turn_scope(session_id, scope)
+            if ref is not None:
+                bridge.set_turn_ref(session_id, ref)
             try:
                 events = (
                     engine.retry()
                     if retry
-                    else engine.run(content, display=display,
-                                    activity=manager.prepare_activity(session_id, "user activity"))
+                    else engine.run(
+                        content,
+                        display=display,
+                        activity=manager.prepare_activity(session_id, "user activity"),
+                        resources=(turn_meta or {}).get("resources"),
+                    )
                 )
                 async for event in events:
                     data = event.data
@@ -3227,6 +3469,8 @@ def create_app(manager: SessionManager) -> FastAPI:
                     session_id, {"type": "error", "data": {"error": str(exc)}}
                 )
             finally:
+                bridge.clear_turn_scope(session_id)
+                bridge.clear_turn_ref(session_id)
                 manager.mark_idle(session_id)
                 manager.save(session_id, engine)
                 await manager.broadcast_session(
@@ -3261,13 +3505,73 @@ def create_app(manager: SessionManager) -> FastAPI:
             # or flush an in-progress assistant stream in the GUI.
             await ws.send_json({"type": "input_rejected", "data": {"error": reason}})
 
-        async def claim_turn(*, retry: bool = False, content=None, display=None) -> None:
+        # M3 修复（INT-102/VAL-206）：本会话最近一次被接受消息的资源约束
+        # 供 retry 恢复；socket 重连后内存丢失，则从引擎最后一条用户消息的
+        # `_resources` sidecar 重建（不完整的旧任务按缺省处理，不猜）。
+        _last_turn_meta: dict[str, Any] = {"meta": None}
+
+        def _recover_turn_meta() -> Optional[dict[str, Any]]:
+            try:
+                for msg in reversed(engine.messages):
+                    if msg.get("role") != "user":
+                        continue
+                    res = msg.get("_resources")
+                    if not isinstance(res, dict):
+                        return None
+                    labels = res.get("labels") or {}
+                    ks = labels.get("knowledge_scope")
+                    sr = labels.get("skill_ref")
+                    scope = None
+                    if (
+                        isinstance(ks, dict)
+                        and ks.get("tenant_id")
+                        and ks.get("knowledge_base_id")
+                    ):
+                        ectx_now = manager.enterprise_context()
+                        scope = TurnScope(
+                            turn_id=str(res.get("turn_id") or uuid.uuid4()),
+                            context_key=ectx_now.key if ectx_now is not None else "",
+                            tenant_id=str(ks["tenant_id"]),
+                            knowledge_base_id=str(ks["knowledge_base_id"]),
+                            labels={
+                                k: str(v)
+                                for k, v in ks.items()
+                                if k in ("tenant_name", "knowledge_base_name")
+                            },
+                        )
+                    ref = None
+                    if (
+                        isinstance(sr, dict)
+                        and sr.get("tenant_id")
+                        and sr.get("catalog_id")
+                        and sr.get("bundle_sha256")
+                    ):
+                        ref = SkillRef(
+                            tenant_id=str(sr["tenant_id"]),
+                            catalog_id=str(sr["catalog_id"]),
+                            bundle_sha256=str(sr["bundle_sha256"]),
+                            name=str(sr.get("name") or ""),
+                        )
+                    if scope is None and ref is None:
+                        return None
+                    return {"scope": scope, "ref": ref, "resources": res}
+            except Exception:  # noqa: BLE001 - recovery must never break retry
+                return None
+            return None
+
+        async def claim_turn(*, retry: bool = False, content=None, display=None, turn_meta=None) -> None:
             if not manager.try_mark_running(session_id):
                 await reject_input(
                     "This session is already running a turn. Wait for it to finish or stop it."
                 )
                 return
-            asyncio.create_task(run_turn(content, retry=retry, display=display))
+            if retry and turn_meta is None:
+                # 重试恢复原消息的范围与所选技能 SHA（scope 绑定随 turn 重新
+                # 生效；身份已切换时 turn_scope 的 key 校验会再次拒绝）。
+                turn_meta = _last_turn_meta["meta"] or _recover_turn_meta()
+            if turn_meta is not None:
+                _last_turn_meta["meta"] = turn_meta
+            asyncio.create_task(run_turn(content, retry=retry, display=display, turn_meta=turn_meta))
 
         try:
             while True:
@@ -3511,6 +3815,114 @@ def create_app(manager: SessionManager) -> FastAPI:
                     if reject is not None:
                         await reject_input(reject)
                         continue
+                    # -- WORK-RESOURCES-001 (DATA-102, INT-102): message-level ----
+                    # knowledge scope + structured enterprise skill_ref. Every
+                    # check happens BEFORE the turn starts; a rejection keeps
+                    # the GUI draft (text/attachments/selections) untouched.
+                    from ..enterprise import resources as _eres
+                    from ..enterprise.registry import SkillRef as _SkillRef
+                    from ..enterprise.scope import build_turn_scope, validate_scope_object
+                    from ..enterprise import registry as _eregistry
+
+                    raw_scope = message.get("knowledge_scope")
+                    raw_ref = message.get("skill_ref")
+                    ectx = None
+                    if raw_scope is not None or raw_ref is not None:
+                        manager.sync_enterprise_context()
+                        ectx = manager.enterprise_context()
+                        if ectx is None:
+                            await ws.send_json(
+                                {
+                                    "type": "input_rejected",
+                                    "data": {
+                                        "error": "enterprise selections require an active enterprise sign-in",
+                                        "code": "SESSION_REVOKED",
+                                    },
+                                }
+                            )
+                            continue
+                    scope = None
+                    turn_ref = None
+                    if raw_scope is not None:
+                        shape_error = validate_scope_object(raw_scope)
+                        if shape_error is not None:
+                            await ws.send_json(
+                                {"type": "input_rejected",
+                                 "data": {**shape_error["error"], "keep_draft": True}}
+                            )
+                            continue
+                        scope, scope_error = await build_turn_scope(
+                            raw_scope, ectx, manager.enterprise_resource_client(ectx)
+                        )
+                        if scope_error is not None:
+                            err = scope_error.get("error") or {}
+                            await ws.send_json(
+                                {
+                                    "type": "input_rejected",
+                                    "data": {
+                                        "error": err.get("message", "knowledge scope refused"),
+                                        "code": err.get("code", "RESOURCE_NOT_ACCESSIBLE"),
+                                        "keep_draft": True,
+                                    },
+                                }
+                            )
+                            continue
+                    if raw_ref is not None:
+                        if message.get("skill"):
+                            await ws.send_json(
+                                {
+                                    "type": "input_rejected",
+                                    "data": {
+                                        "error": "personal skill and enterprise skill_ref are mutually exclusive",
+                                        "code": "INVALID_REQUEST",
+                                        "keep_draft": True,
+                                    },
+                                }
+                            )
+                            continue
+                        try:
+                            turn_ref = _SkillRef.from_dict(raw_ref)
+                        except _eregistry.SkillRefError as exc:
+                            await ws.send_json(
+                                {"type": "input_rejected",
+                                 "data": {**exc.to_dict()["error"], "keep_draft": True}}
+                            )
+                            continue
+                        bad = _eres.check_context_id(
+                            ectx, raw_ref.get("context_id") if isinstance(raw_ref, dict) else None
+                        )
+                        if bad is not None:
+                            await ws.send_json(
+                                {"type": "input_rejected",
+                                 "data": {**bad["error"], "keep_draft": True}}
+                            )
+                            continue
+                        # 发送时校验：已安装、启用、当前授权有效、版本一致。
+                        record = _installer.get_install(
+                            ectx, turn_ref.tenant_id, turn_ref.catalog_id
+                        )
+                        fail = None
+                        if record is None:
+                            fail = ("SKILL_NOT_AVAILABLE", "the selected enterprise skill is not installed")
+                        elif not record.enabled:
+                            fail = ("SKILL_NOT_AVAILABLE", "the selected enterprise skill is disabled")
+                        elif record.active_sha256 != turn_ref.bundle_sha256:
+                            fail = ("SKILL_VERSION_CHANGED", "the selected version is no longer the active one")
+                        if fail is None:
+                            allowed, _problem = await _eres.authorize_catalog(
+                                manager.enterprise_resource_client(ectx),
+                                ectx, turn_ref.tenant_id, turn_ref.catalog_id,
+                            )
+                            if not allowed:
+                                fail = ("SKILL_REVOKED", "the catalog authorization was revoked")
+                        if fail is not None:
+                            await ws.send_json(
+                                {
+                                    "type": "input_rejected",
+                                    "data": {"error": fail[1], "code": fail[0], "keep_draft": True},
+                                }
+                            )
+                            continue
                     # The composer sends its visible model with every message — the FIRST
                     # one binds the session (race-proof across reconnects; see api.ts
                     # Session.userMessage), later ones may switch it (notice persisted).
@@ -3525,6 +3937,7 @@ def create_app(manager: SessionManager) -> FastAPI:
                     # user's literal "/name …" line via the `_display` sidecar (one bubble).
                     skill = message.get("skill")
                     display = None
+                    turn_meta = None
                     if skill is not None:
                         if not isinstance(skill, str) or not skill.strip():
                             await reject_input("Invalid skill: expected a name.")
@@ -3542,10 +3955,47 @@ def create_app(manager: SessionManager) -> FastAPI:
                             f'load_skill("{skill}") and follow its instructions.'
                             + (f"\n\n{text}" if text else "")
                         )
+                    if scope is not None or turn_ref is not None:
+                        labels: dict[str, Any] = {}
+                        if scope is not None:
+                            labels["knowledge_scope"] = {
+                                "tenant_id": scope.tenant_id,
+                                "knowledge_base_id": scope.knowledge_base_id,
+                                **scope.labels,
+                            }
+                        if turn_ref is not None:
+                            record = _installer.get_install(
+                                ectx or manager.enterprise_context(),
+                                turn_ref.tenant_id, turn_ref.catalog_id,
+                            )
+                            labels["skill_ref"] = {
+                                **turn_ref.to_dict(),
+                                "name": turn_ref.name or (record.name if record else ""),
+                            }
+                        # M4 修复：display 只保留用户正文（与个人技能路径一致）；
+                        # 资源标签由 ResourceChips 从 `_resources` 渲染——服务端不再
+                        # 硬编码 chip 文案（i18n minor 一并解决），刷新后气泡完整。
+                        turn_meta = {
+                            "scope": scope,
+                            "ref": turn_ref,
+                            "resources": {
+                                "context_id": (ectx or manager.enterprise_context()).context_id,
+                                "labels": labels,
+                                "turn_id": scope.turn_id if scope else "",
+                            },
+                        }
+                        if turn_ref is not None:
+                            # The model-facing framing: the tool path (structured
+                            # ref) is authoritative, not a prompt it may ignore.
+                            text = (
+                                "Use the enterprise skill selected for this turn: call "
+                                "enterprise_load_skill() and follow its instructions."
+                                + (f"\n\n{text}" if text else "")
+                            )
                     await _apply_model(model)
                     if text or attachments:
                         content = build_user_content(text, attachments)
-                        await claim_turn(content=content, display=display)
+                        await claim_turn(content=content, display=display, turn_meta=turn_meta)
                 else:
                     await reject_input(f"Unknown WebSocket message type: {kind}.")
         except WebSocketDisconnect:

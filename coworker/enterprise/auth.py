@@ -83,6 +83,13 @@ class EnterpriseContext:
     def key(self) -> str:
         return f"{self.issuer}|{self.subject}|{self.tenant}|{self.generation}"
 
+    @property
+    def context_id(self) -> str:
+        """Opaque identity-context marker (DATA-101): the GUI echoes it back
+        with every resource selection; derived from the context key so ANY
+        identity/space switch invalidates it automatically. Not a secret."""
+        return hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:32]
+
     def seconds_until_expiry(self, *, now: Optional[float] = None) -> float:
         """Lifetime left on the in-memory access token (≤ 0 = expired)."""
         at = time.time() if now is None else now
@@ -114,6 +121,7 @@ class EnterpriseContext:
             "tenant": self.tenant,
             "generation": self.generation,
             "authz_version": self.authz_version,
+            "context_id": self.context_id,
             "spaces": list(self.spaces),
             "email": self.email,
             "name": self.display_name,

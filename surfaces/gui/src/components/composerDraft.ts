@@ -19,6 +19,28 @@ export interface ComposerDraft {
   // The picked "/" force-run skill (SKILLS-SPEC §4.1 #3): the visible "/name " prefix is
   // UI state derived from this, so restoring it keeps the pending skill intact.
   skill: SessionSkillRow | null;
+  // WORK-RESOURCES-001 (DATA-102): optional per-message resource selections.
+  // Old drafts simply lack the fields — never backfill guesses.
+  knowledgeScope?: KnowledgeScopeDraft | null;
+  skillRef?: SkillRefDraft | null;
+}
+
+/** Mirror of enterpriseResources' selection shapes, kept draft-local so this
+ * module stays dependency-free. */
+export interface KnowledgeScopeDraft {
+  tenant_id: string;
+  knowledge_base_id: string;
+  context_id: string;
+  label: string;
+}
+
+export interface SkillRefDraft {
+  source: "catalog";
+  tenant_id: string;
+  catalog_id: string;
+  bundle_sha256: string;
+  context_id: string;
+  label: string;
 }
 
 export function draftKey(sessionId: string): string {
@@ -40,6 +62,8 @@ export function loadDraft(sessionId: string | undefined): ComposerDraft | undefi
       text: parsed.text,
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
       skill: parsed.skill ?? null,
+      knowledgeScope: parsed.knowledgeScope ?? null,
+      skillRef: parsed.skillRef ?? null,
     };
   } catch {
     return undefined;
@@ -49,7 +73,12 @@ export function loadDraft(sessionId: string | undefined): ComposerDraft | undefi
 /** Save the draft for a session. An empty draft is pruned rather than stored. */
 export function saveDraft(sessionId: string, draft: ComposerDraft): void {
   try {
-    const empty = !draft.text.trim() && draft.attachments.length === 0 && !draft.skill;
+    const empty =
+      !draft.text.trim() &&
+      draft.attachments.length === 0 &&
+      !draft.skill &&
+      !draft.knowledgeScope &&
+      !draft.skillRef;
     if (empty) {
       localStorage.removeItem(draftKey(sessionId));
       return;
