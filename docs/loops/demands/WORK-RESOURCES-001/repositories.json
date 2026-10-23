@@ -35,7 +35,7 @@
     }
   },
   "requirementsVersion": {
-    "commit": null,
+    "commit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
     "sha256": "sha256:bfb4eb8234de5584bb338293736dd8100f4acb65cebb987ba3515a86fbc4e484"
   },
   "releaseChecklist": {
@@ -95,12 +95,12 @@
       "repositoryUnitPath": "repositories/platform-opc/repository-receipt.json",
       "traceExport": {
         "required": true,
-        "state": "pending",
-        "packagePath": null,
-        "sourceCommit": null,
-        "packageSha256": null,
-        "participantCommit": null,
-        "verifiedAt": null
+        "state": "verified",
+        "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+        "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+        "packageSha256": "8f9fc4c2bcf46681ff3986613c758088e800e414acdfaae2882be39636225fe8",
+        "participantCommit": "c988489",
+        "verifiedAt": "2026-10-23T05:15:00Z"
       }
     },
     {
@@ -124,12 +124,12 @@
       "repositoryUnitPath": "repositories/knowledge-opc/repository-receipt.json",
       "traceExport": {
         "required": true,
-        "state": "pending",
-        "packagePath": null,
-        "sourceCommit": null,
-        "packageSha256": null,
-        "participantCommit": null,
-        "verifiedAt": null
+        "state": "verified",
+        "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+        "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+        "packageSha256": "5b1029e6a3c124feaca0f5ac51b32eb58160e62a40268f9428623e0990c88d43",
+        "participantCommit": "8520f683",
+        "verifiedAt": "2026-10-23T05:15:00Z"
       }
     }
   ],
@@ -141,11 +141,11 @@
   ],
   "unavailableCandidates": [],
   "closure": {
-    "state": "pending",
+    "state": "ready",
     "aggregateReview": {
-      "outcome": "PENDING",
-      "evidencePath": null,
-      "reviewedAt": null
+      "outcome": "READY_FOR_HUMAN_REVIEW",
+      "evidencePath": "repositories/aggregate-review.md",
+      "reviewedAt": "2026-10-23T05:15:00Z"
     },
     "receiptPath": "solo-closure-receipt.json"
   }
