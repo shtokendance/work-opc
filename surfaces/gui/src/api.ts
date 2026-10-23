@@ -1711,8 +1711,17 @@ export interface SkillRow {
 export interface SessionSkillRow {
   name: string;
   description: string;
-  scope: "global" | "project";
-  enabled: boolean; // false = muted for this session only
+  scope: "global" | "project" | "coworker" | "enterprise";
+  enabled: boolean; // false = muted for this session only (personal) / disabled record (enterprise)
+  /** WORK-RESOURCES-001: enterprise rows carry the structured skill_ref metadata
+   * (absent on personal rows). */
+  enterprise?: {
+    tenant_id: string;
+    catalog_id: string;
+    bundle_sha256: string;
+    version?: string;
+    context_id: string;
+  };
 }
 
 export interface SkillUploadPreview {
@@ -3234,7 +3243,28 @@ export class Session {
    * exactly what the user sees — immune to set_model races across reconnects (a new cowork
    * session always reconnects once to adopt its scratch dir, which could drop a queued
    * set_model and leave the engine on a stale/resumed model; found 2026-07-04). */
-  userMessage(text: string, attachments?: unknown[], model?: string, skill?: string) {
+  userMessage(
+    text: string,
+    attachments?: unknown[],
+    model?: string,
+    skill?: string,
+    resources?: {
+      knowledgeScope?: {
+        tenant_id: string;
+        knowledge_base_id: string;
+        context_id: string;
+        label?: string;
+      } | null;
+      skillRef?: {
+        source: "catalog";
+        tenant_id: string;
+        catalog_id: string;
+        bundle_sha256: string;
+        context_id: string;
+        label?: string;
+      } | null;
+    },
+  ) {
     this.send({
       type: "user_message",
       text,
@@ -3243,6 +3273,28 @@ export class Session {
       // Force-run (SKILLS-SPEC §4.1): the composer's /skill pick rides as its own field;
       // the server validates it against the session's effective menu and frames the turn.
       ...(skill ? { skill } : {}),
+      // WORK-RESOURCES-001 (DATA-102): message-level resource selections — the
+      // server re-validates visibility, binds the turn, generates the labels.
+      ...(resources?.knowledgeScope
+        ? {
+            knowledge_scope: {
+              tenant_id: resources.knowledgeScope.tenant_id,
+              knowledge_base_id: resources.knowledgeScope.knowledge_base_id,
+              context_id: resources.knowledgeScope.context_id,
+            },
+          }
+        : {}),
+      ...(resources?.skillRef
+        ? {
+            skill_ref: {
+              source: "catalog",
+              tenant_id: resources.skillRef.tenant_id,
+              catalog_id: resources.skillRef.catalog_id,
+              bundle_sha256: resources.skillRef.bundle_sha256,
+              context_id: resources.skillRef.context_id,
+            },
+          }
+        : {}),
     });
   }
 

@@ -95,6 +95,39 @@ import { PersonaView } from "./components/PersonaView";
 import { AuditView } from "./components/AuditView";
 import { InboxView } from "./components/InboxView";
 import { AppsView } from "./components/AppsView";
+import { remoteSessionResourceBlock } from "./enterpriseResources";
+import { ResourcesView } from "./components/ResourcesView";
+import { EnterpriseSkillsPanel } from "./components/EnterpriseSkillsPanel";
+
+/** 知识库 + 企业技能 entry (BND-009): two tabs, one surface. */
+function ResourcesPanel({ onUseKnowledge }: { onUseKnowledge: (sel: import("./enterpriseResources").KnowledgeScopeSelection) => void }) {
+  const [tab, setTab] = useState<"knowledge" | "skills">("knowledge");
+  return (
+    <div className="max-w-3xl mx-auto">
+      <div className="flex gap-2 px-4 pt-4">
+        <button
+          data-testid="resources-tab-knowledge"
+          className={"text-ui px-3 py-1.5 rounded-lg border " + (tab === "knowledge" ? "border-accent text-accent" : "border-line text-muted")}
+          onClick={() => setTab("knowledge")}
+        >
+          知识库
+        </button>
+        <button
+          data-testid="resources-tab-skills"
+          className={"text-ui px-3 py-1.5 rounded-lg border " + (tab === "skills" ? "border-accent text-accent" : "border-line text-muted")}
+          onClick={() => setTab("skills")}
+        >
+          企业技能
+        </button>
+      </div>
+      {tab === "knowledge" ? (
+        <ResourcesView onUseKnowledge={onUseKnowledge} />
+      ) : (
+        <EnterpriseSkillsPanel />
+      )}
+    </div>
+  );
+}
 import {
   approvalItemFromPayload,
   connectorItemFromPayload,
@@ -369,8 +402,11 @@ export function App() {
   // load; corrected by loadSettings.
   const [modelReady, setModelReady] = useState(true);
   const [surface, setSurface] = useState<
-    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps"
+    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps" | "resources"
   >("session");
+  // WORK-RESOURCES-001: per-message resource selections (DATA-102).
+  const [knowledgeScope, setKnowledgeScope] = useState<import("./enterpriseResources").KnowledgeScopeSelection | null>(null);
+  const [skillRefSel, setSkillRefSel] = useState<import("./enterpriseResources").SkillRefSelection | null>(null);
   // The active session rides the URL (#/s/{id}) so refresh and bookmarks
   // come back here. Deep-link intent (approve) wins until consumed, and the
   // Settings surface reflects its own routes — leaving it hands the URL back.
@@ -1363,7 +1399,25 @@ export function App() {
     return () => { canceled = true; clearInterval(t); };
   }, [surface, sessionId, browserRefreshKey, markAttendance, pendingInbox, gateScope]);
 
-  const send = (text: string, attachments?: Attachment[], skill?: string) => {
+  const send = (
+    text: string,
+    attachments?: Attachment[],
+    skill?: string,
+    resources?: {
+      knowledgeScope?: import("./enterpriseResources").KnowledgeScopeSelection | null;
+      skillRef?: import("./enterpriseResources").SkillRefSelection | null;
+    },
+  ) => {
+    // M7 修复（BND-004.2）：远端执行会话（会话跑在已接入的机器上）禁止携带
+    // 本机知识范围/企业技能——本机资源选择不随消息发到远端，提示在本机会话使用。
+    const remoteBlock = remoteSessionResourceBlock(sessionId, machineOfSession, resources);
+    if (remoteBlock) {
+      setItems((p) => [
+        ...p,
+        { kind: "notice", tone: "warn", text: remoteBlock, ts: Date.now() / 1000 },
+      ]);
+      return;
+    }
     // UX-029: folder enforcement AT SEND. A code-family session with no folder has no
     // socket yet (the connect effect waits) — stash the message and ask where to work;
     // it goes out the moment the dialog resolves.
@@ -1402,7 +1456,10 @@ export function App() {
     const shown = skill ? `/${skill}${text ? ` ${text}` : ""}` : text;
     setItems((p) => [...p, { kind: "user", text: shown, attachments, ts: Date.now() / 1000 }]);
     // The visible model rides along with the message (single source of truth per turn).
-    sessionRef.current?.userMessage(text, attachments, model, skill);
+    sessionRef.current?.userMessage(text, attachments, model, skill, {
+      knowledgeScope: resources?.knowledgeScope ?? null,
+      skillRef: resources?.skillRef ?? null,
+    });
     followLatest(); // sending always re-engages stream-following, wherever the user had scrolled
   };
   // Resolving a LIVE prompt also resolves its parked Inbox mirror server-side, but the polled
@@ -2070,6 +2127,7 @@ export function App() {
         onOpenAudit={() => setSurface("audit")}
         onOpenInbox={() => setSurface("inbox")}
         onOpenApps={() => setSurface("apps")}
+        onOpenResources={() => setSurface("resources")}
         scheduledActive={surface === "scheduled"}
         integrationsActive={surface === "settings" && settingsTab === "connectors"}
         auditActive={surface === "audit"}
@@ -2120,6 +2178,16 @@ export function App() {
         />
       ) : surface === "audit" ? (
         <AuditView />
+      ) : surface === "resources" ? (
+        <div className="overflow-y-auto h-full">
+          <ResourcesPanel
+            onUseKnowledge={(sel) => {
+              // BND-004.2: 使用 → 准备当前会话输入框；不自动发送。
+              setKnowledgeScope(sel);
+              setSurface("session");
+            }}
+          />
+        </div>
       ) : surface === "inbox" ? (
         <InboxView onOpenSession={openSessionFromInbox} />
       ) : surface === "persona" ? (
@@ -2479,6 +2547,10 @@ export function App() {
               onOpenMemory={() => openSettings("memory")}
               onConfigureVoiceInput={() => openSettings("voice")}
               onSend={send}
+              knowledgeScope={knowledgeScope}
+              onKnowledgeScopeChange={setKnowledgeScope}
+              skillRef={skillRefSel}
+              onSkillRefChange={setSkillRefSel}
               onInterrupt={interrupt}
               onModeChange={changeMode}
               onModelChange={changeModel}

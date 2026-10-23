@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "demandId": "WORK-RESOURCES-001",
+  "naming": {
+    "demandTitle": "work-opc 知识库与技能轻量入口",
+    "shortTitle": "resource-entry",
+    "conversationTitle": "[SDD Solo][WORK-RESOURCES-001] work-opc 知识库与技能轻量入口",
+    "branchDate": "261022",
+    "branchTemplate": "feature/{yyMMdd}_{demandId}_{shortTitle}",
+    "canonicalBranch": "feature/261022_WORK-RESOURCES-001_resource-entry"
+  },
+  "primaryRepository": "work-opc",
+  "deliveryMode": "full",
+  "modeDecision": {
+    "recommendedMode": "full",
+    "confirmedMode": "full",
+    "confirmedBy": "Roger0808 <yj198788@hotmail.com>",
+    "confirmedAt": "2026-10-22T16:45:06.544562+08:00",
+    "reasons": [
+      "上传目录到可下载技能的生命周期与授权/版本方案需独立架构确认；从自动安装改为手动安装"
+    ],
+    "riskAssessment": {
+      "requirementsResolved": false,
+      "scopeAndAcceptanceClear": true,
+      "repositoriesInspected": true,
+      "verificationPlanClear": false,
+      "rollbackPlanClear": false,
+      "architectureDecisionRisk": "present",
+      "breakingContractOrCutoverRisk": "unknown",
+      "complexDataMigrationRisk": "unknown",
+      "materialSensitiveDomainRisk": "unknown",
+      "complexReleaseCoordinationRisk": "unknown",
+      "irreversibleOrHighBlastRadiusRisk": "unknown",
+      "explicitFullGovernanceRequired": "unknown"
+    }
+  },
+  "requirementsVersion": {
+    "commit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+    "sha256": "sha256:bfb4eb8234de5584bb338293736dd8100f4acb65cebb987ba3515a86fbc4e484"
+  },
+  "releaseChecklist": {
+    "path": "release-checklist.md",
+    "state": "ready",
+    "sha256": "sha256:3693d1011c5502d3a936f89f56747b19e3cb58a6e1fa5aa4e19831ec549d1d60",
+    "preparedAt": "2026-10-23T00:55:00+08:00"
+  },
+  "participants": [
+    {
+      "repositoryId": "work-opc",
+      "remote": "https://github.com/Roger0808/work-opc.git",
+      "role": "primary",
+      "baseline": {
+        "branch": "release",
+        "commit": "7be2e4cec8b91f6bb430a332241629500d7bf5ff"
+      },
+      "workingBranch": {
+        "expected": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "actual": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "disposition": "created",
+        "exceptionReason": null
+      },
+      "discoveryEvidence": [
+        "docs/integration/2026-10-22-work-resources-discovery.md"
+      ],
+      "status": "confirmed",
+      "repositoryUnitPath": "repositories/work-opc/repository-receipt.json",
+      "traceExport": {
+        "required": false,
+        "state": "not-required",
+        "packagePath": null,
+        "sourceCommit": null,
+        "packageSha256": null,
+        "participantCommit": null,
+        "verifiedAt": null
+      }
+    },
+    {
+      "repositoryId": "platform-opc",
+      "remote": "https://github.com/Roger0808/wecom-opc.git",
+      "role": "participant",
+      "baseline": {
+        "branch": "release",
+        "commit": "27de3c77de6be0fb08e8147450b3a449d296dd16"
+      },
+      "workingBranch": {
+        "expected": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "actual": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "disposition": "created",
+        "exceptionReason": null
+      },
+      "discoveryEvidence": [
+        "docs/integration/2026-10-22-work-resources-discovery.md"
+      ],
+      "status": "confirmed",
+      "repositoryUnitPath": "repositories/platform-opc/repository-receipt.json",
+      "traceExport": {
+        "required": true,
+        "state": "verified",
+        "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+        "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+        "packageSha256": "sha256:11d984dd524da05de0fcee397579d5e09b92ea24dc354d45c09efbce9d3fc36a",
+        "participantCommit": "bb919d310832101297884d4de686c9618d38de97",
+        "verifiedAt": "2026-10-23T05:15:00Z"
+      }
+    },
+    {
+      "repositoryId": "knowledge-opc",
+      "remote": "https://github.com/Roger0808/OPC-2.0.git",
+      "role": "participant",
+      "baseline": {
+        "branch": "release",
+        "commit": "071fd96c4295d0925244615f7d8a73e9544f26d0"
+      },
+      "workingBranch": {
+        "expected": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "actual": "feature/261022_WORK-RESOURCES-001_resource-entry",
+        "disposition": "created",
+        "exceptionReason": null
+      },
+      "discoveryEvidence": [
+        "docs/integration/2026-10-22-work-resources-discovery.md"
+      ],
+      "status": "confirmed",
+      "repositoryUnitPath": "repositories/knowledge-opc/repository-receipt.json",
+      "traceExport": {
+        "required": true,
+        "state": "verified",
+        "packagePath": "docs/sdd/demands/WORK-RESOURCES-001",
+        "sourceCommit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+        "packageSha256": "sha256:97f46b58707484ff20190d0ce26407483bbc73e20f438ff16716992c2587f030",
+        "participantCommit": "525c6129f4bcb8ec2f0c203e2398838b083bbd8a",
+        "verifiedAt": "2026-10-23T05:15:00Z"
+      }
+    }
+  ],
+  "excludedCandidates": [
+    {
+      "repositoryId": "code-opc",
+      "reason": "本轮先做 work 客户端"
+    }
+  ],
+  "unavailableCandidates": [],
+  "closure": {
+    "state": "ready",
+    "aggregateReview": {
+      "outcome": "READY_FOR_HUMAN_REVIEW",
+      "evidencePath": "docs/loops/demands/WORK-RESOURCES-001/repositories/aggregate-review.md",
+      "reviewedAt": "2026-10-23T05:15:00Z"
+    },
+    "receiptPath": "solo-closure-receipt.json"
+  },
+  "protocol": "sdd-solo@1"
+}

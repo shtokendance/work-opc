@@ -80,6 +80,8 @@ PromptRouter = Callable[[str], dict[str, Any]]
 AuditFn = Callable[[dict[str, Any]], None]
 ClientFactory = Callable[[str], httpx.AsyncClient]
 
+SCOPE_MISMATCH = "SCOPE_MISMATCH"
+
 
 def _err(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
@@ -128,6 +130,52 @@ class EnterpriseBridge:
         self._clients: dict[str, httpx.AsyncClient] = {}
         self._client_loops: dict[str, asyncio.AbstractEventLoop] = {}
         self._pending: dict[str, set[str]] = {}  # context_key -> invocation ids
+        # WORK-RESOURCES-001: per-SESSION turn scopes (BND-005 — never a
+        # process-global: two concurrent sessions must not see each other's KB).
+        self._scopes: dict[str, Any] = {}
+        # Per-session pinned enterprise skill ref for the CURRENT turn (the
+        # structured replacement for the old name-shadowing load path).
+        self._turn_refs: dict[str, Any] = {}
+        # M6 修复：本会话在本 turn 内实际 acquire 过的 ref 列表——turn 结束
+        # （clear_turn_ref）逐一 REGISTRY.release，引用归零后版本目录才允许回收。
+        self._turn_pins: dict[str, list[Any]] = {}
+        # Resource-level authorization callback, wired by the manager (TASK-020).
+        self.authorize_ref: Optional[Callable[[EnterpriseContext, str, str, str], bool]] = None
+
+    # -- turn scopes (BND-004/005) ------------------------------------------------
+    def set_turn_scope(self, session_id: str, scope: Any) -> None:
+        self._scopes[session_id] = scope
+
+    def clear_turn_scope(self, session_id: str) -> None:
+        self._scopes.pop(session_id, None)
+
+    def set_turn_ref(self, session_id: str, ref: Any) -> None:
+        self._turn_refs[session_id] = ref
+
+    def clear_turn_ref(self, session_id: str) -> None:
+        self._turn_refs.pop(session_id, None)
+        # M6：释放本 turn 的 registry 引用（引用归零 → 版本目录可回收）。
+        pins = self._turn_pins.pop(session_id, None)
+        if pins:
+            from . import registry as _registry
+
+            context = self._context_getter()
+            if context is not None:
+                for ref in pins:
+                    _registry.REGISTRY.release(
+                        context, ref.tenant_id, ref.catalog_id, ref.bundle_sha256
+                    )
+
+    def turn_scope(self, session_id: str) -> Any:
+        scope = self._scopes.get(session_id)
+        if scope is None:
+            return None
+        context = self._context_getter()
+        if context is None or context.key != scope.context_key:
+            # 身份切换立即失效（BND-008）。
+            self._scopes.pop(session_id, None)
+            return None
+        return scope
 
     # -- connections, sharded by context key (BND-120) -------------------------
     def _client_for(self, context: EnterpriseContext) -> httpx.AsyncClient:
@@ -224,18 +272,36 @@ class EnterpriseBridge:
         query: str,
         space: Optional[str] = None,
         knowledge_base_id: Optional[str] = None,
+        *,
+        session_id: str = "",
     ) -> dict[str, Any]:
         context, failure = self._require_context()
         if failure is not None:
             return failure
         payload: dict[str, Any] = {"query": str(query or "")}
-        # tenant 缺省取当前企业上下文租户（平台 INT-120a 必需 tenant_id，
-        # space 为其别名）；knowledge_base_id 缺省时平台检索租户内全部可见库。
-        tenant = str(space or "").strip() or context.tenant
-        if tenant:
-            payload["tenant_id"] = tenant
-        if knowledge_base_id:
-            payload["knowledge_base_id"] = str(knowledge_base_id)
+        scope = self.turn_scope(session_id) if session_id else None
+        if scope is not None:
+            # BND-005：scope 是权限缩小。模型省略参数 → 服务端补固定值；模型
+            # 给冲突值 → 直接 SCOPE_MISMATCH，且绝不发出越界上游请求。
+            model_space = str(space or "").strip()
+            model_kb = str(knowledge_base_id or "").strip()
+            if (model_space and model_space != scope.tenant_id) or (
+                model_kb and model_kb != scope.knowledge_base_id
+            ):
+                return _err(
+                    SCOPE_MISMATCH,
+                    "the model parameters conflict with this turn's knowledge scope",
+                )
+            payload["tenant_id"] = scope.tenant_id
+            payload["knowledge_base_id"] = scope.knowledge_base_id
+        else:
+            # tenant 缺省取当前企业上下文租户（平台 INT-120a 必需 tenant_id，
+            # space 为其别名）；knowledge_base_id 缺省时平台检索租户内全部可见库。
+            tenant = str(space or "").strip() or context.tenant
+            if tenant:
+                payload["tenant_id"] = tenant
+            if knowledge_base_id:
+                payload["knowledge_base_id"] = str(knowledge_base_id)
         status, body = await self._request(
             context, "POST", "/integration/v1/knowledge/search", json_body=payload
         )
@@ -245,24 +311,52 @@ class EnterpriseBridge:
                 if "error" in body
                 else _err(UPSTREAM_UNAVAILABLE, f"knowledge search failed ({status})")
             )
+        if scope is not None:
+            results = body.get("results") if isinstance(body, dict) else None
+            scope.record_hits(results if isinstance(results, list) else [])
         return body
 
-    async def knowledge_read(self, knowledge_id: str) -> dict[str, Any]:
+    async def knowledge_read(
+        self, knowledge_id: str, *, session_id: str = ""
+    ) -> dict[str, Any]:
         context, failure = self._require_context()
         if failure is not None:
             return failure
         kid = str(knowledge_id or "").strip().strip("/")
         if not kid or ".." in kid or "/" in kid:
             return _err("INVALID_KNOWLEDGE_ID", "knowledge_id must be a single id")
-        status, body = await self._request(
-            context, "GET", f"/integration/v1/knowledge/{kid}"
-        )
+        scope = self.turn_scope(session_id) if session_id else None
+        path = f"/integration/v1/knowledge/{kid}"
+        if scope is not None:
+            # BND-005：read 必须属于本 turn 的检索命中集合，且平台在输出正文前
+            # 校验权威文档的实际归属；仅历史命中 ID / 模型构造 ID 不放行。
+            if not scope.allows_read(kid):
+                return _err(
+                    SCOPE_MISMATCH,
+                    "knowledge_id is not in this turn's search hit set",
+                )
+            from urllib.parse import urlencode
+
+            path += "?" + urlencode(
+                {"tenant": scope.tenant_id, "knowledge_base_id": scope.knowledge_base_id}
+            )
+        status, body = await self._request(context, "GET", path)
         if status >= 400:
             return (
                 {"ok": False, **body}
                 if "error" in body
                 else _err(UPSTREAM_UNAVAILABLE, f"knowledge read failed ({status})")
             )
+        if scope is not None:
+            source_tenant = str(body.get("source_tenant") or "")
+            data = body.get("data") if isinstance(body.get("data"), dict) else {}
+            actual_kb = str(data.get("knowledge_base_id") or "")
+            if source_tenant != scope.tenant_id or actual_kb != scope.knowledge_base_id:
+                # VAL-207：文档已移动 / 元数据与正文归属变化 → 拒绝输出正文。
+                return _err(
+                    SCOPE_MISMATCH,
+                    "the authoritative document no longer belongs to the scoped knowledge base",
+                )
         return body
 
     # -- INT-150 + the approval bridge ----------------------------------------------
@@ -549,8 +643,45 @@ class EnterpriseBridge:
             await asyncio.sleep(self._poll_interval)
 
     # -- engine tool surface --------------------------------------------------------
+    def load_enterprise_skill(self, session_id: str) -> dict[str, Any]:
+        """Resolve THIS turn's pinned structured skill_ref against the stable
+        registry (BND-007): no name lookup, no version sliding, a fresh
+        resource-level authorization on every load (TASK-020)."""
+        from . import registry as _registry
+
+        context, failure = self._require_context()
+        if failure is not None:
+            return failure
+        ref = self._turn_refs.get(session_id)
+        if ref is None:
+            return _err(
+                "SKILL_NOT_AVAILABLE",
+                "no enterprise skill was selected for this turn",
+            )
+        try:
+            resolved = _registry.REGISTRY.acquire(
+                context,
+                ref,
+                session_id=session_id,
+                authorize=self.authorize_ref,
+            )
+            # M6：同一 turn 内重复 load 不叠加引用（按 ref 去重）。
+            pins = self._turn_pins.setdefault(session_id, [])
+            if all(
+                not (
+                    p.tenant_id == ref.tenant_id
+                    and p.catalog_id == ref.catalog_id
+                    and p.bundle_sha256 == ref.bundle_sha256
+                )
+                for p in pins
+            ):
+                pins.append(ref)
+            return {"ok": True, **resolved}
+        except _registry.SkillRefError as exc:
+            return exc.to_dict()
+
     def build_tools(self, session_id: str) -> list[Any]:
-        """The three sync callables the ToolRegistry executes (asyncio.run per
+        """The four sync callables the ToolRegistry executes (asyncio.run per
         call — the engine already runs sync tools on worker threads)."""
         bridge = self
 
@@ -560,11 +691,11 @@ class EnterpriseBridge:
             knowledge_base_id: Optional[str] = None,
         ) -> Any:
             return asyncio.run(
-                bridge.knowledge_search(query, space, knowledge_base_id)
+                bridge.knowledge_search(query, space, knowledge_base_id, session_id=session_id)
             )
 
         def knowledge_read(knowledge_id: str) -> Any:
-            return asyncio.run(bridge.knowledge_read(knowledge_id))
+            return asyncio.run(bridge.knowledge_read(knowledge_id, session_id=session_id))
 
         def mcp_invoke(
             service_id: str,
@@ -681,4 +812,29 @@ class EnterpriseBridge:
                 },
             },
         }
-        return [knowledge_search, knowledge_read, mcp_invoke]
+
+        def enterprise_load_skill() -> Any:
+            return bridge.load_enterprise_skill(session_id)
+
+        enterprise_load_skill.__name__ = "enterprise_load_skill"
+        enterprise_load_skill.__doc__ = (
+            "Load the full instructions of the enterprise skill selected for "
+            "this turn (structured catalog reference, exact pinned version). "
+            "Only available when the user attached an enterprise skill to the "
+            "message; requires an active enterprise context."
+        )
+        enterprise_load_skill.__aisuite_tool_metadata__ = ai.ToolMetadata(
+            name="enterprise_load_skill",
+            category="enterprise",
+            risk_level="low",
+            capabilities=["enterprise", "skills"],
+        )
+        enterprise_load_skill.__coworker_schema__ = {
+            "type": "function",
+            "function": {
+                "name": "enterprise_load_skill",
+                "description": enterprise_load_skill.__doc__,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        return [knowledge_search, knowledge_read, mcp_invoke, enterprise_load_skill]

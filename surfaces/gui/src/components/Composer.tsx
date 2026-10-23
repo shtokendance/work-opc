@@ -6,6 +6,8 @@ import { ProjectBindMenu } from "./ProjectBindMenu";
 import { getSessionModelSettings, getSettings, inspectPdf, sessionSkills, setSessionModelSettings, type ModelControls, type SessionSkillRow } from "../api";
 import { formatTokens, totalTokens } from "../usage";
 import { clearDraft, loadDraft, saveDraft, type ComposerDraft } from "./composerDraft";
+import { KnowledgeScopePicker } from "./KnowledgeScopePicker";
+import type { KnowledgeScopeSelection, SkillRefSelection } from "../enterpriseResources";
 import { Dropdown, type Option } from "./Dropdown";
 import { Icon } from "./Icon";
 import { Toggle } from "./Toggle";
@@ -120,7 +122,20 @@ interface Props {
   modelReady?: boolean;
   onConnectModel?: () => void;
   onConfigureVoiceInput?: () => void;
-  onSend: (text: string, attachments?: Attachment[], skill?: string) => void;
+  onSend: (
+    text: string,
+    attachments?: Attachment[],
+    skill?: string,
+    resources?: {
+      knowledgeScope?: KnowledgeScopeSelection | null;
+      skillRef?: SkillRefSelection | null;
+    },
+  ) => void;
+  /** WORK-RESOURCES-001: the picked knowledge scope chip (单选，发送前可删换)。 */
+  knowledgeScope?: KnowledgeScopeSelection | null;
+  onKnowledgeScopeChange?: (s: KnowledgeScopeSelection | null) => void;
+  skillRef?: SkillRefSelection | null;
+  onSkillRefChange?: (s: SkillRefSelection | null) => void;
   // Feeds the "/" force-run popup (SKILLS-SPEC §4.1 #3): the popup lists this session's
   // effective skill menu. Absent (e.g. tests without sessions) → the popup never opens.
   sessionId?: string;
@@ -208,6 +223,24 @@ export function Composer(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slashQuery === null]);
   const pickSkill = (s: SessionSkillRow) => {
+    if (s.scope === "enterprise" && s.enterprise) {
+      // 企业技能：不注入文本，走已验证的 skill_ref 链路（与企业技能面板「使用」
+      // 同一形状），由服务端在执行前校验安装/启用/版本/授权。
+      props.onSkillRefChange?.({
+        source: "catalog",
+        tenant_id: s.enterprise.tenant_id,
+        catalog_id: s.enterprise.catalog_id,
+        bundle_sha256: s.enterprise.bundle_sha256,
+        context_id: s.enterprise.context_id,
+        label: s.name,
+      });
+      // 选择完成：清掉 "/" 查询文本并关弹窗（与个人路径注入 "/name " 等效地结束菜单）。
+      setText("");
+      setSlashSkills(null);
+      setSlashIndex(0);
+      textareaRef.current?.focus();
+      return;
+    }
     setPendingSkill(s);
     setText(`/${s.name} `);
     textareaRef.current?.focus();
@@ -242,8 +275,14 @@ export function Composer(props: Props) {
 
   // Latest draft, mirrored each render so unmount/cleanup and the session-switch effect can
   // persist exactly what the user last typed, however state changes between renders.
+  const [knowledgePickerOpen, setKnowledgePickerOpen] = useState(false);
+  // M2：picker 的行与高光提升到 Composer——键盘在 textarea 的 onKey 里拦截。
+  const [pickerRows, setPickerRows] = useState<import("./KnowledgeScopePicker").PickerRow[]>([]);
+  const [pickerHighlight, setPickerHighlight] = useState(0);
+  const knowledgeScope = props.knowledgeScope ?? null;
+  const skillRef = props.skillRef ?? null;
   const draftRef = useRef<ComposerDraft>({ text: "", attachments: [], skill: null });
-  draftRef.current = { text, attachments, skill: pendingSkill };
+  draftRef.current = { text, attachments, skill: pendingSkill, knowledgeScope, skillRef };
   // The resetKey this Composer last rendered with; lets the session-switch effect know the
   // session we're LEAVING in order to save its draft before restoring the incoming one.
   const prevResetKey = useRef<string | undefined>(props.resetKey);
@@ -292,6 +331,9 @@ export function Composer(props: Props) {
     setText(restored?.text ?? "");
     setAttachments(restored?.attachments ?? []);
     setPendingSkill(restored?.skill ?? null);
+    // 仅当草稿真的带资源选择时才回调——避免挂载时空 null 惊扰父组件状态。
+    if (restored?.knowledgeScope) props.onKnowledgeScopeChange?.(restored.knowledgeScope);
+    if (restored?.skillRef) props.onSkillRefChange?.(restored.skillRef);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.resetKey]);
 
@@ -458,6 +500,9 @@ export function Composer(props: Props) {
     const body = (skill ? text.slice(skill.length + 1) : text).trim();
     if (
       !props.connected ||
+      // BND-004.3：无正文且无附件时只有个人技能单独选用可发送；仅选知识库
+      // （或仅选企业技能）不允许发送。scope/skillRef 只是随消息的约束，不构成
+      // 消息内容（M1 修复）。
       (!body && attachments.length === 0 && !skill) ||
       (props.running && !props.gateOpen) ||
       dictation?.recording ||
@@ -469,10 +514,18 @@ export function Composer(props: Props) {
       props.onConnectModel?.();
       return;
     }
-    props.onSend(body, attachments, skill);
+    if (knowledgeScope || skillRef) {
+      props.onSend(body, attachments, skill, { knowledgeScope, skillRef });
+    } else {
+      props.onSend(body, attachments, skill);
+    }
     setText("");
     setAttachments([]);
     setPendingSkill(null);
+    // 发送成功被服务端接收后，输入框清空范围（BND-004.3 由服务端确认后客户端清除）
+    props.onKnowledgeScopeChange?.(null);
+    props.onSkillRefChange?.(null);
+    setKnowledgePickerOpen(false);
     // The message is away — drop the persisted draft so it isn't restored on a later visit.
     if (props.resetKey) clearDraft(props.resetKey);
   };
@@ -482,6 +535,35 @@ export function Composer(props: Props) {
     // report the composition keydown with the legacy 229 key code, so keep that
     // fallback alongside the standards-based isComposing flag.
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+
+    // M2 修复：picker 打开时 Composer 层拦截键盘——上下移动、Enter 选中
+    // （绝不发送消息）、Esc 关闭不改选择。事件挂在 textarea 上，必然可达。
+    if (knowledgePickerOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setPickerHighlight((h) => Math.min(Math.max(pickerRows.length - 1, 0), h + 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setPickerHighlight((h) => Math.max(0, h - 1));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const row = pickerRows[pickerHighlight];
+        if (row) {
+          props.onKnowledgeScopeChange?.(row.selection); // 单选替换
+          setKnowledgePickerOpen(false);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setKnowledgePickerOpen(false); // Esc 关闭不改选择（BND-004.1）
+        return;
+      }
+    }
 
     if (slashQuery !== null) {
       if (e.key === "ArrowDown") {
@@ -664,10 +746,42 @@ export function Composer(props: Props) {
         </div>
       )}
 
+      {/* WORK-RESOURCES-001: per-message resource selections (单选标签，发送前可删换)。 */}
+      {(knowledgeScope || skillRef) && (
+        <div className="max-w-3xl mx-auto mb-1.5 flex flex-wrap gap-2" data-testid="composer-resource-chips">
+          {knowledgeScope && (
+            <span className="inline-flex items-center gap-1 text-label px-2 py-1 rounded-full border border-line bg-paper text-muted">
+              {t("composer.knowledge_chip", "知识库")}: {knowledgeScope.label}
+              <button
+                aria-label={t("composer.remove_selection", "移除选择")}
+                data-testid="remove-knowledge-scope"
+                className="opacity-60 hover:opacity-100"
+                onClick={() => props.onKnowledgeScopeChange?.(null)}
+              >
+                ✕
+              </button>
+            </span>
+          )}
+          {skillRef && (
+            <span className="inline-flex items-center gap-1 text-label px-2 py-1 rounded-full border border-line bg-paper text-muted">
+              {t("composer.skill_ref_chip", "企业技能")}: {skillRef.label}
+              <button
+                aria-label={t("composer.remove_selection", "移除选择")}
+                data-testid="remove-skill-ref"
+                className="opacity-60 hover:opacity-100"
+                onClick={() => props.onSkillRefChange?.(null)}
+              >
+                ✕
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {props.teamSlot}
       <div
         className={
-          "composer max-w-3xl mx-auto rounded-2xl border border-ink/[0.08] bg-panel shadow-[0_1px_2px_rgba(0,0,0,0.03),0_4px_14px_-10px_rgba(0,0,0,0.08)]" +
+          "composer relative max-w-3xl mx-auto rounded-2xl border border-ink/[0.08] bg-panel shadow-[0_1px_2px_rgba(0,0,0,0.03),0_4px_14px_-10px_rgba(0,0,0,0.08)]" +
           (dragging ? " dragging" : "")
         }
         onDragOver={(e) => {
@@ -692,7 +806,7 @@ export function Composer(props: Props) {
             ) : (
               slashMatches.map((s, i) => (
                 <button
-                  key={s.name}
+                  key={s.scope + ":" + s.name}
                   role="option"
                   aria-selected={i === slashIndex}
                   className={
@@ -704,8 +818,17 @@ export function Composer(props: Props) {
                 >
                   <span className="text-ui font-medium text-accent shrink-0">/{s.name}</span>
                   <span className="text-meta text-faint truncate flex-1">{s.description}</span>
-                  <span className="text-label px-1.5 py-0.5 rounded-full border border-line text-faint shrink-0">
-                    {s.scope}
+                  <span
+                    className={
+                      "text-label px-1.5 py-0.5 rounded-full border shrink-0 " +
+                      (s.scope === "enterprise"
+                        ? "border-accent/40 text-accent"
+                        : "border-line text-faint")
+                    }
+                  >
+                    {s.scope === "enterprise"
+                      ? t("composer.skill_source_enterprise", "企业")
+                      : s.scope}
                   </span>
                 </button>
               ))
@@ -728,9 +851,35 @@ export function Composer(props: Props) {
           rows={1}
         />
 
+        {/* WORK-RESOURCES-001: @/添加知识 单选选择器（BND-004.1）。 */}
+        {knowledgePickerOpen && (
+          <KnowledgeScopePicker
+            highlight={pickerHighlight}
+            onHighlightChange={setPickerHighlight}
+            onRows={(rows) => {
+              setPickerRows(rows);
+              setPickerHighlight((h) => Math.min(h, Math.max(rows.length - 1, 0)));
+            }}
+            onPick={(sel) => {
+              props.onKnowledgeScopeChange?.(sel); // 选择另一库替换原标签（单选）
+              setKnowledgePickerOpen(false);
+            }}
+          />
+        )}
+
         {/* Three-control row (§22): + attach · Mode ⌄ …(right)… model (fresh only) · send */}
         <div className="px-2.5 pb-2.5 pt-1 flex min-w-0 items-center gap-1.5">
           {/* + attach menu */}
+          {/* 添加知识：打开单选选择器；已选时高亮。 */}
+          <button
+            className={iconBtn + (knowledgeScope ? " text-accent" : "")}
+            title={t("composer.add_knowledge", "添加知识")}
+            aria-label={t("composer.add_knowledge", "添加知识")}
+            data-testid="composer-add-knowledge"
+            onClick={() => setKnowledgePickerOpen((v) => !v)}
+          >
+            @
+          </button>
           <div className="relative">
             <button
               className={iconBtn + (attachMenuOpen ? " bg-paper text-ink" : "")}

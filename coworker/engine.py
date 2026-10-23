@@ -386,6 +386,7 @@ class TurnEngine:
         source: Optional[dict[str, Any]] = None,
         display: Optional[str] = None,
         activity: Optional[dict[str, Any]] = None,
+        resources: Optional[dict[str, Any]] = None,
     ) -> AsyncIterator[Event]:
         # `user_input` is a string, or OpenAI content-parts (text + image_url) for attachments.
         # `source` (a MessageSource dict) is a display-only sidecar for connector messages: it
@@ -411,6 +412,11 @@ class TurnEngine:
             message["_display"] = display
         if activity:
             message["_activity"] = activity
+        if resources:
+            # DATA-102 message metadata (scope/skill_ref/labels): persisted
+            # with the message, stripped from every provider payload
+            # (`_resources` is in `_outbound_messages._SIDECARS`).
+            message["_resources"] = resources
         self.messages.append(message)
         self._cancel.clear()
         if not self._dangerous_warned:
@@ -2750,6 +2756,7 @@ class TurnEngine:
             "_activity",
             "timing",
             "_display",
+            "_resources",
             "ts",
             "reasoning",
             "usage",

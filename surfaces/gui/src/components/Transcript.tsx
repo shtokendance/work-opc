@@ -8,6 +8,7 @@ import { TeamUpdateLine, TeamCreatedLine, foldTeamUpdates } from "./TeamUpdateLi
 import type { MessageSource } from "../api";
 import { ConnectorMessageCard } from "./ConnectorMessageCard";
 import { Icon } from "./Icon";
+import { ResourceChips } from "./ResourceChips";
 
 // Long user pastes swallow the transcript (owner ask 2026-07-30): clamp past a generous
 // threshold with a more…/less… toggle. Normal typed messages never see the control; the
@@ -605,6 +606,11 @@ export function Transcript({ items, running, streamingText, onRetry, onOpenConne
           case "user":
             return (
               <div className="group self-end max-w-[78%] flex flex-col items-end" key={bi}>
+                {(item as { resources?: import("./ResourceChips").ResourceLabels }).resources && (
+                  <ResourceChips
+                    labels={(item as { resources: import("./ResourceChips").ResourceLabels }).resources}
+                  />
+                )}
                 <div className="bubble-user px-3.5 py-2.5 rounded-[14px_14px_4px_14px] bg-solid text-onSolid text-body leading-relaxed whitespace-pre-wrap">
                   {item.attachments && item.attachments.length > 0 && (
                     <div className="bubble-attachments">
