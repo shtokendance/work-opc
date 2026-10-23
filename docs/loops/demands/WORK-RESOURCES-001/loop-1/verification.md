@@ -56,4 +56,4 @@ updatedAt: 2026-10-23
 - 上线计划：release-checklist.md（ready，未执行项保持 [ ]）。
 - 未决/未执行项见第 1 节。
 
-人工确认（待填写）：确认人 / 时间 / 审查版本 / 代码指纹。
+人工确认：Roger0808（yj198788@hotmail.com）/ 2026-10-23 / 审查版本 Loop 1 候选 b1bd98a1-ab9c-4765-992d-e7c5b98da2b4 / 代码指纹：work f3e67108（分支 tip）、platform 13e7b628、knowledge 85d216c6（三仓实施 commit）；用户原话「确认签署」。
