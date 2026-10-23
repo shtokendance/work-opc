@@ -160,6 +160,8 @@ interface Props {
   onOpenIntegrations: () => void;
   onOpenAudit: () => void;
   onOpenInbox: () => void;
+  /** WORK-RESOURCES-001: 知识库/企业技能 surface。 */
+  onOpenResources?: () => void;
   // Remote homes (UX-045): at least one machine is enrolled — unlocks the
   // Machine grouping entry. Row badges key off each session's own tag.
   hasMachines?: boolean;
@@ -1339,6 +1341,8 @@ export function Sidebar(props: Props) {
                   <AttnBadge n={totalAttention} />,
                 )}
                 {appMenuItem("plug", t("nav.connectors"), props.onOpenIntegrations, props.integrationsActive)}
+                {props.onOpenResources &&
+                  appMenuItem("book", t("nav.resources", "知识库"), props.onOpenResources, false)}
                 <div className="h-px bg-line my-1 mx-2" />
                 {appMenuItem(
                   "gear",

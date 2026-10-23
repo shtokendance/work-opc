@@ -120,9 +120,10 @@ async def test_knowledge_search_4xx_passes_through(fake_opc, inbox):
 async def test_knowledge_read_round_trip_and_403(fake_opc, inbox):
     bridge = _bridge(_ctx(), base_url=fake_opc.base_url, inbox=inbox)
     doc = await bridge.knowledge_read("kn-1")
-    assert doc["title"] == "离职流程"
+    assert doc["data"]["title"] == "离职流程"
     denied = await bridge.knowledge_read("kn-unknown")
-    assert not denied["ok"] and denied["error"]["code"] == "SPACE_FORBIDDEN"
+    # 新契约（INT-105）：不存在/不可见统一 404 RESOURCE_NOT_ACCESSIBLE。
+    assert not denied["ok"] and denied["error"]["code"] == "RESOURCE_NOT_ACCESSIBLE"
     bad = await bridge.knowledge_read("../etc/passwd")
     assert bad["error"]["code"] == "INVALID_KNOWLEDGE_ID"
 
@@ -333,7 +334,9 @@ async def test_connections_are_per_context_and_closed_on_switch(fake_opc, inbox)
 def test_build_tools_sync_wrappers_and_metadata(fake_opc, inbox):
     bridge = _bridge(_ctx(), base_url=fake_opc.base_url, inbox=inbox)
     tools = bridge.build_tools("sess-1")
-    assert [fn.__name__ for fn in tools] == ["knowledge_search", "knowledge_read", "mcp_invoke"]
+    assert [fn.__name__ for fn in tools] == [
+        "knowledge_search", "knowledge_read", "mcp_invoke", "enterprise_load_skill",
+    ]
     for fn in tools:
         assert fn.__coworker_schema__["function"]["name"] == fn.__name__
         assert fn.__aisuite_tool_metadata__.category == "enterprise"

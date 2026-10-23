@@ -139,7 +139,8 @@
     "inbox": "收件箱",
     "automations": "自动化",
     "connectors": "连接器",
-    "settings": "设置"
+    "settings": "设置",
+    "resources": "知识库"
   },
   "hero": {
     "chat_greeting": "我能帮你什么？",
@@ -225,7 +226,8 @@
     "bind_memory": "项目记忆",
     "bind_board": "看板",
     "reviewer_paused_tip": "本回合暂停 —— 审查器连续拦截了多个操作，将改为向你请求批准",
-    "paused": "已暂停"
+    "paused": "已暂停",
+    "skill_source_enterprise": "企业"
   },
   "transcript": {
     "copy_message": "复制消息",

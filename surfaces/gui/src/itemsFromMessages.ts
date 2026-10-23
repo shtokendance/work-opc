@@ -46,6 +46,12 @@ export function itemsFromMessages(messages: ConversationMessage[]): Item[] {
       // Force-run (`/skill …`): `_display` holds the user's literal line; `content` carries
       // the model-facing framing. Render what the user typed — one truthful bubble.
       if (typeof m._display === "string" && m._display) user.text = m._display;
+      // WORK-RESOURCES-001 (DATA-102): server-generated resource labels ride the
+      // `_resources` sidecar; history without the field stays label-free (no backfill).
+      const labels = (m as { _resources?: { labels?: unknown } })._resources?.labels;
+      if (labels && typeof labels === "object") {
+        (user as { resources?: unknown }).resources = labels;
+      }
       // `ts` (unix seconds) is the server's canonical-message stamp; older sessions have none.
       if (typeof m.ts === "number") user.ts = m.ts;
       if (user.text || user.attachments?.length) items.push(user);

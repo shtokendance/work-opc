@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "demandId": "WORK-RESOURCES-001",
+  "repositoryId": "work-opc",
+  "baseline": { "branch": "release", "commit": "7be2e4cec8b91f6bb430a332241629500d7bf5ff" },
+  "branch": {
+    "expected": "feature/261022_WORK-RESOURCES-001_resource-entry",
+    "actual": "feature/261022_WORK-RESOURCES-001_resource-entry",
+    "disposition": "created",
+    "exceptionReason": null
+  },
+  "implementation": { "ref": "7a342c0fef7c0a47e40a59e5c7c84b192def2504", "fingerprint": "sha256-git-tree:1ccfdb5fb41e8fdc9c754fa7072d9eccbea36088" },
+  "verification": { "outcome": "PASS", "evidence": ["verification.md"] },
+  "review": { "outcome": "READY_FOR_HUMAN_REVIEW", "evidence": "review.md" },
+  "dependencies": [
+    { "repositoryId": "platform-opc", "contract": "INT-101~105", "releaseOrder": "after" }
+  ],
+  "ready": true,
+  "generatedAt": "2026-10-23T05:10:07Z"
+}
