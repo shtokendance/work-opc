@@ -100,6 +100,8 @@ describe("enterprise sign-in state machine", () => {
       kind: "signed_in",
       subject: "yangjing",
       tenant: "技术交付中心",
+      email: "",
+      name: "",
     });
     expect(opened).toEqual(["http://opc.example.com/wecom/qr?txn=1"]);
     // The refresh token lands ONLY in the Keychain bridge.
@@ -246,7 +248,7 @@ describe("enterprise sign-in state machine", () => {
 
     await session.syncFromServer();
 
-    expect(states[states.length - 1]).toEqual({ kind: "signed_in", subject: "yangjing", tenant: "t1" });
+    expect(states[states.length - 1]).toEqual({ kind: "signed_in", subject: "yangjing", tenant: "t1", email: "", name: "" });
     session.dispose();
   });
 
@@ -288,7 +290,7 @@ describe("enterprise sign-in state machine", () => {
     expect(refreshes()).toHaveLength(1);
     expect(secrets.values.get(ENTERPRISE_KEYCHAIN_PROFILE)).toBe("opc-refresh-2");
     // The rotation re-read the session view and stayed signed in.
-    expect(session.state()).toEqual({ kind: "signed_in", subject: "yangjing", tenant: "t1" });
+    expect(session.state()).toEqual({ kind: "signed_in", subject: "yangjing", tenant: "t1", email: "", name: "" });
     session.dispose();
   });
 

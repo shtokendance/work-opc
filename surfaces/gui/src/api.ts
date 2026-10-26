@@ -4200,3 +4200,193 @@ export async function forgetConnectorOnMachine(sourceMachineId: string, name: st
   );
   return res.json();
 }
+
+// ==============================================================================
+// OPC V3.0 应用部署与转技能 API
+// ==============================================================================
+
+export const platformBase = (): string =>
+  (globalThis as any).__PLATFORM_HTTP__ ||
+  (import.meta as any).env?.VITE_PLATFORM_HTTP ||
+  "http://127.0.0.1:3002";
+
+export interface AppConfigItem {
+  key: string;
+  value: string;
+  description?: string;
+  required?: boolean;
+  secret?: boolean;
+}
+
+export interface ResourceSummary {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  env_keys: string[];
+  env_preview?: Record<string, string>;
+}
+
+export interface DeployedApp {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  app_url: string;
+  container_port: number;
+  status: "building" | "running" | "failed";
+  app_config: AppConfigItem[];
+  resource_ids: string[];
+  skill_name: string;
+  catalog_skill_id?: string;
+  skill_synced: boolean;
+  build_log?: string;
+  error_message?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function checkAppSlug(slug: string): Promise<{
+  available: boolean;
+  slug: string;
+  app_url: string;
+  skill_name: string;
+  message?: string;
+}> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/check-slug`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  return res.json();
+}
+
+export async function listOnlineResources(): Promise<{ resources: ResourceSummary[] }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/resources`);
+  return res.json();
+}
+
+export async function listDeployedApps(): Promise<{ apps: DeployedApp[] }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps`);
+  return res.json();
+}
+
+export async function getDeployedApp(slug: string): Promise<DeployedApp> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`);
+  return res.json();
+}
+
+export async function updateDeployedAppConfig(
+  slug: string,
+  body: { container_port?: number; app_config: AppConfigItem[]; resource_ids: string[] }
+): Promise<{ message: string; slug: string }> {
+  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+export async function transformApp(params: {
+  slug: string;
+  name: string;
+  description: string;
+  app_url: string;
+  container_port?: number;
+  model?: string;
+  data_b64?: string;
+  resources?: ResourceSummary[];
+  source_path?: string;
+}): Promise<{ ok: boolean; job_id?: string; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/transform`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...params, platform_url: platformBase() }),
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.detail || result.error || `HTTP ${res.status}`);
+  return result;
+}
+
+export async function publishAppToPlatform(params: {
+  slug: string;
+  platform_url?: string;
+  app_config: AppConfigItem[];
+  resource_ids: string[];
+  job_id: string;
+  confirmation_token: string;
+}): Promise<{ ok: boolean; data?: any; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/publish-to-platform`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform_url: platformBase(),
+      ...params,
+    }),
+  });
+  return res.json();
+}
+
+export async function enableLocalSkill(slug: string, job_id: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/apps/enable-skill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, job_id }),
+  });
+  return res.json();
+}
+
+export interface AppDeliveryJob {
+  id: string;
+  slug: string;
+  name: string;
+  status: string;
+  model: string;
+  app_url: string;
+  error?: string;
+  events: string[];
+  proposal_hash?: string;
+  artifact_hash?: string;
+  artifacts?: Record<string, string>;
+  manifest?: { configs: AppConfigItem[]; container_port: number };
+  proposal?: {
+    summary: string;
+    issues: { id: string; evidence: unknown; impact: string; recommendation: string }[];
+    unresolved: unknown[];
+    changes: { id: string; path: string; reason: string; diff: string }[];
+    configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean }[];
+    apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
+    pages: { path: string; purpose: string }[];
+  };
+}
+
+export async function appDeliveryRequest<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${httpBase()}/v1/apps/${path}`, body === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export const getAppDeliveryJob = (id: string) => appDeliveryRequest<AppDeliveryJob>(`jobs/${id}`);
+
+export async function downloadAppArtifact(job: AppDeliveryJob, filename: string) {
+  const response = await fetch(`${httpBase()}/v1/apps/jobs/${job.id}/artifacts/${filename}`);
+  if (!response.ok) throw new Error("产物下载失败");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${job.slug}-${filename}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}

@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
@@ -762,6 +763,11 @@ def create_app(manager: SessionManager) -> FastAPI:
     @app.post("/v1/skills/upload/confirm")
     def confirm_skill_upload(body: dict) -> dict[str, Any]:
         return manager.confirm_skill_upload(body or {})
+
+    # The wizard uses a constrained real Agent and durable, approval-bound jobs.
+    from .app_delivery_routes import register_app_delivery_routes
+    register_app_delivery_routes(app, manager)
+
 
     @app.get("/v1/workspaces/recent")
     def recent_workspaces() -> dict[str, Any]:

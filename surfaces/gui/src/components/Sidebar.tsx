@@ -160,6 +160,7 @@ interface Props {
   onOpenIntegrations: () => void;
   onOpenAudit: () => void;
   onOpenInbox: () => void;
+  onOpenApps?: () => void;
   /** WORK-RESOURCES-001: 知识库/企业技能 surface。 */
   onOpenResources?: () => void;
   // Remote homes (UX-045): at least one machine is enrolled — unlocks the
@@ -169,6 +170,7 @@ interface Props {
   integrationsActive: boolean;
   auditActive: boolean;
   inboxActive: boolean;
+  appsActive?: boolean;
   // Collapse controls (⌘B / hover-peek). `onCollapse` docks/undocks; `onPeekLeave` hides the
   // floating peek when the pointer leaves the panel.
   collapsed?: boolean;
@@ -1171,6 +1173,21 @@ export function Sidebar(props: Props) {
         >
           <Icon name="clock" size={15} className="shrink-0" />
           <span className="flex-1">{t("sidebar.automations")}</span>
+        </button>
+      </div>
+
+      {/* 应用中心入口 (OPC V3.0) */}
+      <div className="px-2.5 mt-0.5">
+        <button
+          className={
+            "w-full flex items-center gap-2.5 px-2 py-1.5 rounded-[7px] text-ui text-left hover:bg-chromeHover hover:text-ink " +
+            (props.appsActive ? "text-ink bg-chromeHover" : "text-muted")
+          }
+          data-testid="nav-apps"
+          onClick={props.onOpenApps}
+        >
+          <Icon name="workList" size={15} className="shrink-0" />
+          <span className="flex-1">应用中心</span>
         </button>
       </div>
 

@@ -83,6 +83,24 @@ def test_skill_loader_catalog_and_load(tmp_path):
 
 # -- engine assembly per agent --------------------------------------------------
 
+def test_enabled_skill_resources_are_readable_without_granting_external_folders(tmp_path):
+    folder = tmp_path / "skills"
+    _make_skill(folder, "app-test", "business", "Read references/operations.json")
+    references = folder / "app-test/references"
+    references.mkdir()
+    (references / "operations.json").write_text('{\n  "operation": "query"\n}\n')
+    (tmp_path / "private.txt").write_text("must not be readable")
+    (references / "outside.txt").symlink_to(tmp_path / "private.txt")
+    gate = {"app-test"}
+    registry = ToolRegistry()
+    registry.register_all(skill_tools(SkillLoader([folder]), allowed=lambda: gate))
+    result = registry.execute("read_skill_resource", {"name": "app-test", "relative_path": "references/operations.json", "start_line": 2, "max_lines": 1})
+    assert result["content"] == '2:   "operation": "query"'
+    for path in [".", "../../private.txt", "/etc/passwd", "references/outside.txt"]:
+        assert registry.execute("read_skill_resource", {"name": "app-test", "relative_path": path}).get("error")
+    gate.clear()
+    assert registry.execute("read_skill_resource", {"name": "app-test", "relative_path": "references/operations.json"}).get("error")
+
 
 def test_build_engine_chat(tmp_path):
     engine = build_engine(agent=chat_agent(), provider=_Stub())

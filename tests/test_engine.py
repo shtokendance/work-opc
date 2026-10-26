@@ -259,6 +259,24 @@ def test_low_risk_tool_calls_run_concurrently(tmp_path):
     assert tool_ids == {"call_0", "call_1"}
 
 
+def test_same_named_calls_keep_ids_through_live_events_and_stored_results(tmp_path):
+    barrier = threading.Barrier(2, timeout=5)
+    def query(method: str):
+        """Return which read-only query ran."""
+        barrier.wait()
+        return {"method": method}
+    engine, registry = _bare_engine(tmp_path, [
+        _multi_tool_turn([("query", {"method": "GET"}), ("query", {"method": "POST"})]),
+        _text_turn("done"),
+    ])
+    registry.register(query, metadata=ai.ToolMetadata(category="search", risk_level="low", requires_approval=False))
+    events = _collect(engine, "query both")
+    proposed = [e.data for e in events if e.type == EventType.TOOL_PROPOSED]
+    assert [(p["tool_call_id"], p["arguments"]["method"]) for p in proposed] == [("call_0", "GET"), ("call_1", "POST")]
+    finished = [e.data for e in events if e.type == EventType.TOOL_FINISHED]
+    assert [(e["tool_call_id"], __import__("json").loads(e["result_preview"])["method"]) for e in finished] == [("call_0", "GET"), ("call_1", "POST")]
+
+
 def test_non_low_risk_tool_calls_stay_sequential(tmp_path):
     order = []
     medium = ai.ToolMetadata(

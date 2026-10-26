@@ -39,6 +39,6 @@ describe("cloud machines section", () => {
     stub(true);
     render(<MachinesSection />);
     await waitFor(() => expect(screen.getByTestId("cloud-machines-section")).toBeTruthy());
-    expect(screen.getByTestId("cloud-machines-section").textContent).toContain("OpenWorker Cloud");
+    expect(screen.getByTestId("cloud-machines-section").textContent).toContain("OPC Work Cloud");
   });
 });

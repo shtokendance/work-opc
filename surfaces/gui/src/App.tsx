@@ -70,6 +70,7 @@ import {
 import { fullPersonaName, isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
+import { updateLastTool } from "./updateToolResult";
 import { addTurnUsage, emptyUsage, teamUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
@@ -94,6 +95,7 @@ import { SettingsView, type SetTab } from "./components/SettingsView";
 import { PersonaView } from "./components/PersonaView";
 import { AuditView } from "./components/AuditView";
 import { InboxView } from "./components/InboxView";
+import { AppsView } from "./components/AppsView";
 import { remoteSessionResourceBlock } from "./enterpriseResources";
 import { ResourcesView } from "./components/ResourcesView";
 import { EnterpriseSkillsPanel } from "./components/EnterpriseSkillsPanel";
@@ -401,7 +403,7 @@ export function App() {
   // load; corrected by loadSettings.
   const [modelReady, setModelReady] = useState(true);
   const [surface, setSurface] = useState<
-    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "resources"
+    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps" | "resources"
   >("session");
   // WORK-RESOURCES-001: per-message resource selections (DATA-102).
   const [knowledgeScope, setKnowledgeScope] = useState<import("./enterpriseResources").KnowledgeScopeSelection | null>(null);
@@ -1016,7 +1018,7 @@ export function App() {
             setTodo(normalizeTodos(d.arguments.todos ?? d.arguments.items));
           setItems((p) => [
             ...p,
-            { kind: "tool", id: newId(), name: d.name, args: d.arguments, status: "…" },
+            { kind: "tool", id: newId(), toolCallId: d.tool_call_id, name: d.name, args: d.arguments, status: "…" },
           ]);
           break;
         case "permission_required":
@@ -1094,6 +1096,7 @@ export function App() {
               d.allow_anyway,
               d.approval_origin,
               d.approval_note,
+              d.tool_call_id,
             ),
           );
           // §8.4 breaker: the reviewer paused itself for the rest of the turn — say so
@@ -1973,7 +1976,7 @@ export function App() {
         {overlay && (
           <div className="titlebar-drag" data-tauri-drag-region>
             <span className="titlebar-brand brand-wordmark">
-              <Icon name="logo" size={13} className="mark" /> OpenWorker<span className="beta-tag">beta</span>
+              <Icon name="logo" size={13} className="mark" /> OPC Work<span className="beta-tag">beta</span>
             </span>
           </div>
         )}
@@ -2125,11 +2128,13 @@ export function App() {
         onOpenIntegrations={() => openSettings("connectors")}
         onOpenAudit={() => setSurface("audit")}
         onOpenInbox={() => setSurface("inbox")}
+        onOpenApps={() => setSurface("apps")}
         onOpenResources={() => setSurface("resources")}
         scheduledActive={surface === "scheduled"}
         integrationsActive={surface === "settings" && settingsTab === "connectors"}
         auditActive={surface === "audit"}
         inboxActive={surface === "inbox"}
+        appsActive={surface === "apps"}
         collapsed={navCollapsed}
         onCollapse={toggleNav}
         onPeekLeave={() => setNavPeek(false)}
@@ -2196,6 +2201,8 @@ export function App() {
           }
           onOpenIntegrations={() => openSettings("connectors")}
         />
+      ) : surface === "apps" ? (
+        <AppsView onBack={() => setSurface("session")} />
       ) : (
       <div className={"main" + (surface === "session" && agent !== "chat" && !railHidden ? " rail-open" : "")}>
         <div className="main-topbar">
@@ -2768,39 +2775,6 @@ function WaitingForAgent({ label }: { label?: string }) {
       </div>
     </div>
   );
-}
-
-function updateLastTool(
-  items: Item[],
-  name: string,
-  status: string,
-  preview?: string,
-  hidden?: number,
-  standingRule?: string,
-  reviewerReason?: string,
-  allowAnyway?: boolean,
-  approvalOrigin?: string,
-  approvalNote?: string,
-): Item[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i >= 0; i--) {
-    const it = copy[i];
-    if (it.kind === "tool" && it.name === name && it.status === "…") {
-      copy[i] = {
-        ...it,
-        status,
-        preview,
-        ...(hidden ? { hidden } : {}),
-        ...(standingRule ? { standingRule } : {}),
-        ...(reviewerReason ? { reviewerReason } : {}),
-        ...(allowAnyway ? { allowAnyway } : {}),
-        ...(approvalOrigin ? { approvalOrigin } : {}),
-        ...(approvalNote ? { approvalNote } : {}),
-      };
-      break;
-    }
-  }
-  return copy;
 }
 
 function resolveLastApproval(items: Item[], decision: ApprovalDecision): Item[] {

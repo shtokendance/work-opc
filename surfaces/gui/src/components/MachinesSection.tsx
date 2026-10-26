@@ -432,7 +432,7 @@ export function MachinesSection() {
       {!isCloudMode() && internal && cloud && cloud.session !== "signed_out" && (
         <div className="mt-7" data-testid="cloud-machines-section">
           <div className="mb-2.5 text-label text-faint font-medium">
-            OpenWorker Cloud{cloud.org?.name ? ` · ${cloud.org.name}` : ""}
+            OPC Work Cloud{cloud.org?.name ? ` · ${cloud.org.name}` : ""}
           </div>
           {cloud.session === "expired" ? (
             <div className={ROW} data-testid="cloud-session-expired">

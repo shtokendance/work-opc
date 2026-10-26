@@ -10,5 +10,6 @@ dist/
 # Local secrets (live-smoke BYO keys) — never committed
 .env
 .claude/settings.local.json
+uv.lock
 .DS_Store
 .codegraph/
