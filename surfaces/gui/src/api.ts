@@ -4215,6 +4215,7 @@ export interface AppConfigItem {
   value: string;
   description?: string;
   required?: boolean;
+  secret?: boolean;
 }
 
 export interface ResourceSummary {
@@ -4223,6 +4224,7 @@ export interface ResourceSummary {
   type: string;
   description: string;
   env_keys: string[];
+  env_preview?: Record<string, string>;
 }
 
 export interface DeployedApp {
@@ -4284,7 +4286,11 @@ export async function updateDeployedAppConfig(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 export async function transformApp(params: {
@@ -4293,14 +4299,19 @@ export async function transformApp(params: {
   description: string;
   app_url: string;
   container_port?: number;
+  model?: string;
   data_b64?: string;
-}): Promise<{ ok: boolean; slug?: string; name?: string; manifest?: any; error?: string }> {
+  resources?: ResourceSummary[];
+  source_path?: string;
+}): Promise<{ ok: boolean; job_id?: string; error?: string }> {
   const res = await fetch(`${httpBase()}/v1/apps/transform`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify({ ...params, platform_url: platformBase() }),
   });
-  return res.json();
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.detail || result.error || `HTTP ${res.status}`);
+  return result;
 }
 
 export async function publishAppToPlatform(params: {
@@ -4308,6 +4319,8 @@ export async function publishAppToPlatform(params: {
   platform_url?: string;
   app_config: AppConfigItem[];
   resource_ids: string[];
+  job_id: string;
+  confirmation_token: string;
 }): Promise<{ ok: boolean; data?: any; error?: string }> {
   const res = await fetch(`${httpBase()}/v1/apps/publish-to-platform`, {
     method: "POST",
@@ -4320,11 +4333,60 @@ export async function publishAppToPlatform(params: {
   return res.json();
 }
 
-export async function enableLocalSkill(slug: string): Promise<{ ok: boolean; error?: string }> {
+export async function enableLocalSkill(slug: string, job_id: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`${httpBase()}/v1/apps/enable-skill`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug }),
+    body: JSON.stringify({ slug, job_id }),
   });
   return res.json();
+}
+
+export interface AppDeliveryJob {
+  id: string;
+  slug: string;
+  name: string;
+  status: string;
+  model: string;
+  app_url: string;
+  error?: string;
+  events: string[];
+  proposal_hash?: string;
+  artifact_hash?: string;
+  artifacts?: Record<string, string>;
+  manifest?: { configs: AppConfigItem[]; container_port: number };
+  proposal?: {
+    summary: string;
+    issues: { id: string; evidence: unknown; impact: string; recommendation: string }[];
+    unresolved: unknown[];
+    changes: { id: string; path: string; reason: string; diff: string }[];
+    configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean }[];
+    apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
+    pages: { path: string; purpose: string }[];
+  };
+}
+
+export async function appDeliveryRequest<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${httpBase()}/v1/apps/${path}`, body === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export const getAppDeliveryJob = (id: string) => appDeliveryRequest<AppDeliveryJob>(`jobs/${id}`);
+
+export async function downloadAppArtifact(job: AppDeliveryJob, filename: string) {
+  const response = await fetch(`${httpBase()}/v1/apps/jobs/${job.id}/artifacts/${filename}`);
+  if (!response.ok) throw new Error("产物下载失败");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${job.slug}-${filename}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }

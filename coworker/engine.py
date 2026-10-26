@@ -1119,7 +1119,7 @@ class TurnEngine:
                 continue
             yield Event(
                 EventType.TOOL_PROPOSED,
-                {"name": tool_call.name, "arguments": tool_call.arguments},
+                {"name": tool_call.name, "arguments": tool_call.arguments, "tool_call_id": tool_call.id},
             )
             self._audit(tool_call, stage="proposed")
             if _is_mangled(tool_call):
@@ -1179,7 +1179,7 @@ class TurnEngine:
 
         if concurrent:
             for tool_call in concurrent:
-                yield Event(EventType.TOOL_STARTED, {"name": tool_call.name})
+                yield Event(EventType.TOOL_STARTED, {"name": tool_call.name, "tool_call_id": tool_call.id})
                 self._audit(tool_call, stage="started")
             outcomes = await asyncio.gather(
                 *[asyncio.to_thread(self._execute_sync, tc) for tc in concurrent]
@@ -1191,7 +1191,7 @@ class TurnEngine:
             if self._cancel.is_set():
                 yield self._interrupted_tool(tool_call)
                 continue
-            yield Event(EventType.TOOL_STARTED, {"name": tool_call.name})
+            yield Event(EventType.TOOL_STARTED, {"name": tool_call.name, "tool_call_id": tool_call.id})
             self._audit(tool_call, stage="started")
             result, status = await asyncio.to_thread(self._execute_sync, tool_call)
             yield self._record_result(tool_call, result, status)

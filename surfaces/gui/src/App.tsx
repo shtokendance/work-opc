@@ -70,6 +70,7 @@ import {
 import { fullPersonaName, isProjectScoped } from "./personaScope";
 import { baseName } from "./paths";
 import { itemsFromMessages } from "./itemsFromMessages";
+import { updateLastTool } from "./updateToolResult";
 import { addTurnUsage, emptyUsage, teamUsage, usageFromMessages } from "./usage";
 import { streamMode } from "./streamGate";
 import { InboxItemCard, approvalItemFromParked } from "./components/InboxItemCard";
@@ -1017,7 +1018,7 @@ export function App() {
             setTodo(normalizeTodos(d.arguments.todos ?? d.arguments.items));
           setItems((p) => [
             ...p,
-            { kind: "tool", id: newId(), name: d.name, args: d.arguments, status: "…" },
+            { kind: "tool", id: newId(), toolCallId: d.tool_call_id, name: d.name, args: d.arguments, status: "…" },
           ]);
           break;
         case "permission_required":
@@ -1095,6 +1096,7 @@ export function App() {
               d.allow_anyway,
               d.approval_origin,
               d.approval_note,
+              d.tool_call_id,
             ),
           );
           // §8.4 breaker: the reviewer paused itself for the rest of the turn — say so
@@ -2773,39 +2775,6 @@ function WaitingForAgent({ label }: { label?: string }) {
       </div>
     </div>
   );
-}
-
-function updateLastTool(
-  items: Item[],
-  name: string,
-  status: string,
-  preview?: string,
-  hidden?: number,
-  standingRule?: string,
-  reviewerReason?: string,
-  allowAnyway?: boolean,
-  approvalOrigin?: string,
-  approvalNote?: string,
-): Item[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i >= 0; i--) {
-    const it = copy[i];
-    if (it.kind === "tool" && it.name === name && it.status === "…") {
-      copy[i] = {
-        ...it,
-        status,
-        preview,
-        ...(hidden ? { hidden } : {}),
-        ...(standingRule ? { standingRule } : {}),
-        ...(reviewerReason ? { reviewerReason } : {}),
-        ...(allowAnyway ? { allowAnyway } : {}),
-        ...(approvalOrigin ? { approvalOrigin } : {}),
-        ...(approvalNote ? { approvalNote } : {}),
-      };
-      break;
-    }
-  }
-  return copy;
 }
 
 function resolveLastApproval(items: Item[], decision: ApprovalDecision): Item[] {

@@ -163,7 +163,37 @@ def skill_tools(loader: SkillLoader, allowed: AllowedSkills = None) -> list:
             "name": skill.name,
             "instructions": skill.instructions,
             "resources_path": skill.path,
+            "resource_access": "Read bundled references/scripts with read_skill_resource(name, relative_path); workspace read_file may not have access to this skill folder.",
         }
+
+    def read_skill_resource(name: str, relative_path: str, start_line: int = 1, max_lines: int = 160) -> dict:
+        """Read a UTF-8 resource inside an enabled skill, using a relative path such as
+        references/operations.json. Read-only; paginated; never grants workspace access."""
+        loaded = load_skill(name)
+        if "error" in loaded:
+            return loaded
+        try:
+            if not loaded.get("resources_path"):
+                raise ValueError("This skill has no resource folder")
+            relative = Path(relative_path)
+            if not relative_path or not relative.parts or relative.is_absolute() or ".." in relative.parts or "\\" in relative_path or ":" in relative.parts[0]:
+                raise ValueError("Use a relative path inside this skill")
+            root = Path(loaded["resources_path"]).resolve()
+            target = root
+            for part in relative.parts:
+                target = target / part
+                if target.is_symlink():
+                    raise ValueError("Skill resource symlinks are not allowed")
+            if not target.resolve().is_relative_to(root) or not target.is_file():
+                raise ValueError("Unknown skill resource")
+            if target.stat().st_size > 512 * 1024:
+                raise ValueError("Skill resource exceeds 512 KiB")
+            lines = target.read_text(encoding="utf-8").splitlines()
+            start = max(0, start_line - 1)
+            window = lines[start:start + min(200, max(1, max_lines))]
+            return {"name": name, "relative_path": relative_path, "start_line": start + 1, "total_lines": len(lines), "content": "\n".join(f"{i}: {line[:4000]}" for i, line in enumerate(window, start + 1))}
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc)}
 
     return [
         ai.tool(
@@ -171,5 +201,9 @@ def skill_tools(loader: SkillLoader, allowed: AllowedSkills = None) -> list:
             metadata=ai.ToolMetadata(
                 category="skills", risk_level="low", capabilities=["load_skill"]
             ),
-        )
+        ),
+        ai.tool(
+            read_skill_resource,
+            metadata=ai.ToolMetadata(category="skills", risk_level="low", capabilities=["load_skill"]),
+        ),
     ]

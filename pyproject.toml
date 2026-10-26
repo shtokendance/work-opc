@@ -68,9 +68,13 @@ include = ["coworker*"]
 
 [tool.setuptools.package-data]
 coworker = [
+    "app_delivery_skill/SKILL.md",
+    "app_delivery_skill/references/*.md",
+    "app_delivery_skill/assets/*.txt",
     "personas/builtin/*.md",
     "personas/builtin/*/manifest.md",
     "personas/builtin/*/skills/*/SKILL.md",
+    "skills/builtin/*/*.md",
     "headless/*.yaml",
     "providers/*.json",
 ]
