@@ -4216,6 +4216,10 @@ export interface AppConfigItem {
   description?: string;
   required?: boolean;
   secret?: boolean;
+  has_value?: boolean;
+  value_source?: string;
+  source_label?: string;
+  resource_id?: string;
 }
 
 export interface ResourceSummary {
@@ -4346,6 +4350,8 @@ export interface AppDeliveryJob {
   id: string;
   slug: string;
   name: string;
+  description?: string;
+  port?: number;
   status: string;
   model: string;
   app_url: string;
@@ -4353,16 +4359,20 @@ export interface AppDeliveryJob {
   events: string[];
   proposal_hash?: string;
   artifact_hash?: string;
+  published?: boolean;
   artifacts?: Record<string, string>;
   manifest?: { configs: AppConfigItem[]; container_port: number };
+  runtime_configs?: AppConfigItem[];
   proposal?: {
     summary: string;
     issues: { id: string; evidence: unknown; impact: string; recommendation: string }[];
     unresolved: unknown[];
     changes: { id: string; path: string; reason: string; diff: string }[];
-    configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean }[];
+    configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean; has_original_value?: boolean; source?: { path: string; keys: (string | number)[] } }[];
     apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
     pages: { path: string; purpose: string }[];
+    health_path?: string;
+    verification_plan?: { cases?: { operation: string }[] };
   };
 }
 

@@ -43,11 +43,16 @@ def register_app_delivery_routes(app, manager):
                 source_path = str(body.get("source_path", "")).strip()
                 if source_path:
                     path = Path(source_path).expanduser()
-                    if not path.is_absolute() or source_path.startswith("\\\\") or path.is_symlink() or not path.is_file() or path.suffix.lower() != ".zip":
-                        raise ValueError("请输入本机普通 ZIP 文件的完整路径")
-                    if path.stat().st_size > 64 * 1024 * 1024:
-                        raise ValueError("源码压缩包不能超过 64 MiB")
-                    archive = path.read_bytes()
+                    if not path.is_absolute() or source_path.startswith("\\\\") or path.is_symlink():
+                        raise ValueError("请输入本机源码文件夹或 ZIP 的完整路径")
+                    if path.is_dir():
+                        archive = path
+                    elif path.is_file() and path.suffix.lower() == ".zip":
+                        if path.stat().st_size > 64 * 1024 * 1024:
+                            raise ValueError("源码压缩包不能超过 64 MiB")
+                        archive = path.read_bytes()
+                    else:
+                        raise ValueError("请输入本机源码文件夹或 ZIP 的完整路径")
                 else:
                     archive = base64.b64decode(body.get("data_b64", ""), validate=True)
                 if not archive:
@@ -76,6 +81,13 @@ def register_app_delivery_routes(app, manager):
     @app.get("/v1/apps/jobs")
     def list_jobs(slug: str = ""):
         return {"jobs": service.jobs(slug)}
+
+    @app.get("/v1/apps/jobs/{job_id}/handoff")
+    def handoff(job_id: str):
+        try:
+            return service.handoff(job_id)
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
 
     @app.post("/v1/apps/jobs/{job_id}/cancel")
     async def cancel(job_id: str):
@@ -166,12 +178,15 @@ def register_app_delivery_routes(app, manager):
             credentials = {c["key"]: c.get("value", "") for c in data["deployment_confirmation"]["app_config"]}
             checks = []
             for case in contract["verification"].get("cases", []):
+                operation = next((api for api in contract["apis"] if api["id"] == case["operation"]), {})
+                if operation.get("path") == health["path"]:
+                    continue  # Repeating the health probe cannot certify business behavior.
                 code, content_type, content = await read_only_probe(contract, case["operation"], case.get("params", {}), case.get("body"), credential_env=credentials)
                 if code != case.get("status", 200) or "application/json" not in content_type or not delivery.subset(json.loads(content), case["json_contains"]):
                     raise ValueError(f"只读业务验证失败：{case['operation']}（HTTP {code}，预期状态或业务字段不匹配）")
                 checks.append({"operation": case["operation"], "status": code, "passed": True})
             if not checks:
-                raise ValueError("缺少已执行的业务验证，暂不自动启用技能；页面应用需先完成浏览器验证")
+                raise ValueError("缺少实际只读业务验证，健康检查不能代替。请在改造报告补充业务查询条件及预期结果后重新确认；页面应用需先完成浏览器验证。")
             service.enable_verified_skill(data)
             data["verification"] = {"status": "verified-deployed-api", "base_url": data["app_url"], "checks": checks, "pages_verified": False}
             service.save(data)

@@ -15,8 +15,10 @@ import {
   type ResourceSummary,
 } from "../api";
 import { Icon } from "./Icon";
+import { AppDeliveryConfig, configName } from "./AppDeliveryConfig";
 import { AppDeliveryReview } from "./AppDeliveryReview";
 import { AppDeliveryArtifacts } from "./AppDeliveryArtifacts";
+import { chooseFolder } from "../tauri";
 
 interface Props {
   onBack?: () => void;
@@ -30,6 +32,8 @@ export function AppsView({ onBack }: Props) {
   // New App Wizard Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const wizardBody = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (wizardBody.current) wizardBody.current.scrollTop = 0; }, [step, isModalOpen]);
 
   // Wizard Step 1 form fields
   const [name, setName] = useState("");
@@ -54,6 +58,7 @@ export function AppsView({ onBack }: Props) {
   const [onlineResources, setOnlineResources] = useState<ResourceSummary[]>([]);
   const [selectedResourceIds, setSelectedResourceIds] = useState<string[]>([]);
   const [configs, setConfigs] = useState<AppConfigItem[]>([]);
+  const [lastDraft, setLastDraft] = useState<AppDeliveryJob | null>(null);
 
   // Wizard Step 4 state
   const [deploying, setDeploying] = useState(false);
@@ -73,7 +78,7 @@ export function AppsView({ onBack }: Props) {
   const [showSecrets, setShowSecrets] = useState<{ [key: string]: boolean }>({});
 
   const toggleShowSecret = (key: string) => {
-    setShowSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
+    setShowSecrets((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
   };
 
   const copyToClipboard = (text: string, label: string) => {
@@ -89,6 +94,14 @@ export function AppsView({ onBack }: Props) {
     try {
       const data = await listDeployedApps();
       setApps(data.apps || []);
+      const drafts = await appDeliveryRequest<{ jobs?: AppDeliveryJob[] }>("jobs").catch(() => ({ jobs: [] }));
+      const seen = new Set<string>();
+      const latest = drafts.jobs?.filter(job => {
+        if (seen.has(job.slug)) return false;
+        seen.add(job.slug);
+        return true;
+      });
+      setLastDraft(latest?.find(job => ["review", "failed", "analyzing", "ready"].includes(job.status) && !job.published) || null);
     } catch (err: any) {
       setError(err?.message || "Failed to load deployed apps");
     } finally {
@@ -123,7 +136,7 @@ export function AppsView({ onBack }: Props) {
   // Step 1: Validate and Check Slug
   const handleProceedToStep2 = async () => {
     if (!name.trim() || !slug.trim() || (!selectedFile && !sourcePath.trim())) {
-      alert("请填写应用名称、唯一标识 slug 并选择源码 zip 包");
+      alert("请填写应用名称、唯一标识 slug 并选择源码文件夹或 ZIP 包");
       return;
     }
     setSlugError(null);
@@ -166,7 +179,7 @@ export function AppsView({ onBack }: Props) {
     if (readyArtifact.current === job.artifact_hash) return;
     readyArtifact.current = job.artifact_hash || "";
     setTransformReport({ summary: job.proposal?.summary });
-    setConfigs((job.manifest?.configs || []).map(c => ({ ...c, secret: !!job.proposal?.configs.find(p => p.key === c.key)?.secret })));
+    setConfigs((job.runtime_configs || job.manifest?.configs || []).map(c => ({ ...c, secret: !!job.proposal?.configs.find(p => p.key === c.key)?.secret, value_source: c.value_source || "manual" })));
     setSelectedResourceIds([]);
     if (job.manifest?.container_port) setContainerPort(job.manifest.container_port);
   };
@@ -263,7 +276,16 @@ export function AppsView({ onBack }: Props) {
     setDescription(app.description || "");
     setAppUrl(app.app_url);
     setContainerPort(app.container_port || 8080);
-    setConfigs(app.app_config || []);
+    const previousConfigs = [...(app.app_config || [])];
+    for (const resource of onlineResources.filter(r => (app.resource_ids || []).includes(r.id))) {
+      for (const key of resource.env_keys) {
+        if (!previousConfigs.some(c => c.key === key)) previousConfigs.push({ key, value: "", resource_id: resource.id, value_source: "resource" });
+      }
+    }
+    setConfigs(previousConfigs.map(c => {
+      const resource = !c.value && onlineResources.find(r => (app.resource_ids || []).includes(r.id) && r.env_keys.includes(c.key));
+      return c.resource_id ? c : resource ? { ...c, resource_id: resource.id, value_source: "resource" } : { ...c, value_source: "manual" };
+    }));
     setSelectedResourceIds(app.resource_ids || []);
     setDeployStatus("building");
     setBuildLogs(app.build_log || app.error_message || "");
@@ -294,9 +316,17 @@ export function AppsView({ onBack }: Props) {
   // Drawer handlers
   const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "logs" = "configs") => {
     setSelectedApp(app);
-    setDrawerConfigs(app.app_config || []);
+    setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
     setDrawerTab(app.status === "failed" && initialTab === "configs" ? "logs" : initialTab);
+  };
+
+  const resumeDraft = (job: AppDeliveryJob) => {
+    setName(job.name); setSlug(job.slug); setDescription(job.description || "");
+    setContainerPort(job.port || 8080); setAppUrl(job.app_url); setSelectedModel(job.model);
+    setJobId(job.id); setDeliveryJob(null); setTransformReport(null); readyArtifact.current = "";
+    setFinalConfirmed(false); setConfigs([]); setSelectedResourceIds([]);
+    setStep(2); setIsModalOpen(true);
   };
 
   const saveDrawerConfig = async () => {
@@ -306,18 +336,27 @@ export function AppsView({ onBack }: Props) {
       await updateDeployedAppConfig(selectedApp.slug, {
         container_port: selectedApp.container_port,
         app_config: drawerConfigs,
-        resource_ids: drawerResourceIds,
+        resource_ids: drawerConfigs.length ? drawerResourceIds : [],
       });
       alert("配置已更新，容器已秒级重启！");
       refreshApps();
       const updated = await getDeployedApp(selectedApp.slug);
       setSelectedApp(updated);
+      setDrawerConfigs((updated.app_config || []).map(c => ({ ...c })));
     } catch (err: any) {
       alert(`保存失败: ${err?.message}`);
     } finally {
       setSavingConfig(false);
     }
   };
+
+  const missingConfigs = configs.filter(c => c.required && !c.value && !c.resource_id).map(configName);
+  const changeConfigs = (items: AppConfigItem[]) => {
+    setConfigs(items);
+    setSelectedResourceIds([...new Set(items.map(item => item.resource_id).filter((id): id is string => !!id))]);
+  };
+  const plan = deliveryJob?.proposal;
+  const hasBusinessProbe = plan?.verification_plan?.cases?.some(c => plan.apis.some(api => api.id === c.operation && api.effect === "read" && api.path !== plan.health_path));
 
   return (
     <div className="flex-1 flex flex-col h-full bg-canvas overflow-hidden select-none">
@@ -377,7 +416,7 @@ export function AppsView({ onBack }: Props) {
             </div>
             <h3 className="text-ui font-semibold text-ink mb-1">暂无部署应用</h3>
             <p className="text-meta text-muted max-w-sm mb-4">
-              点击右上角「新建应用」，选择单应用源码 ZIP，由 AI 分析部署差距。确认修改与配置后，生成部署包和业务技能。
+              点击右上角「新建应用」，选择单应用源码文件夹或 ZIP，由 AI 分析部署差距。确认修改与配置后，生成部署包和业务技能。
             </p>
             <button
               onClick={() => setIsModalOpen(true)}
@@ -507,10 +546,11 @@ export function AppsView({ onBack }: Props) {
         )}
       </div>
 
+      {lastDraft && !isModalOpen && <div className="mx-6 mb-4 p-3 rounded-xl border border-line bg-paper flex items-center justify-between gap-3"><span className="text-ui">还有一份可继续的应用改造：{lastDraft.name} <code className="text-xs text-muted">{lastDraft.slug}</code></span><button className="shrink-0 text-ui text-accent" onClick={() => resumeDraft(lastDraft)}>继续上次分析</button></div>}
       {/* 4-Step New App Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-panel w-full max-w-2xl rounded-xl2 shadow-2xl border border-line flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-panel w-full max-w-3xl rounded-xl2 shadow-2xl border border-line flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header & Stepper */}
             <div className="px-6 py-4 border-b border-line bg-paper/50 shrink-0">
               <div className="flex items-center justify-between mb-3">
@@ -559,7 +599,7 @@ export function AppsView({ onBack }: Props) {
             </div>
 
             {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div ref={wizardBody} className="flex-1 overflow-y-auto p-6 space-y-4">
               {redeploySlug && redeploySlug === slug.trim() && <p className="border-l-2 border-warning pl-3 text-ui">正在重新发布现有应用 {redeploySlug}。重新分析、审批和上传后会替换它的部署；配置与资源仍需再次核对。</p>}
               {/* STEP 1 */}
               {step === 1 && (
@@ -602,7 +642,7 @@ export function AppsView({ onBack }: Props) {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-4">
                     <div>
                       <label className="block text-meta font-medium text-ink mb-1.5">容器监听端口</label>
                       <input
@@ -613,11 +653,14 @@ export function AppsView({ onBack }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-meta font-medium text-ink mb-1.5">AI 改造模型</label>
+                      <label htmlFor="app-adapter-model" className="block text-meta font-medium text-ink mb-1.5">AI 改造模型</label>
+                      <div className="relative">
                       <select
+                        id="app-adapter-model"
                         value={selectedModel}
+                        title={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl border border-line bg-paper text-ink focus:outline-accent focus:border-accent"
+                        className="block appearance-none w-full min-w-0 min-h-[40px] pl-3.5 pr-9 py-2 rounded-xl border border-line bg-paper text-ink text-ui focus:outline-accent focus:border-accent cursor-pointer"
                       >
                         {availableModels.length > 0 ? (
                           availableModels.map((m) => (
@@ -629,19 +672,23 @@ export function AppsView({ onBack }: Props) {
                           <option value="default">当前接入的默认智能体</option>
                         )}
                       </select>
+                      <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted" />
+                      </div>
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-meta font-medium text-ink mb-1.5">
-                      上传源码包 (.zip) <span className="text-danger">*</span>
+                      选择应用源码（文件夹或 ZIP） <span className="text-danger">*</span>
                     </label>
+                    <button type="button" className="mb-3 px-4 py-2 rounded-lg border border-line hover:bg-paper text-ui" onClick={async () => { const path = await chooseFolder(); if (path) { setSourcePath(path); setSelectedFile(null); } }}>选择源码文件夹</button>
+                    {sourcePath && <p className="mb-3 text-xs text-muted break-all">已选择：{sourcePath}。分析时会创建副本，不改动原文件夹。</p>}
                     <div className="relative">
                       <input
                         type="file"
                         id="app-zip-file-input"
                         accept=".zip"
-                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                        onChange={(e) => { setSelectedFile(e.target.files?.[0] || null); setSourcePath(""); }}
                         className="sr-only"
                       />
                       {!selectedFile ? (
@@ -685,130 +732,25 @@ export function AppsView({ onBack }: Props) {
                 </div>
               )}
 
-              {step === 1 && <div className="border-t border-line pt-3"><label className="text-ui font-medium block mb-2" htmlFor="app-source-path">或输入本机 ZIP 完整路径</label><input id="app-source-path" className="w-full rounded-md border border-line bg-panel px-3 py-2 text-ui font-mono" value={sourcePath} onChange={e => { setSourcePath(e.target.value); setSelectedFile(null); }} placeholder="/path/to/application.zip" /></div>}
+              {step === 1 && <div className="border-t border-line pt-3"><label className="text-ui font-medium block mb-2" htmlFor="app-source-path">或输入源码文件夹 / ZIP 的完整路径</label><input id="app-source-path" className="w-full rounded-md border border-line bg-panel px-3 py-2 text-ui font-mono" value={sourcePath} onChange={e => { setSourcePath(e.target.value); setSelectedFile(null); }} placeholder="/path/to/my-app 或 /path/to/application.zip" /></div>}
 
               {/* STEP 2 */}
               {step === 2 && (jobId
-                ? <AppDeliveryReview jobId={jobId} onReady={deliveryReady} />
+                ? <AppDeliveryReview jobId={jobId} onReady={deliveryReady} onReplaceSource={() => setStep(1)} />
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
                 <div className="space-y-5">
                   <section className="border-b border-line pb-4 mb-4 space-y-2">
-                    <h3 className="font-semibold">最终交付核对</h3>
-                    <p className="text-ui whitespace-pre-wrap">{deliveryJob?.proposal?.summary}</p>
+                    <h3 className="font-semibold">确认后，应用就会部署到这里</h3>
+                    <p className="text-ui">{name} · 已确认 {deliveryJob?.proposal?.changes.length || 0} 项修改。下面只需要决定配置是否更换。</p>
                     <div className="text-xs font-mono break-all">{appUrl}</div>
-                    <div className="text-xs text-muted break-all">交付摘要：{deliveryJob?.artifact_hash}</div>
-                    {deliveryJob?.proposal?.changes.map(change => <details key={change.id} className="text-xs"><summary className="cursor-pointer">{change.path} · {change.reason}</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto bg-paper p-2">{change.diff}</pre></details>)}
+                    <details className="text-xs text-muted"><summary className="cursor-pointer">查看交付校验信息</summary><p className="break-all mt-2">{deliveryJob?.artifact_hash}</p></details>
+                    {plan?.verification_plan && !hasBusinessProbe && <p className="text-xs text-warnInk">部署后的业务验证仍待补充：当前没有实际业务查询探针。若需自动启用业务技能，请返回改造报告补充只读查询条件和预期结果；健康检查不能代替业务验证。</p>}
+                    <details className="text-xs"><summary className="cursor-pointer">查看已确认的 {deliveryJob?.proposal?.changes.length || 0} 项修改</summary>{deliveryJob?.proposal?.changes.map(change => <details key={change.id} className="mt-2"><summary className="cursor-pointer break-words">{change.reason}</summary><p className="text-muted break-all mt-1">{change.path}</p><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto bg-paper p-2">{change.diff}</pre></details>)}</details>
                   </section>
-                  <div>
-                    <h3 className="font-semibold text-ui text-ink mb-1">1. 勾选要绑定的线上现有资源 (内网)</h3>
-                    <p className="text-label text-muted mb-3">
-                      仅注入你勾选的资源。同名配置留空时使用资源值；填写非空值时优先使用你填写的值，不会自动替换。
-                    </p>
-                    {onlineResources.length === 0 ? (
-                      <p className="text-muted text-meta">暂无预设资源</p>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2.5">
-                        {onlineResources.map((res) => {
-                          const checked = selectedResourceIds.includes(res.id);
-                          return (
-                            <label
-                              key={res.id}
-                              className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                                checked
-                                  ? "border-accent bg-accentSoft/30 shadow-2xs"
-                                  : "border-line bg-paper/50 hover:bg-paper"
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedResourceIds([...selectedResourceIds, res.id]);
-                                  } else {
-                                    setSelectedResourceIds(
-                                      selectedResourceIds.filter((id) => id !== res.id)
-                                    );
-                                  }
-                                }}
-                                className="mt-1 rounded text-accent"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="font-semibold text-ui text-ink flex items-center gap-1.5">
-                                  {res.name}
-                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-panel text-muted border border-line">
-                                    {res.type}
-                                  </span>
-                                </div>
-                                <div className="text-label text-muted mt-0.5 line-clamp-2">{res.description}</div>
-                                {Object.entries(res.env_preview || {}).map(([key, value]) => <div key={key} className="text-xs font-mono break-all mt-1">{key} = {value === "[REDACTED]" ? "由服务器安全注入" : value}</div>)}
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="font-semibold text-ui text-ink">2. 确认应用配置项 (环境变量)</h3>
-                      <button
-                        onClick={() => setConfigs([...configs, { key: "", value: "", description: "自定义变量" }])}
-                        className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label font-medium text-ink flex items-center gap-1 transition-colors"
-                      >
-                        <Icon name="plus" size={12} />
-                        添加变量
-                      </button>
-                    </div>
-
-                    <div className="border border-line rounded-xl overflow-hidden bg-paper/40">
-                      <table className="w-full text-left text-meta">
-                        <thead className="bg-panel border-b border-line text-label font-medium text-muted">
-                          <tr>
-                            <th className="py-2.5 px-3.5">配置项 Key</th>
-                            <th className="py-2.5 px-3.5">配置值 Value</th>
-                            <th className="py-2.5 px-3.5">说明</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-line/60">
-                          {configs.map((c, idx) => (
-                            <tr key={idx} className="hover:bg-paper/70 transition-colors">
-                              <td className="py-2 px-3.5 font-mono font-medium text-ink text-label">
-                                <input
-                                  type="text"
-                                  value={c.key}
-                                  onChange={(e) => {
-                                    const next = [...configs];
-                                    next[idx].key = e.target.value;
-                                    setConfigs(next);
-                                  }}
-                                  className="w-full px-2 py-1 rounded border border-line/70 bg-panel text-ui font-mono"
-                                />
-                              </td>
-                              <td className="py-2 px-3.5">
-                                <input
-                                  type={c.secret || /password|secret|token|dsn/i.test(c.key) ? "password" : "text"}
-                                  value={c.value}
-                                  onChange={(e) => {
-                                    const next = [...configs];
-                                    next[idx].value = e.target.value;
-                                    setConfigs(next);
-                                  }}
-                                  className="w-full px-2.5 py-1 rounded-lg border border-line bg-panel text-ui font-mono focus:outline-accent"
-                                />
-                              </td>
-                              <td className="py-2 px-3.5 text-muted text-label">
-                                {c.description || "-"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                  {missingConfigs.length > 0 && <p role="alert" className="text-ui text-danger">还需要填写或选择：{missingConfigs.join("、")}。完成后就可以上传部署。</p>}
+                  <AppDeliveryConfig configs={configs} originals={deliveryJob?.runtime_configs || []} resources={onlineResources} onChange={changeConfigs} />
                 </div>
               )}
 
@@ -935,7 +877,7 @@ export function AppsView({ onBack }: Props) {
                     >
                       ← 重新选择源码
                     </button>
-                    <button
+                    {transformReport ? <button
                       onClick={() => setStep(3)}
                       disabled={transforming || !transformReport}
                       className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs disabled:opacity-50 transition-all flex items-center gap-1.5"
@@ -946,14 +888,14 @@ export function AppsView({ onBack }: Props) {
                           AI 改造分析中...
                         </>
                       ) : (
-                        <>确认改造结果，进入配置 (下一步) →</>
+                        <>进入配置，核对原值 (下一步) →</>
                       )}
-                    </button>
+                    </button> : <span className="max-w-xs text-xs text-muted">请先完成提案中的待回答问题、逐项审批并生成交付包</span>}
                   </>
                 )}
                 {step === 3 && (
                   <>
-                    <label className="flex items-start gap-2 max-w-xs text-xs"><input type="checkbox" checked={finalConfirmed} onChange={e => setFinalConfirmed(e.target.checked)} /><span>已核对最终修改、配置及资源连接，确认上传同一交付包</span></label>
+                    <label className="flex items-start gap-2 max-w-xs text-xs"><input type="checkbox" checked={finalConfirmed} onChange={e => setFinalConfirmed(e.target.checked)} /><span>我已核对以上配置，同意上传并部署</span></label>
                     <button
                       onClick={() => setStep(2)}
                       className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper transition-colors"
@@ -962,7 +904,7 @@ export function AppsView({ onBack }: Props) {
                     </button>
                     <button
                       onClick={handlePublish}
-                      disabled={!finalConfirmed || !deliveryJob}
+                      disabled={!finalConfirmed || !deliveryJob || missingConfigs.length > 0}
                       className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs transition-all"
                     >
                       确认并上传部署
@@ -1200,7 +1142,7 @@ export function AppsView({ onBack }: Props) {
                       {drawerConfigs.map((cfg, idx) => {
                         const isSecretKey = /PASS|SECRET|KEY|TOKEN|AUTH|CREDENTIAL|DSN|CONNECTION.?STRING|DATABASE_URL|REDIS_URL|MONGO(?:DB)?_(?:URL|URI)/i.test(cfg.key)
                           || /:\/\/[^/\s:]+:[^@\s]+@|(?:password|pwd)\s*=/i.test(cfg.value || "");
-                        const isRevealed = showSecrets[cfg.key] || false;
+                        const isRevealed = showSecrets[cfg.key] ?? true;
 
                         return (
                           <div
@@ -1212,8 +1154,9 @@ export function AppsView({ onBack }: Props) {
                                 type="text"
                                 value={cfg.key}
                                 onChange={(e) => {
-                                  const next = [...drawerConfigs];
+                                  const next = drawerConfigs.map(item => ({ ...item }));
                                   next[idx].key = e.target.value;
+                                  if (next[idx].resource_id) { next[idx].resource_id = undefined; next[idx].value_source = "manual"; }
                                   setDrawerConfigs(next);
                                 }}
                                 placeholder="KEY_NAME"
@@ -1246,13 +1189,15 @@ export function AppsView({ onBack }: Props) {
                                 type={isSecretKey && !isRevealed ? "password" : "text"}
                                 value={cfg.value}
                                 onChange={(e) => {
-                                  const next = [...drawerConfigs];
+                                  const next = drawerConfigs.map(item => ({ ...item }));
                                   next[idx].value = e.target.value;
+                                  if (next[idx].resource_id) { next[idx].resource_id = undefined; next[idx].value_source = "manual"; }
                                   setDrawerConfigs(next);
                                 }}
-                                placeholder="输入配置值..."
+                                placeholder={cfg.has_value && cfg.value_source === "resource" ? "已配置：由资源注入，留空保留现有值" : "输入配置值..."}
                                 className="w-full px-3 py-1.5 rounded-lg border border-line bg-panel text-ui font-mono text-ink focus:outline-accent"
                               />
+                              {cfg.has_value && cfg.value_source === "resource" && <p className="text-xs text-muted mt-2">已配置 · 由“{cfg.source_label}”注入。输入框为空表示沿用资源值，不是配置被清空；填写新值才会覆盖。</p>}
                             </div>
 
                             {cfg.description && (

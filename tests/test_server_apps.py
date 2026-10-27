@@ -13,6 +13,26 @@ from coworker.server import SessionManager, create_app
 from test_app_delivery import ConfiguredProvider
 
 
+def test_source_folder_route_snapshots_and_leaves_original_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
+    manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
+    monkeypatch.setattr(manager, "_provider_configured", lambda _: True)
+    source = tmp_path / "source-app"
+    source.mkdir()
+    (source / "main.py").write_text("print('original')\n")
+    app = create_app(manager)
+    monkeypatch.setattr(app.state.app_delivery, "launch_analysis", lambda _: None)
+    with TestClient(app) as client:
+        body = {"name": "Folder", "slug": "folder-app", "app_url": "http://folder-app.apps.localhost", "source_path": str(source)}
+        response = client.post("/v1/apps/transform", json=body)
+        assert response.status_code == 200, response.text
+        folder = app.state.app_delivery.path(response.json()["job_id"])
+        assert (folder / "review/source/main.py").read_text() == (source / "main.py").read_text()
+        assert client.get(f"/v1/apps/jobs/{response.json()['job_id']}/handoff").status_code == 422
+        (source / "symlink.py").symlink_to(source / "main.py")
+        assert client.post("/v1/apps/transform", json=body).status_code == 422
+
+
 def test_read_only_probe_retries_transport_and_gateway_failures():
     from coworker.server.app_delivery_routes import read_only_probe
     ok = (200, "application/json", b'{"code":0}')
@@ -121,6 +141,18 @@ def test_app_approval_publish_and_verified_enable(tmp_path, monkeypatch):
         with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=unrelated)):
             assert client.post("/v1/apps/enable-skill", json={"job_id": job_id}).status_code == 422
         assert "app-test-app" in manager.skill_store.disabled_names()
+        service = app.state.app_delivery
+        data = service.load(job_id)
+        original_contract = data["proposal"]["contract"]
+        data["proposal"]["contract"] = {**original_contract, "apis": [*original_contract["apis"], {"id": "health-only", "path": original_contract["health"]["path"], "method": "GET", "effect": "read", "auth": {"type": "none"}}], "verification": {"cases": [{"operation": "health-only", "json_contains": {"service": "test-app"}}]}}
+        service.save(data)
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=running)), patch("coworker.server.app_delivery_routes.delivery.execute", side_effect=probe):
+            health_only = client.post("/v1/apps/enable-skill", json={"job_id": job_id})
+        assert health_only.status_code == 422 and "健康检查不能代替" in health_only.text
+        assert (manager.skill_store.global_dir / "app-test-app/.work-delivery-pending").is_file()
+        assert "app-test-app" in manager.skill_store.disabled_names()
+        data["proposal"]["contract"] = original_contract
+        service.save(data)
         with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=running)), patch("coworker.server.app_delivery_routes.delivery.execute", side_effect=probe):
             enabled = client.post("/v1/apps/enable-skill", json={"job_id": job_id})
         assert enabled.status_code == 200, enabled.text
