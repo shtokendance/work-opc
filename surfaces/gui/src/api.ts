@@ -4208,7 +4208,7 @@ export async function forgetConnectorOnMachine(sourceMachineId: string, name: st
 export const platformBase = (): string =>
   (globalThis as any).__PLATFORM_HTTP__ ||
   (import.meta as any).env?.VITE_PLATFORM_HTTP ||
-  "http://127.0.0.1:3002";
+  "https://shtokendance.benlai.com";
 
 export interface AppConfigItem {
   key: string;

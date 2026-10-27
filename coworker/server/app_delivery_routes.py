@@ -3,6 +3,7 @@
 import base64
 import asyncio
 import json
+import os
 from pathlib import Path
 import zipfile
 
@@ -12,7 +13,28 @@ from fastapi.responses import FileResponse
 
 from ..app_delivery import AppDelivery
 from ..app_delivery_skill.scripts import delivery
+from ..config import load_config
 from ..secrets import state_dir
+
+
+DEFAULT_PLATFORM_URL = "https://shtokendance.benlai.com"
+
+
+def default_platform_url() -> str:
+    env_url = (
+        os.environ.get("OPC_PLATFORM_HTTP")
+        or os.environ.get("OPC_PLATFORM_BASE")
+        or ""
+    ).strip()
+    if env_url:
+        return env_url.rstrip("/")
+    try:
+        cfg_url = (load_config().opc_platform_base or "").strip()
+        if cfg_url:
+            return cfg_url.rstrip("/")
+    except Exception:
+        pass
+    return DEFAULT_PLATFORM_URL
 
 
 async def read_only_probe(contract, operation, params, body=None, credential_env=None):
@@ -57,7 +79,7 @@ def register_app_delivery_routes(app, manager):
                     archive = base64.b64decode(body.get("data_b64", ""), validate=True)
                 if not archive:
                     raise ValueError("请选择源码 ZIP")
-                platform_url = body.get("platform_url", "http://127.0.0.1:3002").rstrip("/")
+                platform_url = str(body.get("platform_url") or default_platform_url()).rstrip("/")
                 delivery.valid_url(platform_url)
                 data = service.create(body, archive)
                 data["platform_url"] = platform_url
@@ -135,11 +157,14 @@ def register_app_delivery_routes(app, manager):
     async def publish(body: dict):
         try:
             data, folder = service.verified_package(body.get("job_id", ""), body)
+            platform_url = str(body.get("platform_url") or data.get("platform_url") or default_platform_url()).rstrip("/")
+            delivery.valid_url(platform_url)
+            data["platform_url"] = platform_url
             service.install_pending_skill(data, folder)
             fields = {"slug": data["slug"], "name": data["name"], "description": data["description"], "container_port": str(data["proposal"]["contract"]["runtime"]["port"]), "app_config": json.dumps(body.get("app_config", [])), "resource_ids": json.dumps(body.get("resource_ids", []))}
             files = {"app_tar": ("app.tar", (folder / "app.tar").read_bytes(), "application/x-tar"), "skill_zip": ("skill.zip", (folder / "skill.zip").read_bytes(), "application/zip")}
             async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-                response = await client.post(data["platform_url"] + "/api/v1/apps/publish", data=fields, files=files)
+                response = await client.post(platform_url + "/api/v1/apps/publish", data=fields, files=files)
             if response.status_code not in {200, 202}:
                 raise ValueError("平台拒绝部署：" + str(response.status_code) + " " + delivery_error(response.text))
             result = response.json()
@@ -158,8 +183,10 @@ def register_app_delivery_routes(app, manager):
             data = service.load(body.get("job_id", ""))
             if not data.get("confirmation_token") or not data.get("published"):
                 raise ValueError("应用尚未确认部署")
+            platform_url = str(body.get("platform_url") or data.get("platform_url") or default_platform_url()).rstrip("/")
+            delivery.valid_url(platform_url)
             async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                response = await client.get(data["platform_url"] + "/api/v1/apps/" + data["slug"])
+                response = await client.get(platform_url + "/api/v1/apps/" + data["slug"])
                 response.raise_for_status()
                 status = response.json()
             if status.get("status") != "running" or status.get("app_url") != data["app_url"]:
