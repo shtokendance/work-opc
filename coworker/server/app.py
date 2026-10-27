@@ -1933,7 +1933,16 @@ def create_app(manager: SessionManager) -> FastAPI:
     # token + enterprise profile metadata.
     from ..config import load_config
 
-    enterprise_auth = EnterpriseAuthService.from_config(load_config())
+    cfg = load_config()
+    platform_base = (getattr(cfg, "opc_platform_base", "") or "").strip()
+    if not platform_base:
+        platform_base = (os.environ.get("OPC_PLATFORM_BASE") or "").strip()
+    if not platform_base:
+        platform_base = (os.environ.get("OPC_PLATFORM_HTTP") or "").strip()
+    if not platform_base and not os.environ.get("PYTEST_CURRENT_TEST"):
+        platform_base = "https://shtokendance.benlai.com"
+
+    enterprise_auth = EnterpriseAuthService(platform_base)
     app.state.enterprise = enterprise_auth
     # The manager drives the BND-120 switch semantics (orphan approvals, cache
     # shards, connections) off this service's live context.
