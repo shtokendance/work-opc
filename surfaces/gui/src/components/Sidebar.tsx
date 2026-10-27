@@ -161,8 +161,12 @@ interface Props {
   onOpenAudit: () => void;
   onOpenInbox: () => void;
   onOpenApps?: () => void;
-  /** WORK-RESOURCES-001: 知识库/企业技能 surface。 */
+  /** WORK-RESOURCES-001: 知识库 surface。 */
   onOpenResources?: () => void;
+  resourcesActive?: boolean;
+  /** 技能主入口 surface。 */
+  onOpenSkills?: () => void;
+  skillsActive?: boolean;
   // Remote homes (UX-045): at least one machine is enrolled — unlocks the
   // Machine grouping entry. Row badges key off each session's own tag.
   hasMachines?: boolean;
@@ -1363,7 +1367,9 @@ export function Sidebar(props: Props) {
                 )}
                 {appMenuItem("plug", t("nav.connectors"), props.onOpenIntegrations, props.integrationsActive)}
                 {props.onOpenResources &&
-                  appMenuItem("book", t("nav.resources", "知识库"), props.onOpenResources, false)}
+                  appMenuItem("book", t("nav.resources", "知识库"), props.onOpenResources, props.resourcesActive)}
+                {props.onOpenSkills &&
+                  appMenuItem("wrench", t("nav.skills", "技能"), props.onOpenSkills, props.skillsActive)}
                 <div className="h-px bg-line my-1 mx-2" />
                 {appMenuItem(
                   "gear",

@@ -98,37 +98,7 @@ import { InboxView } from "./components/InboxView";
 import { AppsView } from "./components/AppsView";
 import { remoteSessionResourceBlock } from "./enterpriseResources";
 import { ResourcesView } from "./components/ResourcesView";
-import { EnterpriseSkillsPanel } from "./components/EnterpriseSkillsPanel";
-
-/** 知识库 + 企业技能 entry (BND-009): two tabs, one surface. */
-function ResourcesPanel({ onUseKnowledge }: { onUseKnowledge: (sel: import("./enterpriseResources").KnowledgeScopeSelection) => void }) {
-  const [tab, setTab] = useState<"knowledge" | "skills">("knowledge");
-  return (
-    <div className="max-w-3xl mx-auto">
-      <div className="flex gap-2 px-4 pt-4">
-        <button
-          data-testid="resources-tab-knowledge"
-          className={"text-ui px-3 py-1.5 rounded-lg border " + (tab === "knowledge" ? "border-accent text-accent" : "border-line text-muted")}
-          onClick={() => setTab("knowledge")}
-        >
-          知识库
-        </button>
-        <button
-          data-testid="resources-tab-skills"
-          className={"text-ui px-3 py-1.5 rounded-lg border " + (tab === "skills" ? "border-accent text-accent" : "border-line text-muted")}
-          onClick={() => setTab("skills")}
-        >
-          企业技能
-        </button>
-      </div>
-      {tab === "knowledge" ? (
-        <ResourcesView onUseKnowledge={onUseKnowledge} />
-      ) : (
-        <EnterpriseSkillsPanel />
-      )}
-    </div>
-  );
-}
+import { SkillsView } from "./components/SkillsView";
 import {
   approvalItemFromPayload,
   connectorItemFromPayload,
@@ -403,7 +373,7 @@ export function App() {
   // load; corrected by loadSettings.
   const [modelReady, setModelReady] = useState(true);
   const [surface, setSurface] = useState<
-    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps" | "resources"
+    "session" | "scheduled" | "audit" | "inbox" | "persona" | "settings" | "apps" | "resources" | "skills"
   >("session");
   // WORK-RESOURCES-001: per-message resource selections (DATA-102).
   const [knowledgeScope, setKnowledgeScope] = useState<import("./enterpriseResources").KnowledgeScopeSelection | null>(null);
@@ -2130,6 +2100,9 @@ export function App() {
         onOpenInbox={() => setSurface("inbox")}
         onOpenApps={() => setSurface("apps")}
         onOpenResources={() => setSurface("resources")}
+        onOpenSkills={() => setSurface("skills")}
+        resourcesActive={surface === "resources"}
+        skillsActive={surface === "skills"}
         scheduledActive={surface === "scheduled"}
         integrationsActive={surface === "settings" && settingsTab === "connectors"}
         auditActive={surface === "audit"}
@@ -2181,14 +2154,18 @@ export function App() {
       ) : surface === "audit" ? (
         <AuditView />
       ) : surface === "resources" ? (
-        <div className="overflow-y-auto h-full">
-          <ResourcesPanel
+        <div className="overflow-y-auto h-full max-w-4xl mx-auto py-2">
+          <ResourcesView
             onUseKnowledge={(sel) => {
               // BND-004.2: 使用 → 准备当前会话输入框；不自动发送。
               setKnowledgeScope(sel);
               setSurface("session");
             }}
           />
+        </div>
+      ) : surface === "skills" ? (
+        <div className="overflow-y-auto h-full">
+          <SkillsView onNavigateToApps={() => setSurface("apps")} />
         </div>
       ) : surface === "inbox" ? (
         <InboxView onOpenSession={openSessionFromInbox} />
