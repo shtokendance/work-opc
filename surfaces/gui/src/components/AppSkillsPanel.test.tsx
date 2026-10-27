@@ -180,7 +180,23 @@ describe("AppSkillsPanel", () => {
           ],
         },
       },
-      { match: "/v1/skills", method: "GET", json: { skills: [] } },
+      {
+        match: "/v1/skills",
+        method: "GET",
+        json: {
+          skills: [
+            {
+              name: "app-matrix-coupon",
+              description: "优惠券查询业务技能",
+              instructions: "",
+              scope: "global",
+              source: "local",
+              enabled: true,
+              path: "",
+            },
+          ],
+        },
+      },
     ]);
 
     render(<AppSkillsPanel />);

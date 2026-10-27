@@ -249,7 +249,10 @@ export function Sidebar(props: Props) {
   }, [enterprise]);
   useEffect(() => {
     refreshCloud();
-    const onFocus = () => refreshCloud();
+    const onFocus = () => {
+      refreshCloud();
+      void enterprise.syncFromServer();
+    };
     window.addEventListener("focus", onFocus);
     window.addEventListener(CLOUD_CHANGED, onFocus);
     const unlock = () => {

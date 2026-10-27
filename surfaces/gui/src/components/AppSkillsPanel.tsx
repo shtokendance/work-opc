@@ -129,7 +129,7 @@ export function AppSkillsPanel({
   const appSkillRows: {
     key: string;
     job?: AppDeliveryJob;
-    skill?: SkillRow;
+    skill: SkillRow;
     name: string;
     slug: string;
     description: string;
@@ -137,13 +137,10 @@ export function AppSkillsPanel({
     apis: { id: string; purpose?: string; method: string; path: string; effect: string }[];
   }[] = [];
 
-  const seenSlugs = new Set<string>();
-
-  // A. All installed application skills in coworker
+  // Surface only actual installed application skills in coworker
   for (const s of installedAppSkills) {
     const slug = s.name.replace(/^app-/, "");
     const job = publishedJobsBySlug.get(slug);
-    seenSlugs.add(slug);
     appSkillRows.push({
       key: `skill:${s.name}`,
       job,
@@ -153,26 +150,6 @@ export function AppSkillsPanel({
       description: s.description || job?.description || "由应用中心自动化改造生成的应用业务技能",
       appUrl: job?.app_url || "",
       apis: job?.proposal?.apis || [],
-    });
-  }
-
-  // B. Published & deployed jobs on the platform that are running or have verified artifacts
-  for (const [slug, job] of publishedJobsBySlug) {
-    if (seenSlugs.has(slug)) continue;
-    // Only surface published jobs if they have deployed artifacts or are running
-    if (!job.artifact_hash && job.status !== "running") continue;
-    seenSlugs.add(slug);
-    const skillName = `app-${slug}`;
-    const matchedSkill = skills.find((s) => s.name === skillName || s.name === slug);
-    appSkillRows.push({
-      key: `job:${job.id}`,
-      job,
-      skill: matchedSkill,
-      name: job.name || skillName,
-      slug,
-      description: job.description || matchedSkill?.description || "由应用中心自动化改造生成的应用业务技能",
-      appUrl: job.app_url || "",
-      apis: job.proposal?.apis || [],
     });
   }
 

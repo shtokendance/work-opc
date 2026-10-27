@@ -219,6 +219,29 @@ def test_refresh_requires_token(fake_opc, tmp_path, monkeypatch):
     assert resp.json()["error"]["code"] == "AUTH_STATE_MISMATCH"
 
 
+def test_refresh_hydrates_context_on_cold_start(fake_opc, tmp_path, monkeypatch):
+    """When sidecar restarts with empty in-memory context, refresh from Keychain hydrates context."""
+    client1 = _client(tmp_path, monkeypatch, platform=fake_opc.base_url)
+    refresh = _login(client1, fake_opc)
+
+    fresh_tmp = tmp_path / "fresh"
+    fresh_tmp.mkdir()
+    client2 = _client(fresh_tmp, monkeypatch, platform=fake_opc.base_url)
+    assert client2.get("/v1/enterprise/session").status_code == 404
+
+    resp = client2.post("/v1/enterprise/session/refresh", json={"refresh_token": refresh})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"]
+    assert body["refresh_token"] and body["refresh_token"] != refresh
+    assert body["context"]["subject"] == "subject-yangjing"
+    assert "space-技术交付中心" in body["context"]["spaces"]
+
+    sess = client2.get("/v1/enterprise/session")
+    assert sess.status_code == 200
+    assert sess.json()["subject"] == "subject-yangjing"
+
+
 # -- logout (INT-101e) -----------------------------------------------------------------
 
 

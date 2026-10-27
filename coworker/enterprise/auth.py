@@ -237,6 +237,26 @@ class EnterpriseAuthService:
         node = uuid.getnode()
         return hashlib.sha256(str(node).encode()).hexdigest()[:32]
 
+    async def _get_session_from_platform(self, access_token: str) -> tuple[int, dict[str, Any]]:
+        """Query platform session endpoint to hydrate context using an active access token."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        if self._client is not None:
+            try:
+                resp = await self._client.get("/integration/v1/session", headers=headers)
+            except httpx.HTTPError as exc:
+                return 502, _err(UPSTREAM_UNAVAILABLE, f"platform unreachable: {exc}")
+            return resp.status_code, self._decode(resp)
+        if not self.platform_base:
+            return 400, _err(ENTERPRISE_NOT_CONFIGURED, "enterprise login is not configured")
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.platform_base, timeout=PLATFORM_TIMEOUT
+            ) as client:
+                resp = await client.get("/integration/v1/session", headers=headers)
+        except httpx.HTTPError as exc:
+            return 502, _err(UPSTREAM_UNAVAILABLE, f"platform unreachable: {exc}")
+        return resp.status_code, self._decode(resp)
+
     # -- INT-101a: start ---------------------------------------------------------
 
     def _sweep_txns(self) -> None:
@@ -456,9 +476,30 @@ class EnterpriseAuthService:
             self._context.access_token = access
             self._context.obtained_at = time.time()
             self._context.expires_in = int(body.get("expires_in") or 900)
+            if "spaces" in body or "spaces_detail" in body:
+                ctx = self._context_from_token(body, access)
+                if not body.get("generation"):
+                    ctx.generation = self._context.generation
+                self._context.spaces = ctx.spaces
+                self._context.spaces_detail = ctx.spaces_detail
             profile = self._context.meta().context_key()
             self.store.set_access_token(profile, access)
-        return {"ok": True, "refresh_token": body.get("refresh_token") or ""}
+        else:
+            # Cold start: sidecar restarted, but client presented a valid refresh token from Keychain.
+            if body.get("subject") or body.get("spaces"):
+                ctx = self._context_from_token(body, access)
+                self._establish_context(ctx)
+            else:
+                sess_status, sess_body = await self._get_session_from_platform(access)
+                if sess_status == 200 and isinstance(sess_body, dict):
+                    sess_body["expires_in"] = body.get("expires_in") or 900
+                    ctx = self._context_from_token(sess_body, access)
+                    self._establish_context(ctx)
+        return {
+            "ok": True,
+            "refresh_token": body.get("refresh_token") or "",
+            "context": self._context.public_view() if self._context else None,
+        }
 
     # -- INT-101e: logout ----------------------------------------------------------
 
