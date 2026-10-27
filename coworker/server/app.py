@@ -2022,6 +2022,20 @@ def create_app(manager: SessionManager) -> FastAPI:
         status = 401 if (out.get("error") or {}).get("code") == "REFRESH_REUSE_DETECTED" else 502
         return JSONResponse(out, status_code=status)
 
+    @app.post("/v1/enterprise/session/switch-tenant")
+    def enterprise_session_switch_tenant(body: dict) -> Any:
+        """Switch the active tenant within the user's entitled spaces."""
+        tenant_id = str((body or {}).get("tenant_id", ""))
+        if not tenant_id:
+            return JSONResponse({"ok": False, "error": {"code": "INVALID_REQUEST", "message": "tenant_id is required"}}, status_code=400)
+        out = enterprise_auth.switch_tenant(tenant_id)
+        manager.sync_enterprise_context()
+        if not out.get("ok"):
+            code = (out.get("error") or {}).get("code")
+            status = 401 if code == "NOT_SIGNED_IN" else (403 if code == "SPACE_FORBIDDEN" else 400)
+            return JSONResponse(out, status_code=status)
+        return out
+
     @app.post("/v1/enterprise/logout")
     async def enterprise_logout(body: dict) -> Any:
         """INT-101e: revoke at the platform, drop the local context. The GUI then

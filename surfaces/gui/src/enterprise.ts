@@ -12,10 +12,22 @@ import { httpBase } from "./api";
 
 export const ENTERPRISE_KEYCHAIN_PROFILE = "default";
 
+export interface SpaceItem {
+  id: string;
+  name: string;
+}
+
 export type EnterpriseState =
   | { kind: "idle" }
   | { kind: "logging_in" } // browser flow in flight
-  | { kind: "signed_in"; subject: string; tenant: string; email?: string; name?: string }
+  | {
+      kind: "signed_in";
+      subject: string;
+      tenant: string;
+      spaces?: SpaceItem[];
+      email?: string;
+      name?: string;
+    }
   | { kind: "failed"; error: string };
 
 export type EnterpriseErrorBody = { error?: { code?: string; message?: string } };
@@ -57,9 +69,30 @@ export interface EnterpriseSession {
   beginLogin(): Promise<void>;
   /** Present the Keychain-held refresh to the sidecar; store the rotated one. */
   refreshSession(): Promise<void>;
+  /** Switch the active workspace / tenant. */
+  switchTenant(tenantId: string): Promise<boolean>;
   logout(): Promise<void>;
   dispose(): void;
 }
+
+export const normalizeSpaces = (context?: { spaces?: any[]; spaces_detail?: any[] } | null): SpaceItem[] => {
+  if (!context) return [];
+  if (Array.isArray(context.spaces_detail) && context.spaces_detail.length > 0) {
+    return context.spaces_detail.map((s) => ({
+      id: String(s.id || ""),
+      name: String(s.name || s.id || ""),
+    }));
+  }
+  if (Array.isArray(context.spaces)) {
+    return context.spaces.map((s) => {
+      if (typeof s === "object" && s !== null && "id" in s) {
+        return { id: String(s.id), name: String(s.name || s.id) };
+      }
+      return { id: String(s), name: String(s) };
+    });
+  }
+  return [];
+};
 
 export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession {
   let state: EnterpriseState = { kind: "idle" };
@@ -72,6 +105,9 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
     if (disposed) return;
     state = next;
     listeners.forEach((l) => l(state));
+    try {
+      window.dispatchEvent(new Event("opc:enterprise-changed"));
+    } catch {}
   };
 
   const stopPolling = () => {
@@ -131,17 +167,26 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
         state?: string;
         error?: { code?: string };
         refresh_token?: string;
-        context?: ({ subject?: string; tenant?: string; email?: string; name?: string } & EnterpriseExpiryHint) | null;
+        context?: ({
+          subject?: string;
+          tenant?: string;
+          spaces?: any[];
+          spaces_detail?: any[];
+          email?: string;
+          name?: string;
+        } & EnterpriseExpiryHint) | null;
       };
       if (body.state === "succeeded") {
         if (body.refresh_token) {
           // One-time handoff → straight into the Keychain; never page storage.
           await deps.secrets.put(ENTERPRISE_KEYCHAIN_PROFILE, body.refresh_token);
         }
+        const spaces = normalizeSpaces(body.context);
         setState({
           kind: "signed_in",
           subject: body.context?.subject || "",
           tenant: body.context?.tenant || "",
+          ...(spaces.length > 0 ? { spaces } : {}),
           email: body.context?.email || "",
           name: body.context?.name || "",
         });
@@ -175,11 +220,15 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
           tenant?: string;
           email?: string;
           name?: string;
+          spaces?: any[];
+          spaces_detail?: any[];
         } & EnterpriseExpiryHint;
+        const spaces = normalizeSpaces(body);
         setState({
           kind: "signed_in",
           subject: body.subject || "",
           tenant: body.tenant || "",
+          ...(spaces.length > 0 ? { spaces } : {}),
           email: body.email || "",
           name: body.name || "",
         });
@@ -297,6 +346,41 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
     },
 
     refreshSession,
+
+    async switchTenant(tenantId: string): Promise<boolean> {
+      try {
+        const res = await post("/v1/enterprise/session/switch-tenant", { tenant_id: tenantId });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            ok?: boolean;
+            context?: {
+              subject?: string;
+              tenant?: string;
+              email?: string;
+              name?: string;
+              spaces?: any[];
+              spaces_detail?: any[];
+            };
+          };
+          if (body.ok && body.context) {
+            const spaces = normalizeSpaces(body.context);
+            setState({
+              kind: "signed_in",
+              subject: body.context.subject || "",
+              tenant: body.context.tenant || tenantId,
+              ...(spaces.length > 0 ? { spaces } : {}),
+              email: body.context.email || "",
+              name: body.context.name || "",
+            });
+            scheduleRefresh(body.context as any);
+            return true;
+          }
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    },
 
     async logout() {
       stopPolling();

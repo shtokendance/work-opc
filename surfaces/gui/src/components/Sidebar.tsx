@@ -451,6 +451,10 @@ export function Sidebar(props: Props) {
         ? ent.subject
         : "";
   const entLabelDetail = entSignedIn ? (entLabel || ent.subject) : "";
+  const currentSpaceName =
+    entSignedIn
+      ? (ent.spaces?.find((s) => s.id === ent.tenant)?.name || ent.tenant)
+      : "";
   const accountDisplayName = accountSignedIn
     ? accountName
     : entSignedIn
@@ -1387,12 +1391,50 @@ export function Sidebar(props: Props) {
                     {ent.kind === "signed_in" ? (
                       <>
                         <div
-                          className="px-3 py-1.5 mb-1 text-label text-faint truncate border-b border-line"
+                          className="px-3 py-1.5 mb-1 text-label text-faint border-b border-line"
                           title={entLabelDetail}
                           data-testid="enterprise-status"
                         >
-                          {t("sidebar.enterprise_signed_in", { label: entLabel })}
+                          <div className="truncate">{t("sidebar.enterprise_signed_in", { label: entLabel })}</div>
+                          {currentSpaceName && (
+                            <div className="mt-1 text-ink font-medium flex items-center gap-1.5">
+                              <span className="text-accent text-[11px] px-1.5 py-0.2 rounded bg-accentSoft border border-accent/20 shrink-0">
+                                {t("sidebar.space", "空间")}
+                              </span>
+                              <span className="truncate" title={currentSpaceName}>{currentSpaceName}</span>
+                            </div>
+                          )}
                         </div>
+                        {ent.spaces && ent.spaces.length > 1 && (
+                          <div className="py-1 border-b border-line">
+                            <div className="px-3 py-1 text-[11px] font-semibold text-faint uppercase tracking-wider">
+                              {t("sidebar.switch_space", "切换空间")}
+                            </div>
+                            {ent.spaces.map((sp) => {
+                              const active = sp.id === ent.tenant;
+                              return (
+                                <button
+                                  key={sp.id}
+                                  className={
+                                    "w-full flex items-center justify-between px-3 py-1.5 text-ui text-left hover:bg-paper transition-colors " +
+                                    (active ? "text-accent font-medium bg-accentSoft/30" : "text-ink")
+                                  }
+                                  onClick={async () => {
+                                    if (active) return;
+                                    setAppMenuOpen(false);
+                                    await enterprise.switchTenant(sp.id);
+                                  }}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <Icon name="folder" size={14} className="shrink-0 text-faint" />
+                                    <span className="truncate">{sp.name}</span>
+                                  </div>
+                                  {active && <Icon name="check" size={14} className="shrink-0 text-accent ml-1" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                         {appMenuItem("signOut", t("sidebar.enterprise_sign_out"), async () => {
                           setAppMenuOpen(false);
                           await enterprise.logout();

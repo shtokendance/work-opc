@@ -47,6 +47,7 @@ export function EnterpriseSkillsPanel({ enterprise: enterpriseProp }: { enterpri
 
   const signedIn = enterprise.kind === "signed_in";
   const subject = signedIn ? enterprise.subject : "";
+  const tenant = signedIn ? enterprise.tenant : "";
 
   const load = useCallback(
     async (opts: { q?: string; offset?: number } = {}) => {
@@ -57,6 +58,7 @@ export function EnterpriseSkillsPanel({ enterprise: enterpriseProp }: { enterpri
           q: opts.q ?? q,
           offset: opts.offset ?? offset,
           limit: PAGE_SIZE,
+          tenantId: tenant || undefined,
         });
         if (mine !== generation.current) return; // 迟到响应丢弃
         setContextId(envelope.context_id);
@@ -74,7 +76,7 @@ export function EnterpriseSkillsPanel({ enterprise: enterpriseProp }: { enterpri
         });
       }
     },
-    [q, offset],
+    [q, offset, tenant],
   );
 
   useEffect(() => {
@@ -89,7 +91,7 @@ export function EnterpriseSkillsPanel({ enterprise: enterpriseProp }: { enterpri
       pollAbort.current?.abort(); // 离页取消轮询（INT-105）
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedIn, subject]);
+  }, [signedIn, subject, tenant]);
 
   const keyOf = (item: ResourceItem) => `${item.tenant_id}:${item.catalog_id}`;
 

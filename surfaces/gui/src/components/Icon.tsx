@@ -50,6 +50,7 @@ export type IconName =
   | "stop"
   | "warning"
   | "user"
+  | "check"
   | "x";
 
 export function Icon({
@@ -214,6 +215,12 @@ export function Icon({
       return (
         <svg {...s}>
           <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      );
+    case "check":
+      return (
+        <svg {...s}>
+          <polyline points="20 6 9 17 4 12" />
         </svg>
       );
     case "warning":
