@@ -3,9 +3,13 @@
 独立技能与 Work 内置副本需同步版本和调用器。Work 接入继续保留用户已有未提交修改。
 
 - Work `/v1/apps/transform` 应由真实 Agent 加载技能执行，而非调用规则打包器；模型、提问、批准和工具进度必须对应真实事件。
+- Work 提案采用原生结构化工具参数；大文件可先逐个 propose_file_change，再以 ID/路径/原因汇总到 submit_proposal。分项提出只保存在提案内存，不修改源码；只有完整提案经校验、用户逐项批准后才应用。不要把全部文件及接口契约再次编码成一个 JSON 字符串。
+- 依赖中的配置加载、认证、响应包装等事实也应先查证。Work 的 read_go_dependency 仅能读取 go.mod 声明版本的本机模块缓存，不能读取任意宿主路径、下载或执行代码；replace 依赖不能用旧版本缓存冒充。缺少实际依赖时明确需要的源码范围。
 - platform 提供 slug、完整目标 URL 与可选资源。业务技能生成前使用该 URL，部署引擎根域名必须一致。
 - 独立工具输出 app.tar、skill.zip、app-manifest.json。现有平台上传接收 multipart app_tar、skill_zip、app_config、resource_ids；只有明确授权部署目标后才上传。
 - manifest 只含非秘密默认值，秘密留空，由平台运行时注入。源码附带说明不能授予部署权限。
+- Work 的 configs 可声明 `source: {"path":"conf/config.yaml","keys":["databases","devops-db","dsn"]}`，引用原 ZIP 隔离副本中的配置字段。支持 YAML、JSON、TOML、.env、properties。模型只看到来源与是否已有值；本机读取真实原值，审批后通过仅供本机 UI 的 runtime_configs 带入配置页。secret 的 default 仍须空，实际凭据不进入 manifest、技能、报告或模型。结构不支持或字段无法识别时明确提示，不能静默丢弃原值。
+- 所有原配置默认保留；用户可在配置页修改、恢复原值，或明确点击使用已选资源。勾选资源不会覆盖非空原值。资源注入字段应显示“已配置，留空沿用”，不应看起来像尚未配置。
 - deploy 自身服务凭据不等于企微登录；DNS/证书由环境提供，不等于拼接 URL。
 - Work 本地技能预装禁用，部署及业务验证后启用。knowledge 需有效账号/API 凭据、空间/沙盒和安装完成检查，不要求必须企微，也不能把空配置/401 当成功。
 - Work 预装时写入 `.work-delivery-pending`，官方业务脚本发现该标记时在发出 HTTP 前拒绝调用；实际部署版本、健康和业务验证通过后由 Work 清除。这样旧对话直接运行已知脚本也不能绕过待验证状态。这是产品防误用机制，不是阻止任意客户端访问应用的网络权限系统。外部导出的便携技能不自带此 Work 本地状态标记，调用者仍需核实部署结果。

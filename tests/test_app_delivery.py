@@ -75,7 +75,7 @@ def approved_body(job):
 @pytest.mark.asyncio
 async def test_real_runtime_uses_selected_provider_and_never_writes_before_approval(service):
     job = await analyzed(service)
-    assert len(service.manager.provider.calls) == 3
+    assert len(service.manager.provider.calls) == 2
     assert set(service.manager.provider.calls) == {"test:configured"}
     assert (service.path(job["id"]) / "review/source/main.py").read_text() == "print('original')\n"
     assert "adapted" in job["proposal"]["changes"][0]["diff"]
@@ -154,6 +154,179 @@ async def test_artifact_or_summary_tampering_cannot_reuse_user_approval(service)
 def test_bundled_invoker_matches_canonical_python_source():
     root = Path(__file__).parents[1] / "coworker/app_delivery_skill"
     assert (root / "assets/invoke_api.py.txt").read_bytes() == (root / "scripts/invoke_api.py").read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_original_values_survive_redaction_and_approval_without_entering_artifacts(service):
+    from coworker.app_delivery_config import original_fields
+    data = create(service)
+    source = service.path(data["id"]) / "review/source"
+    (source / "config.yaml").write_text('db:\n  password: "OPC_TEST_KEEP_PASSWORD"\n  port: 3306\nredis:\n  url: "redis://original.internal:6379"\n')
+    files, _ = delivery.inspect_source(source)
+    inv = delivery.load(source.parent / "inventory.json")
+    inv["files"] = files
+    delivery.save(source.parent / "inventory.json", inv)
+    plan = proposal()
+    for key, keys, secret in [("DB_PASSWORD", ["db", "password"], True), ("DB_PORT", ["db", "port"], False), ("REDIS_URL", ["redis", "url"], False)]:
+        plan["contract"]["configs"].append({"key": key, "source": {"path": "config.yaml", "keys": keys}, "default": "", "required": True, "secret": secret})
+    data.update(status="review", proposal=plan, proposal_hash=fingerprint(plan))
+    service.save(data)
+    assert "OPC_TEST_KEEP_PASSWORD" not in json.dumps(original_fields(source, "config.yaml"))
+    before = service.public(data["id"])
+    assert before["proposal"]["configs"][0]["has_original_value"]
+    assert "OPC_TEST_KEEP_PASSWORD" not in json.dumps(before)
+    ready = await service.approve(data["id"], approved_body(before))
+    assert ready["status"] == "ready", ready.get("error")
+    runtime = {c["key"]: c["value"] for c in ready["runtime_configs"]}
+    assert runtime == {"DB_PASSWORD": "OPC_TEST_KEEP_PASSWORD", "DB_PORT": "3306", "REDIS_URL": "redis://original.internal:6379"}
+    for path in (service.path(data["id"]) / "bundle").iterdir():
+        assert b"OPC_TEST_KEEP_PASSWORD" not in path.read_bytes()
+    body = {"artifact_hash": ready["artifact_hash"], "app_config": ready["runtime_configs"], "resource_ids": []}
+    token = service.confirm_deployment(data["id"], body)["confirmation_token"]
+    service.verified_package(data["id"], {**body, "confirmation_token": token})
+    assert service.load(data["id"])["deployment_confirmation"]["app_config"][0]["value"] == "OPC_TEST_KEEP_PASSWORD"
+
+
+def test_rejects_erasing_a_masked_original_credential_or_unresolvable_source(service):
+    data = create(service)
+    source = service.path(data["id"]) / "review/source"
+    (source / "config.yaml").write_text('password: "OPC_TEST_KEEP_PASSWORD"\n')
+    candidate = proposal()
+    candidate["changes"].append({"id": "C02", "path": "config.yaml", "reason": "Runtime injection", "content": 'password: ""\n'})
+    with pytest.raises(ValueError, match="不能清空"):
+        service.validate_proposal(data, source, candidate)
+    candidate["contract"]["configs"] = [{"key": "PASSWORD", "secret": True, "required": True, "default": "", "source": {"path": "config.yaml", "keys": ["password"]}}]
+    service.validate_proposal(data, source, candidate)
+    candidate["contract"]["configs"][0]["source"]["keys"] = ["absent"]
+    with pytest.raises(ValueError, match="找不到"):
+        service.validate_proposal(data, source, candidate)
+
+
+@pytest.mark.asyncio
+async def test_analysis_model_sees_reference_metadata_but_not_original_credential(service):
+    data = create(service)
+    source = service.path(data["id"]) / "review/source"
+    (source / "config.yaml").write_text('db:\n  password: "original-private-test-value"\n')
+    plan = proposal()
+    plan["contract"]["configs"] = [{"key": "PASSWORD", "secret": True, "required": True, "default": "", "source": {"path": "config.yaml", "keys": ["db", "password"]}}]
+    observed = []
+
+    def complete(*, model, messages, tools=None, **settings):
+        observed.append(json.dumps(messages, default=str))
+        if len(observed) == 1:
+            return AssistantTurn(tool_calls=[ToolCall("read-config", "read_source", {"path": "config.yaml"})])
+        if len(observed) == 2:
+            return AssistantTurn(tool_calls=[ToolCall("submit-plan", "submit_proposal", {"proposal_json": json.dumps(plan)})])
+        return AssistantTurn(text="等待确认")
+
+    service.manager.provider.complete = complete
+    service.launch_analysis(data["id"])
+    await service.tasks[data["id"]]
+    assert service.public(data["id"])["status"] == "review"
+    assert "original-private-test-value" not in "\n".join(observed)
+    assert "Original configuration references" in observed[-1]
+    assert (source / "config.yaml").read_text().endswith('"original-private-test-value"\n')
+
+
+@pytest.mark.asyncio
+async def test_reanalysis_retains_previous_user_decisions(service):
+    data = create(service)
+    data["feedback"] = "保留原数据库和密钥，不使用替代资源"
+    service.save(data)
+    service.launch_analysis(data["id"], "补充：端口8080，不新增鉴权")
+    task = service.tasks[data["id"]]
+    saved = service.load(data["id"])["feedback"]
+    assert "保留原数据库和密钥" in saved and "端口8080，不新增鉴权" in saved
+    service.cancel(data["id"])
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_valid_proposal_does_not_require_an_extra_model_summary_request(service):
+    original = service.manager.provider.complete
+
+    def complete(**kwargs):
+        if len(service.manager.provider.calls) >= 2:
+            raise ConnectionError("Summary request unavailable")
+        return original(**kwargs)
+
+    service.manager.provider.complete = complete
+    job = await analyzed(service)
+    assert job["proposal_hash"] and job["status"] == "review"
+    assert len(service.manager.provider.calls) == 2
+
+
+def test_validated_proposal_checkpoint_survives_client_restart(service):
+    data = create(service)
+    plan = proposal()
+    service.validate_proposal(data, service.path(data["id"]) / "review/source", plan)
+    data.update(status="analyzing", proposal=plan, proposal_hash=fingerprint(plan))
+    service.save(data)
+    assert service.load(data["id"])["status"] == "review"
+    assert not (service.path(data["id"]) / "approved").exists()
+
+
+@pytest.mark.asyncio
+async def test_structured_proposal_can_reference_separate_file_drafts_without_writing_source(service):
+    calls = []
+    plan = proposal()
+
+    def complete(*, model, messages, tools=None, **settings):
+        calls.append(model)
+        if len(calls) == 1:
+            schema = next(t["function"]["parameters"] for t in tools if t["function"]["name"] == "submit_proposal")
+            assert "proposal_json" not in schema["properties"]
+            assert schema["properties"]["contract"]["properties"]["slug"]["enum"] == ["test-app"]
+            return AssistantTurn(tool_calls=[ToolCall("file-draft", "propose_file_change", plan["changes"][0])])
+        if len(calls) == 2:
+            native = {**plan, "changes": [{k: v for k, v in plan["changes"][0].items() if k != "content"}]}
+            return AssistantTurn(tool_calls=[ToolCall("native-submit", "submit_proposal", native)])
+        raise AssertionError("No summary request is required after a valid proposal")
+
+    service.manager.provider.complete = complete
+    data = create(service)
+    service.launch_analysis(data["id"])
+    await service.tasks[data["id"]]
+    job = service.public(data["id"])
+    assert job["status"] == "review", job.get("error")
+    assert "adapted" in job["proposal"]["changes"][0]["diff"]
+    assert (service.path(data["id"]) / "review/source/main.py").read_text() == "print('original')\n"
+    ready = await service.approve(data["id"], approved_body(job))
+    assert ready["status"] == "ready", ready.get("error")
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_validation_rejection_is_repaired_in_the_same_analysis_context(service):
+    calls = []
+    plan = proposal()
+
+    def complete(*, model, messages, tools=None, **settings):
+        calls.append(model)
+        if len(calls) == 1:
+            return AssistantTurn(tool_calls=[ToolCall("draft", "propose_file_change", plan["changes"][0])])
+        native = {**plan, "changes": [{k: v for k, v in plan["changes"][0].items() if k != "content"}]}
+        if len(calls) == 2:
+            native["contract"] = {**plan["contract"], "apis": ["lookup"]}
+            return AssistantTurn(tool_calls=[ToolCall("bad-submit", "submit_proposal", native)])
+        if len(calls) == 3:
+            return AssistantTurn(text="Already submitted")
+        if len(calls) == 4:
+            assert "apis" in json.dumps(messages, default=str)
+            return AssistantTurn(tool_calls=[ToolCall("corrected-submit", "submit_proposal", native)])
+        raise AssertionError("Unexpected extra model call")
+
+    service.manager.provider.complete = complete
+    data = create(service)
+    service.launch_analysis(data["id"])
+    await service.tasks[data["id"]]
+    job = service.public(data["id"])
+    assert job["status"] == "review", job.get("error")
+    assert len(calls) == 4
+    assert any("正在修正" in event for event in job["events"])
+    assert "adapted" in job["proposal"]["changes"][0]["diff"]
+    assert (service.path(data["id"]) / "review/source/main.py").read_text() == "print('original')\n"
 
 
 def test_plan_cannot_modify_slug_url_port_or_agent_policy(service):
