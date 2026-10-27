@@ -5,14 +5,16 @@
 
 import { useEffect, useState } from "react";
 import { httpBase } from "./api";
-import type { EnterpriseState } from "./enterprise";
+import { normalizeSpaces, type EnterpriseState } from "./enterprise";
+
+export const ENTERPRISE_STATE_CHANGED = "opc:enterprise-changed";
 
 const launchToken = (): string =>
   (globalThis as any).__COWORKER_API_TOKEN__ ||
   (import.meta as any).env?.VITE_COWORKER_API_TOKEN ||
   "";
 
-export function useEnterpriseState(pollMs = 30_000, enabled = true): EnterpriseState {
+export function useEnterpriseState(pollMs = 15_000, enabled = true): EnterpriseState {
   const [state, setState] = useState<EnterpriseState>({ kind: "idle" });
   useEffect(() => {
     if (!enabled) return;
@@ -29,6 +31,7 @@ export function useEnterpriseState(pollMs = 30_000, enabled = true): EnterpriseS
             kind: "signed_in",
             subject: body.subject || "",
             tenant: body.tenant || "",
+            spaces: normalizeSpaces(body),
             email: body.email || "",
             name: body.name || "",
           });
@@ -41,9 +44,14 @@ export function useEnterpriseState(pollMs = 30_000, enabled = true): EnterpriseS
     };
     void sync();
     const timer = setInterval(() => void sync(), pollMs);
+    const onFocusOrChange = () => void sync();
+    window.addEventListener("focus", onFocusOrChange);
+    window.addEventListener(ENTERPRISE_STATE_CHANGED, onFocusOrChange);
     return () => {
       dead = true;
       clearInterval(timer);
+      window.removeEventListener("focus", onFocusOrChange);
+      window.removeEventListener(ENTERPRISE_STATE_CHANGED, onFocusOrChange);
     };
   }, [pollMs, enabled]);
   return state;

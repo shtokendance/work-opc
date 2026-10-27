@@ -23,12 +23,14 @@ export function KnowledgeScopePicker({
   onHighlightChange,
   onRows,
   onPick,
+  tenantId,
 }: {
   highlight: number;
   onHighlightChange: (n: number) => void;
   /** Publishes the loaded rows to the Composer for keyboard navigation. */
   onRows?: (rows: PickerRow[]) => void;
   onPick: (selection: KnowledgeScopeSelection) => void;
+  tenantId?: string;
 }) {
   // Esc 关闭由 Composer 层键盘拦截处理（M2）；picker 不再自持 onClose。
   const { t } = useTranslation();
@@ -40,9 +42,10 @@ export function KnowledgeScopePicker({
 
   useEffect(() => {
     let dead = false;
+    setItems({ kind: "loading" });
     (async () => {
       try {
-        const env = await enterpriseResources.listKnowledgeBases({ limit: 100 });
+        const env = await enterpriseResources.listKnowledgeBases({ limit: 100, tenantId: tenantId || undefined });
         if (dead) return;
         const rows = env.items
           .filter((i) => i.availability === "available")
@@ -68,7 +71,7 @@ export function KnowledgeScopePicker({
       dead = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tenantId]);
 
   // Esc closes without changing the selection (BND-004.1) — handled at the
   // Composer layer too; this button-level Escape keeps mouse-only flows sane.

@@ -142,7 +142,8 @@
     "automations": "Automations",
     "connectors": "Connectors",
     "settings": "Settings",
-    "resources": "Knowledge"
+    "resources": "Knowledge",
+    "skills": "Skills"
   },
   "hero": {
     "chat_greeting": "How can I help?",
@@ -1766,6 +1767,9 @@
     "install": "Install"
   },
   "skills": {
+    "tab_enterprise": "Enterprise Skills",
+    "tab_app": "App Skills",
+    "tab_personal": "My Skills",
     "subtitle": "Reusable instructions the worker can follow in every conversation. Off here means off everywhere.",
     "confirmation": "— the worker can now use it in every conversation.",
     "off_note": "turned off everywhere. If a conversation already used it, start a new one for a completely clean slate.",

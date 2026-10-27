@@ -7,6 +7,7 @@ import { getSessionModelSettings, getSettings, inspectPdf, sessionSkills, setSes
 import { formatTokens, totalTokens } from "../usage";
 import { clearDraft, loadDraft, saveDraft, type ComposerDraft } from "./composerDraft";
 import { KnowledgeScopePicker } from "./KnowledgeScopePicker";
+import { useEnterpriseState } from "../useEnterpriseState";
 import type { KnowledgeScopeSelection, SkillRefSelection } from "../enterpriseResources";
 import { Dropdown, type Option } from "./Dropdown";
 import { Icon } from "./Icon";
@@ -279,8 +280,17 @@ export function Composer(props: Props) {
   // M2：picker 的行与高光提升到 Composer——键盘在 textarea 的 onKey 里拦截。
   const [pickerRows, setPickerRows] = useState<import("./KnowledgeScopePicker").PickerRow[]>([]);
   const [pickerHighlight, setPickerHighlight] = useState(0);
+  const enterprise = useEnterpriseState();
+  const activeTenant = enterprise.kind === "signed_in" ? enterprise.tenant : "";
   const knowledgeScope = props.knowledgeScope ?? null;
   const skillRef = props.skillRef ?? null;
+
+  // 空间切换保护：若已选知识库不属于当前空间，自动清除以保持空间单选隔离
+  useEffect(() => {
+    if (knowledgeScope && activeTenant && knowledgeScope.tenant_id && knowledgeScope.tenant_id !== activeTenant) {
+      props.onKnowledgeScopeChange?.(null);
+    }
+  }, [activeTenant, knowledgeScope, props]);
   const draftRef = useRef<ComposerDraft>({ text: "", attachments: [], skill: null });
   draftRef.current = { text, attachments, skill: pendingSkill, knowledgeScope, skillRef };
   // The resetKey this Composer last rendered with; lets the session-switch effect know the
@@ -845,7 +855,17 @@ export function Composer(props: Props) {
               : props.placeholder || t("composer.placeholder")
           }
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setText(next);
+            const cursor = e.target.selectionStart;
+            if (cursor > 0 && next[cursor - 1] === "@") {
+              const prevChar = cursor > 1 ? next[cursor - 2] : " ";
+              if (/\s/.test(prevChar) || cursor === 1) {
+                setKnowledgePickerOpen(true);
+              }
+            }
+          }}
           onKeyDown={onKey}
           onPaste={onPaste}
           rows={1}
@@ -856,12 +876,17 @@ export function Composer(props: Props) {
           <KnowledgeScopePicker
             highlight={pickerHighlight}
             onHighlightChange={setPickerHighlight}
+            tenantId={activeTenant}
             onRows={(rows) => {
               setPickerRows(rows);
               setPickerHighlight((h) => Math.min(h, Math.max(rows.length - 1, 0)));
             }}
             onPick={(sel) => {
               props.onKnowledgeScopeChange?.(sel); // 选择另一库替换原标签（单选）
+              setText((cur) => {
+                if (cur.endsWith("@")) return cur.slice(0, -1);
+                return cur;
+              });
               setKnowledgePickerOpen(false);
             }}
           />

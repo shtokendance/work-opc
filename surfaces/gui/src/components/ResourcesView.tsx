@@ -50,6 +50,7 @@ export function ResourcesView({
   const generation = useRef(0);
 
   const signedIn = enterprise.kind === "signed_in";
+  const tenant = enterprise.kind === "signed_in" ? enterprise.tenant : "";
 
   const load = useCallback(
     async (opts: { q?: string; offset?: number } = {}) => {
@@ -60,6 +61,7 @@ export function ResourcesView({
           q: opts.q ?? q,
           offset: opts.offset ?? offset,
           limit: PAGE_SIZE,
+          tenantId: tenant || undefined,
         });
         if (mine !== generation.current) return; // 迟到响应丢弃（BND-002.7）
         setContextId(envelope.context_id);
@@ -74,7 +76,7 @@ export function ResourcesView({
         setPage({ kind: "error", message: code });
       }
     },
-    [q, offset],
+    [q, offset, tenant],
   );
 
   const subject = enterprise.kind === "signed_in" ? enterprise.subject : "";
@@ -89,7 +91,7 @@ export function ResourcesView({
       generation.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signedIn, subject]);
+  }, [signedIn, subject, tenant]);
 
   const search = (value: string) => {
     setQ(value);

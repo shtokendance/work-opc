@@ -1933,7 +1933,16 @@ def create_app(manager: SessionManager) -> FastAPI:
     # token + enterprise profile metadata.
     from ..config import load_config
 
-    enterprise_auth = EnterpriseAuthService.from_config(load_config())
+    cfg = load_config()
+    platform_base = (getattr(cfg, "opc_platform_base", "") or "").strip()
+    if not platform_base:
+        platform_base = (os.environ.get("OPC_PLATFORM_BASE") or "").strip()
+    if not platform_base:
+        platform_base = (os.environ.get("OPC_PLATFORM_HTTP") or "").strip()
+    if not platform_base and not os.environ.get("PYTEST_CURRENT_TEST"):
+        platform_base = "https://shtokendance.benlai.com"
+
+    enterprise_auth = EnterpriseAuthService(platform_base)
     app.state.enterprise = enterprise_auth
     # The manager drives the BND-120 switch semantics (orphan approvals, cache
     # shards, connections) off this service's live context.
@@ -2012,6 +2021,20 @@ def create_app(manager: SessionManager) -> FastAPI:
             return out
         status = 401 if (out.get("error") or {}).get("code") == "REFRESH_REUSE_DETECTED" else 502
         return JSONResponse(out, status_code=status)
+
+    @app.post("/v1/enterprise/session/switch-tenant")
+    def enterprise_session_switch_tenant(body: dict) -> Any:
+        """Switch the active tenant within the user's entitled spaces."""
+        tenant_id = str((body or {}).get("tenant_id", ""))
+        if not tenant_id:
+            return JSONResponse({"ok": False, "error": {"code": "INVALID_REQUEST", "message": "tenant_id is required"}}, status_code=400)
+        out = enterprise_auth.switch_tenant(tenant_id)
+        manager.sync_enterprise_context()
+        if not out.get("ok"):
+            code = (out.get("error") or {}).get("code")
+            status = 401 if code == "NOT_SIGNED_IN" else (403 if code == "SPACE_FORBIDDEN" else 400)
+            return JSONResponse(out, status_code=status)
+        return out
 
     @app.post("/v1/enterprise/logout")
     async def enterprise_logout(body: dict) -> Any:

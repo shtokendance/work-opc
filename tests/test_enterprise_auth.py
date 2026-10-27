@@ -219,6 +219,29 @@ def test_refresh_requires_token(fake_opc, tmp_path, monkeypatch):
     assert resp.json()["error"]["code"] == "AUTH_STATE_MISMATCH"
 
 
+def test_refresh_hydrates_context_on_cold_start(fake_opc, tmp_path, monkeypatch):
+    """When sidecar restarts with empty in-memory context, refresh from Keychain hydrates context."""
+    client1 = _client(tmp_path, monkeypatch, platform=fake_opc.base_url)
+    refresh = _login(client1, fake_opc)
+
+    fresh_tmp = tmp_path / "fresh"
+    fresh_tmp.mkdir()
+    client2 = _client(fresh_tmp, monkeypatch, platform=fake_opc.base_url)
+    assert client2.get("/v1/enterprise/session").status_code == 404
+
+    resp = client2.post("/v1/enterprise/session/refresh", json={"refresh_token": refresh})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"]
+    assert body["refresh_token"] and body["refresh_token"] != refresh
+    assert body["context"]["subject"] == "subject-yangjing"
+    assert "space-技术交付中心" in body["context"]["spaces"]
+
+    sess = client2.get("/v1/enterprise/session")
+    assert sess.status_code == 200
+    assert sess.json()["subject"] == "subject-yangjing"
+
+
 # -- logout (INT-101e) -----------------------------------------------------------------
 
 
@@ -256,6 +279,33 @@ def test_context_switch_orphans_old_context(fake_opc, tmp_path, monkeypatch):
 
 def create_app_service(client: TestClient):
     return client.app.state.enterprise
+
+
+def test_switch_tenant_flow(fake_opc, tmp_path, monkeypatch):
+    fake_opc.tenant = "10001"
+    fake_opc.spaces = ["10001", "296492"]
+    client = _client(tmp_path, monkeypatch, platform=fake_opc.base_url)
+    _login(client, fake_opc)
+
+    session = client.get("/v1/enterprise/session").json()
+    assert session["tenant"] == "10001"
+    assert "296492" in session["spaces"]
+
+    # Switch to valid space 296492
+    resp = client.post("/v1/enterprise/session/switch-tenant", json={"tenant_id": "296492"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["context"]["tenant"] == "296492"
+
+    # Context in session is now 296492
+    session2 = client.get("/v1/enterprise/session").json()
+    assert session2["tenant"] == "296492"
+
+    # Switch to forbidden space
+    bad = client.post("/v1/enterprise/session/switch-tenant", json={"tenant_id": "999999"})
+    assert bad.status_code == 403
+    assert bad.json()["error"]["code"] == "SPACE_FORBIDDEN"
 
 
 # -- BND-160: no refresh anywhere it must not be -------------------------------------------

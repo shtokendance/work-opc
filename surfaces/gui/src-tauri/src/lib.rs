@@ -845,6 +845,11 @@ pub fn run() {
                 .env("COWORKER_EXIT_WITH_PARENT", "1")
                 .env("COWORKER_PARENT_PID", std::process::id().to_string())
                 .env("COWORKER_API_TOKEN", &api_token)
+                .env(
+                    "OPC_PLATFORM_BASE",
+                    std::env::var("OPC_PLATFORM_BASE")
+                        .unwrap_or_else(|_| "https://shtokendance.benlai.com".to_string()),
+                )
                 // This GUI app has no console, so a console-subsystem child would inherit
                 // invalid std handles and crash a few seconds in when uvicorn writes its logs
                 // (the "Starting coworker…" freeze on Windows). Hand it real handles: the

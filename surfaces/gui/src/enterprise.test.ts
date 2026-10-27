@@ -252,6 +252,42 @@ describe("enterprise sign-in state machine", () => {
     session.dispose();
   });
 
+  it("hydrates from Keychain when sidecar returns 404 on cold boot", async () => {
+    const { deps, secrets } = makeDeps();
+    secrets.values.set(ENTERPRISE_KEYCHAIN_PROFILE, "keychain-refresh-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/v1/enterprise/session")) {
+          return jsonResponse(404, {});
+        }
+        if (url.endsWith("/v1/enterprise/session/refresh")) {
+          return jsonResponse(200, {
+            ok: true,
+            refresh_token: "rotated-keychain-token",
+            context: { subject: "yangjing", tenant: "t1", spaces: ["t1"] },
+          });
+        }
+        return jsonResponse(404, {});
+      }),
+    );
+    const session = createEnterpriseSession(deps);
+    const states = trackStates(session);
+
+    await session.syncFromServer();
+
+    expect(secrets.put).toHaveBeenCalledWith(ENTERPRISE_KEYCHAIN_PROFILE, "rotated-keychain-token");
+    expect(states[states.length - 1]).toEqual({
+      kind: "signed_in",
+      subject: "yangjing",
+      tenant: "t1",
+      spaces: [{ id: "t1", name: "t1" }],
+      email: "",
+      name: "",
+    });
+    session.dispose();
+  });
+
   // BND-102/160: the production refresh path — while signed in, refresh fires
   // BEFORE the 15-minute access token dies, driven by the sidecar's own
   // expiry hints; a rotation reschedules against the fresh session view.

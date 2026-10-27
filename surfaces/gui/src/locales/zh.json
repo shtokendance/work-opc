@@ -140,7 +140,8 @@
     "automations": "自动化",
     "connectors": "连接器",
     "settings": "设置",
-    "resources": "知识库"
+    "resources": "知识库",
+    "skills": "技能"
   },
   "hero": {
     "chat_greeting": "我能帮你什么？",
@@ -1733,6 +1734,9 @@
     "install": "安装"
   },
   "skills": {
+    "tab_enterprise": "企业技能",
+    "tab_app": "应用技能",
+    "tab_personal": "我的技能",
     "subtitle": "可复用的指令，同事在每个会话中都能遵循。在这里关闭即处处关闭。",
     "confirmation": "—— 同事现在可以在每个会话中使用它。",
     "off_note": "已处处关闭。若某个会话已经用过它，新开一个会话即可完全干净。",

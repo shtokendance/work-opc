@@ -72,6 +72,7 @@ class EnterpriseContext:
     generation: int
     authz_version: int
     spaces: list[str]
+    spaces_detail: list[dict[str, str]] = field(default_factory=list)
     email: str = ""
     display_name: str = ""
     access_token: str = field(repr=False, default="")  # memory-only, never logged
@@ -123,6 +124,7 @@ class EnterpriseContext:
             "authz_version": self.authz_version,
             "context_id": self.context_id,
             "spaces": list(self.spaces),
+            "spaces_detail": list(self.spaces_detail),
             "email": self.email,
             "name": self.display_name,
             "epoch": self.epoch,
@@ -234,6 +236,26 @@ class EnterpriseAuthService:
         # Stable per machine, not a secret — INT-101a binds device to the txn.
         node = uuid.getnode()
         return hashlib.sha256(str(node).encode()).hexdigest()[:32]
+
+    async def _get_session_from_platform(self, access_token: str) -> tuple[int, dict[str, Any]]:
+        """Query platform session endpoint to hydrate context using an active access token."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        if self._client is not None:
+            try:
+                resp = await self._client.get("/integration/v1/session", headers=headers)
+            except httpx.HTTPError as exc:
+                return 502, _err(UPSTREAM_UNAVAILABLE, f"platform unreachable: {exc}")
+            return resp.status_code, self._decode(resp)
+        if not self.platform_base:
+            return 400, _err(ENTERPRISE_NOT_CONFIGURED, "enterprise login is not configured")
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.platform_base, timeout=PLATFORM_TIMEOUT
+            ) as client:
+                resp = await client.get("/integration/v1/session", headers=headers)
+        except httpx.HTTPError as exc:
+            return 502, _err(UPSTREAM_UNAVAILABLE, f"platform unreachable: {exc}")
+        return resp.status_code, self._decode(resp)
 
     # -- INT-101a: start ---------------------------------------------------------
 
@@ -361,13 +383,24 @@ class EnterpriseAuthService:
 
     def _context_from_token(self, body: dict[str, Any], access: str) -> EnterpriseContext:
         self._epoch += 1
+        raw_spaces = body.get("spaces") or []
+        spaces = [str(s) for s in raw_spaces]
+        raw_detail = body.get("spaces_detail")
+        spaces_detail: list[dict[str, str]] = []
+        if isinstance(raw_detail, list):
+            for d in raw_detail:
+                if isinstance(d, dict) and "id" in d:
+                    spaces_detail.append({"id": str(d.get("id")), "name": str(d.get("name", d.get("id")))})
+        if not spaces_detail:
+            spaces_detail = [{"id": s, "name": s} for s in spaces]
         return EnterpriseContext(
             issuer=str(body.get("issuer") or self.platform_base or "opc"),
             subject=str(body.get("subject") or body.get("immutable_subject") or ""),
             tenant=str(body.get("tenant") or body.get("tenant_id") or ""),
             generation=int(body.get("generation") or 0),
             authz_version=int(body.get("authz_version") or 0),
-            spaces=[str(s) for s in body.get("spaces") or []],
+            spaces=spaces,
+            spaces_detail=spaces_detail,
             email=str(body.get("email") or ""),
             display_name=str(body.get("name") or ""),
             access_token=access,
@@ -443,9 +476,30 @@ class EnterpriseAuthService:
             self._context.access_token = access
             self._context.obtained_at = time.time()
             self._context.expires_in = int(body.get("expires_in") or 900)
+            if "spaces" in body or "spaces_detail" in body:
+                ctx = self._context_from_token(body, access)
+                if not body.get("generation"):
+                    ctx.generation = self._context.generation
+                self._context.spaces = ctx.spaces
+                self._context.spaces_detail = ctx.spaces_detail
             profile = self._context.meta().context_key()
             self.store.set_access_token(profile, access)
-        return {"ok": True, "refresh_token": body.get("refresh_token") or ""}
+        else:
+            # Cold start: sidecar restarted, but client presented a valid refresh token from Keychain.
+            if body.get("subject") or body.get("spaces"):
+                ctx = self._context_from_token(body, access)
+                self._establish_context(ctx)
+            else:
+                sess_status, sess_body = await self._get_session_from_platform(access)
+                if sess_status == 200 and isinstance(sess_body, dict):
+                    sess_body["expires_in"] = body.get("expires_in") or 900
+                    ctx = self._context_from_token(sess_body, access)
+                    self._establish_context(ctx)
+        return {
+            "ok": True,
+            "refresh_token": body.get("refresh_token") or "",
+            "context": self._context.public_view() if self._context else None,
+        }
 
     # -- INT-101e: logout ----------------------------------------------------------
 
@@ -489,3 +543,24 @@ class EnterpriseAuthService:
 
     def session_view(self) -> Optional[dict[str, Any]]:
         return self._context.public_view() if self._context is not None else None
+
+    def switch_tenant(self, tenant_id: str) -> dict[str, Any]:
+        """Switches the active tenant within the user's entitled spaces."""
+        if self._context is None:
+            return {"ok": False, **_err("NOT_SIGNED_IN", "enterprise account is not signed in")}
+        tenant_id = str(tenant_id).strip()
+        allowed_spaces = set(self._context.spaces) | {s.get("id") for s in self._context.spaces_detail}
+        if tenant_id not in allowed_spaces:
+            return {"ok": False, **_err("SPACE_FORBIDDEN", f"tenant {tenant_id} not in user spaces")}
+        if self._context.tenant == tenant_id:
+            return {"ok": True, "context": self._context.public_view()}
+
+        self._epoch += 1
+        from dataclasses import replace
+        new_ctx = replace(
+            self._context,
+            tenant=tenant_id,
+            epoch=self._epoch,
+        )
+        self._establish_context(new_ctx)
+        return {"ok": True, "context": new_ctx.public_view()}
