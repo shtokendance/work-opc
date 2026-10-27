@@ -113,11 +113,18 @@ export function AppSkillsPanel({
   };
 
   // Map jobs to application skills, plus any standalone app-* skills in skill store
-  const jobMap = new Map<string, AppDeliveryJob>();
+  // 1. Filter jobs: only keep jobs that have actually been published to the platform
+  // and deduplicate by slug (latest job per slug).
+  const publishedJobsBySlug = new Map<string, AppDeliveryJob>();
   for (const j of jobs) {
-    jobMap.set(j.slug, j);
-    jobMap.set(`app-${j.slug}`, j);
+    if (!j.published) continue; // Skip un-published drafts, failed analyses, local in-review tasks
+    if (!publishedJobsBySlug.has(j.slug)) {
+      publishedJobsBySlug.set(j.slug, j);
+    }
   }
+
+  // 2. Identify installed app skills from coworker skill store
+  const installedAppSkills = skills.filter((s) => s.name.startsWith("app-"));
 
   const appSkillRows: {
     key: string;
@@ -130,36 +137,43 @@ export function AppSkillsPanel({
     apis: { id: string; purpose?: string; method: string; path: string; effect: string }[];
   }[] = [];
 
-  // 1. From jobs with artifacts or verified skills
-  for (const j of jobs) {
-    const skillName = `app-${j.slug}`;
-    const matchedSkill = skills.find((s) => s.name === skillName || s.name === j.slug);
+  const seenSlugs = new Set<string>();
+
+  // A. All installed application skills in coworker
+  for (const s of installedAppSkills) {
+    const slug = s.name.replace(/^app-/, "");
+    const job = publishedJobsBySlug.get(slug);
+    seenSlugs.add(slug);
     appSkillRows.push({
-      key: `job:${j.id}`,
-      job: j,
-      skill: matchedSkill,
-      name: j.name || skillName,
-      slug: j.slug,
-      description: j.description || matchedSkill?.description || "由应用中心自动化改造生成的应用业务技能",
-      appUrl: j.app_url || "",
-      apis: j.proposal?.apis || [],
+      key: `skill:${s.name}`,
+      job,
+      skill: s,
+      name: job?.name || s.name,
+      slug,
+      description: s.description || job?.description || "由应用中心自动化改造生成的应用业务技能",
+      appUrl: job?.app_url || "",
+      apis: job?.proposal?.apis || [],
     });
   }
 
-  // 2. Any additional app-* skills not in jobs
-  for (const s of skills) {
-    if (s.name.startsWith("app-") && !jobMap.has(s.name)) {
-      const slug = s.name.replace(/^app-/, "");
-      appSkillRows.push({
-        key: `skill:${s.name}`,
-        skill: s,
-        name: s.name,
-        slug,
-        description: s.description || "本地应用技能",
-        appUrl: "",
-        apis: [],
-      });
-    }
+  // B. Published & deployed jobs on the platform that are running or have verified artifacts
+  for (const [slug, job] of publishedJobsBySlug) {
+    if (seenSlugs.has(slug)) continue;
+    // Only surface published jobs if they have deployed artifacts or are running
+    if (!job.artifact_hash && job.status !== "running") continue;
+    seenSlugs.add(slug);
+    const skillName = `app-${slug}`;
+    const matchedSkill = skills.find((s) => s.name === skillName || s.name === slug);
+    appSkillRows.push({
+      key: `job:${job.id}`,
+      job,
+      skill: matchedSkill,
+      name: job.name || skillName,
+      slug,
+      description: job.description || matchedSkill?.description || "由应用中心自动化改造生成的应用业务技能",
+      appUrl: job.app_url || "",
+      apis: job.proposal?.apis || [],
+    });
   }
 
   const filtered = appSkillRows.filter((item) => {

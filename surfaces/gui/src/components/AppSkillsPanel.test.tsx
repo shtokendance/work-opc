@@ -56,6 +56,7 @@ describe("AppSkillsPanel", () => {
               description: "查询订单业务明细及履约状态",
               app_url: "http://10.101.102.116:30001",
               status: "running",
+              published: true,
               model: "openai/gpt-4o",
               events: [],
               artifacts: { "skill.zip": "/path/to/skill.zip" },
@@ -144,5 +145,53 @@ describe("AppSkillsPanel", () => {
       expect(patch).toBeTruthy();
       expect(patch?.body).toEqual({ enabled: false });
     });
+  });
+
+  it("filters out unpublished draft jobs and deduplicates multiple attempts of the same slug", async () => {
+    stubFetch([
+      {
+        match: "/v1/apps/jobs",
+        method: "GET",
+        json: {
+          jobs: [
+            // Unpublished drafts / failed attempts
+            { id: "j1", slug: "testapapp", name: "testapp", status: "ready", published: false },
+            { id: "j2", slug: "testapapp", name: "testapp", status: "failed", published: false },
+            { id: "j3", slug: "testapp", name: "Test-app", status: "review", published: false },
+            // Published app with multiple historical runs
+            {
+              id: "j4",
+              slug: "matrix-coupon",
+              name: "优惠券业务",
+              status: "running",
+              published: true,
+              artifact_hash: "hash-new",
+              app_url: "http://coupon.apps.localhost",
+            },
+            {
+              id: "j5",
+              slug: "matrix-coupon",
+              name: "优惠券业务旧版",
+              status: "running",
+              published: true,
+              artifact_hash: "hash-old",
+              app_url: "http://coupon.apps.localhost",
+            },
+          ],
+        },
+      },
+      { match: "/v1/skills", method: "GET", json: { skills: [] } },
+    ]);
+
+    render(<AppSkillsPanel />);
+
+    // Unpublished drafts are filtered out
+    expect(await screen.findByText("优惠券业务")).toBeTruthy();
+    expect(screen.queryByText("testapp")).toBeNull();
+    expect(screen.queryByText("Test-app")).toBeNull();
+
+    // Deduplicated by slug: only one card for matrix-coupon
+    const rows = screen.getAllByTestId("app-skill-row-matrix-coupon");
+    expect(rows.length).toBe(1);
   });
 });
