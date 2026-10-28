@@ -284,3 +284,63 @@ def test_uninstall_refuses_while_pinned_and_allows_after_release(tmp_path, monke
     resp2 = client.delete(f"/v1/enterprise/resources/skills/cat-c1?tenant_id=T1&context_id={cid}")
     assert resp2.status_code == 200, resp2.text
     assert not base.exists()
+
+
+def test_schedule_uninstall_unpinned_removes_immediately(tmp_path, monkeypatch):
+    """无运行中引用时，schedule_uninstall_or_now 立即物理删除目录。"""
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    ctx = _ctx("subject-u1")
+    _install(ctx, "T1", "cat-immediate", "body\n")
+    base = installer.catalog_dir(ctx, "T1", "cat-immediate")
+    assert base.exists()
+
+    removed = REGISTRY.schedule_uninstall_or_now(ctx, "T1", "cat-immediate")
+    assert removed is True
+    assert not base.exists()
+
+
+def test_schedule_uninstall_pinned_defers_until_release(tmp_path, monkeypatch):
+    """运行中引用时，schedule_uninstall_or_now 延迟清理，新启动立即拒绝，最后 release 瞬间自动删除。"""
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    ctx = _ctx("subject-u1")
+    h1 = _install(ctx, "T1", "cat-pinned", "body\n")
+    ref = SkillRef("T1", "cat-pinned", h1)
+    REGISTRY.acquire(ctx, ref, session_id="sess-active")
+    base = installer.catalog_dir(ctx, "T1", "cat-pinned")
+    assert base.exists()
+
+    # 标记清理，但因为有正在运行的会话，暂缓物理删除
+    removed = REGISTRY.schedule_uninstall_or_now(ctx, "T1", "cat-pinned")
+    assert removed is False
+    assert base.exists()
+
+    # 新启动尝试 resolve 立即被拒（SKILL_REVOKED）
+    from coworker.enterprise.registry import SKILL_REVOKED
+    with pytest.raises(SkillRefError) as exc:
+        REGISTRY.resolve(ctx, ref)
+    assert exc.value.code == SKILL_REVOKED
+
+    # 运行中 turn 结束触发 release → 自动物理删除
+    REGISTRY.release(ctx, "T1", "cat-pinned", h1)
+    assert not base.exists()
+
+
+def test_reconcile_local_installs_prunes_missing(tmp_path, monkeypatch):
+    """列表拉取对账：本地已安装但云端不存在的技能，自动对账回收删除。"""
+    from coworker.enterprise import resources as res
+
+    monkeypatch.setenv("COWORKER_STATE_DIR", str(tmp_path))
+    ctx = _ctx("subject-u1")
+    _install(ctx, "T1", "cat-keep", "keep\n")
+    _install(ctx, "T1", "cat-del", "del\n")
+
+    base_keep = installer.catalog_dir(ctx, "T1", "cat-keep")
+    base_del = installer.catalog_dir(ctx, "T1", "cat-del")
+    assert base_keep.exists()
+    assert base_del.exists()
+
+    # 云端只剩下 cat-keep
+    pruned = res.reconcile_local_installs(ctx, "T1", {"cat-keep"})
+    assert pruned == ["cat-del"]
+    assert base_keep.exists()
+    assert not base_del.exists()

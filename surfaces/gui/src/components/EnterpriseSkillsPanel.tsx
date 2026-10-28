@@ -132,6 +132,7 @@ export function EnterpriseSkillsPanel({ enterprise: enterpriseProp }: { enterpri
         status: "failed",
         error: (err as ResourceRequestError).code || "INSTALL_FAILED",
       });
+      await load({});
     }
   };
 

@@ -101,6 +101,16 @@ class EnterpriseRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._refs: dict[tuple[str, str, str, str], _RefCount] = {}
+        self._pending_uninstall: set[tuple[str, str, str]] = set()  # (ident, tenant, catalog)
+
+    def _pinned_versions_locked(
+        self, ident: str, tenant_id: str, catalog_id: str
+    ) -> set[str]:
+        return {
+            entry.sha256
+            for (e_ident, e_tenant, e_cat, _sha), entry in self._refs.items()
+            if e_ident == ident and e_tenant == tenant_id and e_cat == catalog_id and entry.count > 0
+        }
 
     # -- resolution ---------------------------------------------------------------
 
@@ -117,6 +127,10 @@ class EnterpriseRegistry:
         resolve — pinning fixes the VERSION, never the PERMISSION. The cache
         key carries the REF's sha so the grant entry actually hits (the authz
         shard records concrete versions; B2)."""
+        ident = installer.identity_hash(context)
+        with self._lock:
+            if (ident, ref.tenant_id, ref.catalog_id) in self._pending_uninstall:
+                raise SkillRefError(SKILL_REVOKED, "the catalog authorization was revoked")
         if authorize is not None and not authorize(
             context, ref.tenant_id, ref.catalog_id, ref.bundle_sha256
         ):
@@ -216,26 +230,46 @@ class EnterpriseRegistry:
         (the caller may then recycle the directory if it is not active)."""
         ident = installer.identity_hash(context)
         key = (ident, tenant_id, catalog_id, sha256)
+        trigger_uninstall = False
         with self._lock:
             entry = self._refs.get(key)
-            if entry is None:
-                return True
-            entry.count = max(0, entry.count - 1)
-            if entry.count > 0:
-                return False
-            del self._refs[key]
-            return True
+            if entry is not None:
+                entry.count = max(0, entry.count - 1)
+                if entry.count == 0:
+                    del self._refs[key]
+            if (ident, tenant_id, catalog_id) in self._pending_uninstall:
+                remaining = self._pinned_versions_locked(ident, tenant_id, catalog_id)
+                if not remaining:
+                    self._pending_uninstall.discard((ident, tenant_id, catalog_id))
+                    trigger_uninstall = True
+        if trigger_uninstall:
+            installer.uninstall(context, tenant_id, catalog_id)
+        return True
 
     def pinned_versions(
         self, context: EnterpriseContext, tenant_id: str, catalog_id: str
     ) -> set[str]:
         ident = installer.identity_hash(context)
         with self._lock:
-            return {
-                entry.sha256
-                for (e_ident, e_tenant, e_cat, _sha), entry in self._refs.items()
-                if e_ident == ident and e_tenant == tenant_id and e_cat == catalog_id
-            }
+            return self._pinned_versions_locked(ident, tenant_id, catalog_id)
+
+    def schedule_uninstall_or_now(
+        self, context: EnterpriseContext, tenant_id: str, catalog_id: str
+    ) -> bool:
+        """Schedule or immediately perform uninstallation of an enterprise skill.
+        If any version is currently pinned (in-use), deferred until all pins drop.
+        Returns True if uninstalled immediately, False if deferred."""
+        ident = installer.identity_hash(context)
+        with self._lock:
+            pinned = self._pinned_versions_locked(ident, tenant_id, catalog_id)
+            if pinned:
+                self._pending_uninstall.add((ident, tenant_id, catalog_id))
+                return False
+        # No pins active: execute uninstall now
+        installer.uninstall(context, tenant_id, catalog_id)
+        with self._lock:
+            self._pending_uninstall.discard((ident, tenant_id, catalog_id))
+        return True
 
     def release_session(self, session_id: str) -> None:
         """A session died / context switched: drop every pin it held."""
@@ -250,6 +284,9 @@ class EnterpriseRegistry:
             dead = [k for k in self._refs if k[0] == identity_hash]
             for key in dead:
                 self._refs.pop(key, None)
+            dead_pending = [k for k in self._pending_uninstall if k[0] == identity_hash]
+            for key in dead_pending:
+                self._pending_uninstall.discard(key)
 
     def ref_counts(self) -> dict[tuple[str, str, str, str], int]:
         with self._lock:

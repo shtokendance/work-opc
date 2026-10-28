@@ -354,8 +354,11 @@ async def authorize_catalog(
         return True, None
     out = await client.get_skill_catalog(tenant_id, catalog_id)
     if "error" in out:
-        AUTHZ.record(context, tenant_id, catalog_id, False, bundle_sha256,
-                     (out.get("error") or {}).get("code", ""))
+        err_code = (out.get("error") or {}).get("code", "")
+        AUTHZ.record(context, tenant_id, catalog_id, False, bundle_sha256, err_code)
+        if err_code == RESOURCE_NOT_ACCESSIBLE:
+            from .registry import REGISTRY
+            REGISTRY.schedule_uninstall_or_now(context, tenant_id, catalog_id)
         return False, out
     item = out.get("item") if isinstance(out.get("item"), dict) else {}
     current_sha = str(item.get("bundle_sha256") or "").lower()
@@ -695,3 +698,29 @@ def merge_local_skill_state(
         row["enabled"] = record.enabled if record else False
         out.append(row)
     return out
+
+
+def reconcile_local_installs(
+    context: EnterpriseContext,
+    tenant_id: str,
+    remote_catalog_ids: set[str],
+) -> list[str]:
+    """Prune locally installed enterprise skills that no longer exist on the platform.
+    Called when a complete, unfiltered catalog listing has been retrieved.
+    Returns list of uninstalled or pending-uninstalled catalog_ids."""
+    from .registry import REGISTRY
+
+    local_records = installer.list_installs(context)
+    pruned: list[str] = []
+    for record in local_records:
+        if tenant_id and record.tenant_id != tenant_id:
+            continue
+        if record.catalog_id not in remote_catalog_ids:
+            logger.info(
+                "reconcile_local_installs: catalog %s (tenant %s) not in remote catalog; removing",
+                record.catalog_id,
+                record.tenant_id,
+            )
+            REGISTRY.schedule_uninstall_or_now(context, record.tenant_id, record.catalog_id)
+            pruned.append(record.catalog_id)
+    return pruned

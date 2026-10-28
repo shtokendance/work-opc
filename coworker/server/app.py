@@ -2128,6 +2128,19 @@ def create_app(manager: SessionManager) -> FastAPI:
         )
         if "error" in out:
             return JSONResponse(out, status_code=_error_status(out, 502))
+        if (
+            not q.strip()
+            and offset == 0
+            and out.get("complete") is not False
+            and len(out.get("items") or []) >= out.get("total", 0)
+        ):
+            remote_ids = {
+                str(item.get("catalog_id"))
+                for item in out.get("items") or []
+                if isinstance(item, dict) and item.get("catalog_id")
+            }
+            _resources.reconcile_local_installs(context, tenant_id, remote_ids)
+
         out["items"] = _resources.merge_local_skill_state(context, out.get("items") or [])
         out["context_id"] = context.context_id
         # 旧 publish_id 安装：保留作回退材料，提示需重装，永不可执行。
