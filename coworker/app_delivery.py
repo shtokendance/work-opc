@@ -73,7 +73,7 @@ class AppDelivery:
 
     def public(self, job_id):
         data = self.load(job_id)
-        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published")}
+        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "resources")}
         proposal = data.get("proposal")
         if proposal:
             source = self.path(job_id) / "review/source"
@@ -84,7 +84,7 @@ class AppDelivery:
                 new = redacted(change["content"], change["path"])
                 changes.append({"id": change["id"], "path": change["path"], "reason": change["reason"], "diff": "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=change["path"] + " (原始)", tofile=change["path"] + " (建议)"))})
             configs = [{**c, "has_original_value": bool(original_value(source, c["source"])) if c.get("source") else False} for c in proposal["contract"].get("configs", [])]
-            result["proposal"] = {"summary": proposal["summary"], "issues": proposal["issues"], "unresolved": proposal.get("unresolved", []), "changes": changes, "configs": configs, "apis": proposal["contract"].get("apis", []), "pages": proposal["contract"].get("pages", []), "health_path": proposal["contract"].get("health", {}).get("path"), "verification_plan": proposal["contract"].get("verification", {})}
+            result["proposal"] = {"summary": proposal["summary"], "issues": proposal["issues"], "unresolved": proposal.get("unresolved", []), "changes": changes, "configs": configs, "detected_resources": proposal["contract"].get("resources", []), "apis": proposal["contract"].get("apis", []), "pages": proposal["contract"].get("pages", []), "health_path": proposal["contract"].get("health", {}).get("path"), "verification_plan": proposal["contract"].get("verification", {})}
             # This authenticated local UI response is separate from the exported manifest/skill.
             # Original credentials remain in the local source and are only sent as runtime inputs
             # after the user confirms the final configuration, never to the analysis model.
@@ -395,6 +395,21 @@ Required credential VALUES are entered in the later protected configuration step
 declare secret configs with empty defaults instead of making their later entry an unresolved question.
 For DTO fields visible in source, include their actual properties/types in request and response schemas,
 including nested response wrappers; do not replace known structures with an empty object schema.
+When available_resource_metadata lists server foundation services (e.g. PostgreSQL, Redis, MinIO S3):
+- For compatible database/cache/object-storage connections, align contract.configs[].key with the server
+  resource's env_keys (e.g. DATABASE_URL, PGHOST, REDIS_URL, S3_ENDPOINT) or support those env_keys in your
+  proposed startup/config wrapper while keeping original source references by default (never auto-bind).
+- In issues and summary, explain foundation service replacement and migration requirements in plain Chinese:
+  (1) Same-engine DB replacement: state that switching to the server DB uses a new instance (local data is not
+      auto-copied), and explicitly state whether the app auto-creates tables/migrations on startup or requires
+      manual schema/table initialization (offer to add startup schema creation if the user asks).
+  (2) Redis/cache replacement: state that cache can be switched directly in Step 3 without data migration.
+  (3) Local JSON/SQLite/upload file storage: state that container local files reset on redeploy; the user can
+      either keep local files for quick pilot testing, or ask AI in feedback to refactor storage to the server's
+      shared PostgreSQL / MinIO S3 and add automatic initialization.
+- Whenever source files are sufficient to build a working container, ALWAYS submit a complete, buildable
+  proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.0.0.0 and PORT=container_port)
+  even if non-fatal unresolved confirmation questions remain, so the user can accept default recommendations.
 """
         engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=60, model_settings={"max_tokens": 16000})
         prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": data["resources"], "user_answers": data.get("feedback", ""), "task": "分析应用并提交完整修改提案和业务契约。先用工具读取源码。目标为 Linux 容器部署，业务技能必须包含确定的完整 URL。"}, ensure_ascii=False)
@@ -521,13 +536,15 @@ including nested response wrappers; do not replace known structures with an empt
         if data["status"] != "review" or body.get("proposal_hash") != data["proposal_hash"]:
             raise ValueError("提案已变化或尚未分析完成，请重新检查")
         proposal = data["proposal"]
-        if proposal.get("unresolved"):
+        ignore_unresolved = bool(body.get("ignore_unresolved"))
+        if proposal.get("unresolved") and not ignore_unresolved:
             raise ValueError("请先回答所有待确认问题")
         work = self.path(job_id) / "review"
         current, _ = delivery.inspect_source(work / "source")
         if current != delivery.load(work / "inventory.json")["files"]:
             raise ValueError("原始源码在分析后发生变化，请重新选择源码并确认新提案")
-        self.validate_proposal(data, work / "source", proposal)
+        effective_proposal = {**proposal, "unresolved": [], "contract": {**proposal.get("contract", {}), "unresolved": []}} if ignore_unresolved else proposal
+        self.validate_proposal(data, work / "source", effective_proposal)
         expected = {c["id"] for c in proposal["changes"]}
         if set(body.get("approved_changes", [])) != expected or body.get("confirm_config_changes") is not True:
             raise ValueError("每项源码和配置变更都必须批准；不接受隐式审批")
@@ -545,7 +562,7 @@ including nested response wrappers; do not replace known structures with an empt
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(change["content"])
                 path.chmod(0o700 if executable else 0o600)
-            delivery.save(staging / "app-contract.json", proposal["contract"])
+            delivery.save(staging / "app-contract.json", effective_proposal["contract"])
             delivery.save(staging / "review.json", {"kind": "human", "source": "Work-OPC 向导对本提案摘要和逐项文件/配置变更的明确确认：" + data["proposal_hash"], "approved_issue_ids": sorted(expected) or ["NO_SOURCE_CHANGES"], "unresolved": []})
             (staging / "analysis.md").write_text(proposal["summary"] + "\n" + json.dumps(proposal["issues"], ensure_ascii=False))
             out = self.path(job_id) / "bundle"

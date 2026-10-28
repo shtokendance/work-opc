@@ -4360,6 +4360,7 @@ export interface AppDeliveryJob {
   proposal_hash?: string;
   artifact_hash?: string;
   published?: boolean;
+  resources?: ResourceSummary[];
   artifacts?: Record<string, string>;
   manifest?: { configs: AppConfigItem[]; container_port: number };
   runtime_configs?: AppConfigItem[];
@@ -4369,6 +4370,7 @@ export interface AppDeliveryJob {
     unresolved: unknown[];
     changes: { id: string; path: string; reason: string; diff: string }[];
     configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean; has_original_value?: boolean; source?: { path: string; keys: (string | number)[] } }[];
+    detected_resources?: { id?: string; type?: string; purpose?: string; env?: string[]; current_hint?: string }[];
     apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
     pages: { path: string; purpose: string }[];
     health_path?: string;

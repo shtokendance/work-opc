@@ -70,4 +70,38 @@ describe("App delivery approval", () => {
     expect(await screen.findByText("保留原配置值")).toBeTruthy();
     expect(screen.queryByText("秘密值：运行时提供")).toBeNull();
   });
+
+  it("shows server foundation service migration guidance and allows bypassing non-blocking questions when changes exist", async () => {
+    const onReady = vi.fn();
+    vi.mocked(getAppDeliveryJob).mockResolvedValue({
+      ...plan,
+      resources: [
+        { id: "pg-main", name: "平台共享 PostgreSQL", type: "postgres", description: "内网共享数据库", env_keys: ["DATABASE_URL"] },
+        { id: "redis-main", name: "平台共享 Redis", type: "redis", description: "内网共享缓存", env_keys: ["REDIS_HOST"] },
+      ],
+      proposal: {
+        ...plan.proposal,
+        unresolved: ["是否仅用于受控试点？"],
+      },
+    });
+    vi.mocked(appDeliveryRequest).mockResolvedValue({ ...plan, status: "ready", artifact_hash: "artifact" });
+    render(<AppDeliveryReview jobId="job" onReady={onReady} />);
+    expect(await screen.findByText(/平台共享 PostgreSQL/)).toBeTruthy();
+    expect(screen.getByText(/本机原有数据不会自动搬迁/)).toBeTruthy();
+    expect(screen.getByText(/缓存数据属于临时状态，无需迁移/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "一键全选修改并确认方案" }));
+    const approveBtn = screen.getByRole("button", { name: "批准所选修改并生成交付包" }) as HTMLButtonElement;
+    expect(approveBtn.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "这些问题不影响，直接按默认方案继续" }));
+    expect(approveBtn.disabled).toBe(false);
+    fireEvent.click(approveBtn);
+    await waitFor(() => expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/approve", {
+      proposal_hash: "fixed-plan",
+      approved_changes: ["C1"],
+      confirm_config_changes: true,
+      ignore_unresolved: true,
+    }));
+  });
 });

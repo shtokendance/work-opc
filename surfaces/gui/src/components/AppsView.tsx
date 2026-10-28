@@ -736,7 +736,7 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 2 */}
               {step === 2 && (jobId
-                ? <AppDeliveryReview jobId={jobId} onReady={deliveryReady} onReplaceSource={() => setStep(1)} />
+                ? <AppDeliveryReview jobId={jobId} onReady={deliveryReady} onReplaceSource={() => setStep(1)} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
