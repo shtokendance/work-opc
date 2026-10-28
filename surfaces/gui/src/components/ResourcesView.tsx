@@ -9,7 +9,6 @@ import {
   assertSafeExternalUrl,
   buildResourceWebUrl,
   enterpriseResources,
-  uploadHomeUrl,
   type ResourceItem,
   type ResourceListEnvelope,
   type ResourceRequestError,
@@ -206,14 +205,6 @@ export function ResourcesView({
             />
             <span>{t("common.refresh", "刷新")}</span>
           </button>
-
-          <button
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-xs font-medium shadow-xs transition-colors shrink-0"
-            onClick={() => openUrlSafely(uploadHomeUrl())}
-          >
-            <Icon name="plus" size={13} />
-            <span>{t("resources.upload", "上传")}</span>
-          </button>
         </div>
       </div>
 
@@ -302,18 +293,11 @@ export function ResourcesView({
             <h3 className="text-ui font-semibold text-ink mb-1">
               {t("resources.empty", "暂无可访问资源")}
             </h3>
-            <p className="text-xs text-muted max-w-sm mb-5">
+            <p className="text-xs text-muted max-w-sm">
               {q
                 ? "未检索到匹配的知识库，请尝试更换关键词"
-                : "当前空间下暂无知识库资产，可点击下方按钮前往知识库系统进行创建与上传。"}
+                : "当前空间下暂无可访问的知识库资产，可联系管理员在知识库系统进行创建与授权。"}
             </p>
-            <button
-              onClick={() => openUrlSafely(uploadHomeUrl())}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:opacity-90 text-white text-xs font-medium shadow-xs transition-colors"
-            >
-              <Icon name="plus" size={13} />
-              <span>{t("resources.upload", "上传")}</span>
-            </button>
           </div>
         )}
 

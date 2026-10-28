@@ -147,7 +147,6 @@ const SET_GROUPS: { name: string; nameKey?: string; scope: "app" | "machine" | "
       { key: "models", label: "Models & Keys", labelKey: "settings.tab.models", icon: "code" },
       { key: "connectors", label: "Connectors", labelKey: "nav.connectors", icon: "plug" },
       { key: "context", label: "Context optimization", labelKey: "settings.tab.context", icon: "refresh" },
-      { key: "skills", label: "Skills", labelKey: "settings.tab.skills", icon: "book" },
       { key: "memory", label: "Memory", labelKey: "settings.tab.memory", icon: "archive" },
       { key: "sandbox", label: "Sandbox", labelKey: "settingsx.tab.sandbox", icon: "shield" },
       { key: "personas", label: "Coworkers", labelKey: "settings.tab.personas", icon: "sparkle" },

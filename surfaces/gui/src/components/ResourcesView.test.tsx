@@ -96,7 +96,7 @@ describe("ResourcesView", () => {
     expect(screen.getByText(/UPSTREAM_UNAVAILABLE/)).toBeTruthy();
   });
 
-  it("详情 opens only exact-origin URLs; 上传 opens the bare homepage", async () => {
+  it("详情 opens only exact-origin URLs", async () => {
     mockList({
       items: [item()],
       total: 1,
@@ -113,7 +113,5 @@ describe("ResourcesView", () => {
     expect(openSpy).toHaveBeenCalledWith(
       "https://shtokendance.benlai.com/platform/knowledge-bases/kb-a?tenant_id=T1",
     );
-    fireEvent.click(screen.getByText("上传"));
-    expect(openSpy).toHaveBeenLastCalledWith("https://shtokendance.benlai.com/");
   });
 });
