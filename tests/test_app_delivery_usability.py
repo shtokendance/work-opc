@@ -1,5 +1,6 @@
 import pytest
 
+from coworker.app_delivery import fingerprint
 from test_app_delivery import service, analyzed, approved_body, create
 
 
@@ -60,3 +61,26 @@ async def test_field_resource_choice_does_not_implicitly_fill_other_required_fie
     body["app_config"][0]["resource_id"] = "not-approved"
     with pytest.raises(ValueError, match="资源选择无效"):
         service.confirm_deployment(job["id"], body)
+
+
+@pytest.mark.asyncio
+async def test_public_exposes_resources_and_approve_can_ignore_nonfatal_unresolved_when_buildable(service):
+    job = await analyzed(service)
+    data = service.load(job["id"])
+    data["resources"] = [{"id": "pg-main", "name": "平台共享 PostgreSQL", "type": "postgres", "env_keys": ["DATABASE_URL"]}]
+    data["proposal"]["unresolved"] = ["是否仅作为内网试点使用？"]
+    data["proposal"]["contract"]["unresolved"] = ["是否仅作为内网试点使用？"]
+    data["proposal"]["contract"]["resources"] = [{"id": "db", "type": "postgres", "purpose": "业务库", "env": ["DATABASE_URL"]}]
+    data["proposal_hash"] = fingerprint(data["proposal"])
+    service.save(data)
+
+    pub = service.public(job["id"])
+    assert pub["resources"][0]["id"] == "pg-main"
+    assert pub["proposal"]["detected_resources"][0]["type"] == "postgres"
+
+    with pytest.raises(ValueError, match="待确认问题"):
+        await service.approve(job["id"], approved_body(pub))
+
+    ready = await service.approve(job["id"], {**approved_body(pub), "ignore_unresolved": True})
+    assert ready["status"] == "ready", ready.get("error")
+

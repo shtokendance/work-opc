@@ -23,7 +23,7 @@ import zipfile
 
 from .invoke_api import execute, valid_origin
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 OWNER = "opc-app-adapter"
 LABEL = "com.opc.app-adapter.run"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
