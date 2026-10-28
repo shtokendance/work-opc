@@ -2154,8 +2154,9 @@ export function App() {
       ) : surface === "audit" ? (
         <AuditView />
       ) : surface === "resources" ? (
-        <div className="overflow-y-auto h-full max-w-4xl mx-auto py-2">
+        <div className="h-full overflow-hidden">
           <ResourcesView
+            onBack={() => setSurface("session")}
             onUseKnowledge={(sel) => {
               // BND-004.2: 使用 → 准备当前会话输入框；不自动发送。
               setKnowledgeScope(sel);
