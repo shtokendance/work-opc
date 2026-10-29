@@ -35,3 +35,6 @@ ocw-stt = { path = "../../../stt" }
 [target.'cfg(target_os = "macos")'.dependencies]
 # Per-query noninteractive reads; keeps the existing keyring entry/ACL intact.
 security-framework = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-version = "0.1"
