@@ -117,7 +117,7 @@ def build_request(contract, operation, params, body, approve_write=False, creden
         if auth["type"] == "bearer":
             headers["Authorization"] = "Bearer " + credential
         else:
-            if auth["header"].lower() in {"host", "cookie", "proxy-authorization", "content-length", "transfer-encoding", "connection", "upgrade"}:
+            if auth["header"].lower() in {"host", "proxy-authorization", "content-length", "transfer-encoding", "connection", "upgrade"}:
                 raise ValueError("invalid authentication header name")
             headers[auth["header"]] = credential
     spec = api.get("request_body")

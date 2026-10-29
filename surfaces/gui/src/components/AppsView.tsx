@@ -62,6 +62,8 @@ export function AppsView({ onBack }: Props) {
   const [selectedResourceIds, setSelectedResourceIds] = useState<string[]>([]);
   const [configs, setConfigs] = useState<AppConfigItem[]>([]);
   const [lastDraft, setLastDraft] = useState<AppDeliveryJob | null>(null);
+  const [reviewTab, setReviewTab] = useState<"config" | "skills" | "changes">("config");
+  useEffect(() => { if (step === 3) setReviewTab("config"); }, [step]);
 
   // Wizard Step 4 state
   const [deploying, setDeploying] = useState(false);
@@ -822,20 +824,208 @@ export function AppsView({ onBack }: Props) {
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
-                <div className="space-y-5">
-                  <section className="border-b border-line pb-4 mb-4 space-y-2">
-                    <h3 className="font-semibold">确认后，应用就会部署到这里</h3>
-                    <p className="text-ui">{name} · 请核对配置和业务能力。确认后才会上传并部署。</p>
-                    <div className="text-xs font-mono break-all">{appUrl}</div>
-                    <details className="text-xs text-muted"><summary className="cursor-pointer">查看交付校验信息</summary><p className="break-all mt-2">{deliveryJob?.artifact_hash}</p></details>
-                    {plan?.verification_plan && !hasBusinessProbe && <p className="text-xs text-warnInk">部署后的业务验证仍待补充：当前没有实际业务查询探针。若需自动启用业务技能，请返回改造报告补充只读查询条件和预期结果；健康检查不能代替业务验证。</p>}
+                <div className="space-y-4">
+                  {/* Compact Top Overview Banner */}
+                  <section className="rounded-2xl border border-line bg-paper/70 px-4 py-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-ink text-sm">确认后，应用就会部署到这里</h3>
+                          <span className="text-xs text-muted">· {name}</span>
+                        </div>
+                        <div className="text-xs font-mono text-accent break-all">{appUrl}</div>
+                      </div>
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${
+                          missingConfigs.length > 0
+                            ? "bg-danger/10 text-danger border border-danger/25"
+                            : "bg-okSoft text-ok border border-okLine"
+                        }`}
+                      >
+                        {missingConfigs.length > 0 ? `待补齐 ${missingConfigs.length} 项配置` : "✓ 配置已就绪"}
+                      </span>
+                    </div>
 
+                    {missingConfigs.length > 0 && (
+                      <p role="alert" className="text-xs text-danger bg-danger/5 border border-danger/20 rounded-xl px-3 py-2">
+                        还需要填写或选择：{missingConfigs.join("、")}。完成后就可以上传部署。
+                      </p>
+                    )}
+
+                    {plan?.verification_plan && !hasBusinessProbe && (
+                      <p className="text-xs text-warnInk bg-warnSoft/40 border border-warnInk/20 rounded-xl px-3 py-2">
+                        部署后的业务验证仍待补充：当前没有实际业务查询探针。若需自动启用业务技能，请返回改造报告补充只读查询条件和预期结果；健康检查不能代替业务验证。
+                      </p>
+                    )}
                   </section>
-                  {missingConfigs.length > 0 && <p role="alert" className="text-ui text-danger">还需要填写或选择：{missingConfigs.join("、")}。完成后就可以上传部署。</p>}
-                  <section className="space-y-3" aria-label="最终运行配置"><h3 className="text-base font-semibold">最终运行配置</h3><AppDeliveryConfig configs={configs} originals={deliveryJob?.runtime_configs || []} resources={onlineResources} onChange={changeConfigs} /></section>
-                  <section className="space-y-3 border-t border-line pt-6" aria-label="生成的业务技能"><h3 className="text-base font-semibold">部署后，AI 能帮你做什么</h3>{deliveryJob && <AppSkillPreview job={deliveryJob} />}</section>
-                  <section className="space-y-3 border-t border-line pt-6" aria-label="本次改造摘要"><h3 className="text-base font-semibold">AI 做了哪些改造</h3><p className="text-ui text-muted">供你了解变化，不需要审核代码。原始文件保留。</p>{[...new Set(plan?.changes.map(c => c.group || c.reason) || [])].map(reason => <p key={reason} className="text-ui">• {reason}</p>)}{!plan?.changes.length && <p className="text-ui">本版无需修改源码。</p>}<details className="text-xs text-muted"><summary className="cursor-pointer">查看文件和修改差异</summary>{plan?.changes.map(change => <details key={change.id} className="mt-3"><summary>{change.path}</summary><p>{change.reason}</p><pre className="whitespace-pre-wrap break-all max-h-64 overflow-auto bg-paper p-3">{change.diff}</pre></details>)}</details></section>
-                  <section className="border-t border-line pt-6 text-ui space-y-2"><h3 className="font-semibold">确认部署后，还会检查什么</h3><p className="text-muted">服务器会实际构建和启动应用，并验证健康状态及可执行的只读业务操作。业务验证通过后才启用技能。</p><details className="text-xs text-muted"><summary className="cursor-pointer">查看已完成的检查</summary>{deliveryJob?.preparation_checks?.map(c => <p key={c.label} className="mt-2">{c.status === "passed" ? "已通过" : "待验证"} · {c.label}：{c.detail}</p>)}</details></section>
+
+                  {/* Segmented Tab Bar */}
+                  <div
+                    role="tablist"
+                    aria-label="部署核对分类"
+                    className="grid grid-cols-3 gap-1.5 p-1.5 rounded-2xl bg-paper border border-line"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={reviewTab === "config"}
+                      onClick={() => setReviewTab("config")}
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                        reviewTab === "config"
+                          ? "bg-panel text-accent shadow-xs border border-line"
+                          : "text-muted hover:text-ink"
+                      }`}
+                    >
+                      <Icon name="sliders" size={14} />
+                      <span>运行配置</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded-full text-[11px] ${
+                          missingConfigs.length > 0
+                            ? "bg-danger/15 text-danger"
+                            : reviewTab === "config"
+                            ? "bg-accentSoft text-accent"
+                            : "bg-panel text-muted"
+                        }`}
+                      >
+                        {configs.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={reviewTab === "skills"}
+                      onClick={() => setReviewTab("skills")}
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                        reviewTab === "skills"
+                          ? "bg-panel text-accent shadow-xs border border-line"
+                          : "text-muted hover:text-ink"
+                      }`}
+                    >
+                      <Icon name="sparkle" size={14} />
+                      <span>应用技能</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded-full text-[11px] ${
+                          reviewTab === "skills" ? "bg-accentSoft text-accent" : "bg-panel text-muted"
+                        }`}
+                      >
+                        {(plan?.apis?.length || 0) + (plan?.pages?.length || 0)}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={reviewTab === "changes"}
+                      onClick={() => setReviewTab("changes")}
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                        reviewTab === "changes"
+                          ? "bg-panel text-accent shadow-xs border border-line"
+                          : "text-muted hover:text-ink"
+                      }`}
+                    >
+                      <Icon name="fileCode" size={14} />
+                      <span>改造与检查</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded-full text-[11px] ${
+                          reviewTab === "changes" ? "bg-accentSoft text-accent" : "bg-panel text-muted"
+                        }`}
+                      >
+                        {plan?.changes?.length || 0}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Tab 1: 运行配置 */}
+                  {reviewTab === "config" && (
+                    <section className="space-y-3" aria-label="最终运行配置">
+                      <AppDeliveryConfig
+                        configs={configs}
+                        originals={deliveryJob?.runtime_configs || []}
+                        resources={onlineResources}
+                        onChange={changeConfigs}
+                      />
+                    </section>
+                  )}
+
+                  {/* Tab 2: 应用技能 */}
+                  {reviewTab === "skills" && (
+                    <section className="space-y-3" aria-label="生成的业务技能">
+                      {deliveryJob && <AppSkillPreview job={deliveryJob} />}
+                    </section>
+                  )}
+
+                  {/* Tab 3: 改造与检查 */}
+                  {reviewTab === "changes" && (
+                    <div className="space-y-4">
+                      <section className="rounded-xl border border-line bg-panel p-4 space-y-3" aria-label="本次改造摘要">
+                        <div>
+                          <h3 className="text-sm font-semibold text-ink">AI 做了哪些改造</h3>
+                          <p className="text-xs text-muted mt-0.5">供你了解变化，不需要审核代码。原始文件始终保留。</p>
+                        </div>
+                        <div className="space-y-1.5">
+                          {[...new Set(plan?.changes.map(c => c.group || c.reason) || [])].map(reason => (
+                            <p key={reason} className="text-ui text-ink flex items-start gap-2">
+                              <span className="text-ok mt-0.5">✓</span>
+                              <span>{reason}</span>
+                            </p>
+                          ))}
+                          {!plan?.changes.length && <p className="text-ui text-muted">本版无需修改源码。</p>}
+                        </div>
+                        {!!plan?.changes.length && (
+                          <details className="text-xs text-muted pt-2 border-t border-line">
+                            <summary className="cursor-pointer text-accent font-medium select-none">
+                              查看具体文件和修改差异（{plan.changes.length} 个文件）
+                            </summary>
+                            <div className="space-y-2.5 mt-2.5">
+                              {plan.changes.map(change => (
+                                <details key={change.id} className="rounded-lg border border-line bg-paper/50 p-2.5">
+                                  <summary className="cursor-pointer font-mono text-ink font-medium">
+                                    {change.path}
+                                  </summary>
+                                  <p className="text-muted mt-1 mb-2">{change.reason}</p>
+                                  <pre className="whitespace-pre-wrap break-all max-h-60 overflow-auto bg-panel p-2.5 rounded-lg font-mono text-[11px] text-ink">
+                                    {change.diff}
+                                  </pre>
+                                </details>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </section>
+
+                      <section className="rounded-xl border border-line bg-panel p-4 space-y-3 text-ui">
+                        <div>
+                          <h3 className="text-sm font-semibold text-ink">确认部署后，还会检查什么</h3>
+                          <p className="text-xs text-muted mt-0.5">
+                            服务器会实际构建和启动应用，并验证健康状态及可执行的只读业务操作。业务验证通过后才启用技能。
+                          </p>
+                        </div>
+                        {!!deliveryJob?.preparation_checks?.length && (
+                          <div className="space-y-1.5 pt-1">
+                            {deliveryJob.preparation_checks.map(c => (
+                              <div
+                                key={c.label}
+                                className="flex items-start gap-2 rounded-lg bg-paper/60 border border-line/60 px-3 py-2 text-xs"
+                              >
+                                <span>{c.status === "passed" ? "✅" : "⏳"}</span>
+                                <div>
+                                  <span className="font-medium text-ink">{c.label}</span>
+                                  <span className="text-muted"> · {c.status === "passed" ? "已通过" : "待验证"}：{c.detail}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {deliveryJob?.artifact_hash && (
+                          <details className="text-xs text-muted pt-2 border-t border-line">
+                            <summary className="cursor-pointer hover:text-ink select-none">查看交付校验信息</summary>
+                            <p className="break-all mt-1.5 font-mono text-[11px]">{deliveryJob.artifact_hash}</p>
+                          </details>
+                        )}
+                      </section>
+                    </div>
+                  )}
                 </div>
               )}
 

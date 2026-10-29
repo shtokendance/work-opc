@@ -23,7 +23,7 @@ import zipfile
 
 from .invoke_api import execute, valid_origin
 
-VERSION = "0.2.7"
+VERSION = "0.2.9"
 OWNER = "opc-app-adapter"
 LABEL = "com.opc.app-adapter.run"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -31,7 +31,7 @@ SLUG = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 EXCLUDED = {".git", ".svn", ".hg", "node_modules", ".venv", "venv", "__pycache__", ".idea", "__MACOSX", ".DS_Store"}
 SECRET_KEY = r"(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key(?:id|secret)?|client[_-]?secret|token|dsn|connectionstring)"
 ASSIGNMENT = re.compile(r"(?i)[\w.-]*" + SECRET_KEY + r"[\w.-]*[\"']?\s*(?::=|[:=])\s*(?:[\"']([^\"'\n]*)[\"']|([^\s,;{}]+))")
-CODE_SUFFIXES = {".go", ".py", ".java", ".cs", ".js", ".ts", ".jsx", ".tsx"}
+CODE_SUFFIXES = {".go", ".py", ".java", ".cs", ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx"}
 CREDENTIAL_URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
 SENSITIVE_ENV = re.compile(r"(?:^|_)(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|PRIVATE_KEY|DSN|CONNECTION_STRING|CONNECTIONSTRING)$", re.I)
 
@@ -72,6 +72,15 @@ def valid_url(value):
 
 def secret_lines(text, source_name=""):
     findings = []
+    scripts = {}
+    if Path(source_name).name == "package.json":
+        try:
+            package = json.loads(text)
+            scripts = package.get("scripts", {}) if isinstance(package, dict) else {}
+            if not isinstance(scripts, dict):
+                scripts = {}
+        except ValueError:
+            pass
     for number, line in enumerate(text.splitlines(), 1):
         if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
             findings.append(number)
@@ -80,6 +89,17 @@ def secret_lines(text, source_name=""):
             findings.append(number)
             continue
         for match in ASSIGNMENT.finditer(line):
+            # JS ternary labels, e.g. ? "new-password" : "current-password",
+            # are UI strings rather than a key/value credential assignment.
+            prefix = line[:match.start()]
+            if Path(source_name).suffix in CODE_SUFFIXES and re.search(r"\?\s*[\"']$", prefix):
+                continue
+            # A script name is not a credential; still inspect its command.
+            key = re.split(r"[:=]", match.group(0), maxsplit=1)[0].strip().strip('"\'')
+            if key in scripts and match.group(1) == scripts[key]:
+                if secret_lines(scripts[key], "command.sh"):
+                    findings.append(number)
+                continue
             # An expression such as AccessKeySecret: tea.String(cfg.Key) is not a literal credential.
             if Path(source_name).suffix in CODE_SUFFIXES and match.group(1) is None:
                 continue
@@ -218,10 +238,9 @@ def context_files(work, contract):
             if not item.is_file():
                 continue
             name = item.relative_to(source).as_posix()
-            require(not any(part in EXCLUDED or (part.startswith(".env") and part not in {".env.example", ".env.template"}) or part.startswith("id_rsa") for part in item.relative_to(source).parts), "forbidden build input: " + name)
-            text = text_of(item) if item.stat().st_size <= 2_000_000 else None
-            if text is not None:
-                require(not secret_lines(text, name), "possible secret in build input: " + name)
+            # Phase one preserves supplied application config/data, including .env and
+            # credentials. Redaction still applies to AI views, never to archive bytes.
+            require(not any(part in EXCLUDED for part in item.relative_to(source).parts), "forbidden build input: " + name)
             files[name] = item
     require("Dockerfile" in files, "build_context must include the actual Dockerfile")
     return files
@@ -283,7 +302,7 @@ def check_work(work):
         if auth["type"] != "none":
             require(ENV_NAME.fullmatch(auth.get("env", "")), "declare credential environment variable, not its value")
         if auth["type"] == "header":
-            require(auth.get("header") and auth["header"].lower() not in {"host", "cookie", "proxy-authorization"}, "invalid authentication header")
+            require(auth.get("header") and auth["header"].lower() not in {"host", "proxy-authorization", "content-length", "transfer-encoding", "connection", "upgrade"}, "invalid authentication header")
     for page in contract.get("pages", []):
         require(page.get("path", "").startswith("/") and not page["path"].startswith("//") and page.get("purpose") and page.get("evidence") and isinstance(page.get("actions"), list), "incomplete page contract")
         require(all(isinstance(action, (str, dict)) for action in page["actions"]), "page actions must be text or structured objects")

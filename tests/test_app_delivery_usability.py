@@ -39,10 +39,94 @@ async def test_handoff_contains_targets_and_evidence_but_not_runtime_values(serv
     assert service.load(job["id"])["status"] == "review"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('always_invalid', [False, True])
+async def test_packaging_validation_is_repaired_in_same_round_or_stops(service, always_invalid):
+    from test_app_delivery import proposal, ConfiguredProvider
+    from coworker.providers.base import AssistantTurn, ToolCall
+
+    class RepairProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            candidate = proposal()
+            if always_invalid or len(self.calls) == 1:
+                candidate['contract']['apis'][0]['request_body'] = {'schema': {'type': 'object'}}
+            return AssistantTurn(tool_calls=[ToolCall(f'submit-{len(self.calls)}', 'submit_proposal', candidate)])
+
+    service.manager.provider = RepairProvider()
+    job = create(service)
+    service.launch_analysis(job['id'], '保留原值')
+    await service.tasks[job['id']]
+    result = service.load(job['id'])
+    assert result['revision'] == 1
+    assert result['feedback'] == '保留原值'
+    assert (service.path(job['id']) / 'review/source/main.py').read_text() == "print('original')\n"
+    if always_invalid:
+        assert result['status'] == 'failed'
+        assert '停止自动重试' in result['error']
+        assert len(service.manager.provider.calls) == 6
+    else:
+        assert result['status'] == 'review'
+        assert len(service.manager.provider.calls) == 2
+
+
 def test_handoff_cannot_precede_analysis(service):
     job = create(service)
     with pytest.raises(ValueError, match="分析完成"):
         service.handoff(job["id"])
+
+
+@pytest.mark.asyncio
+async def test_phase_one_preserves_config_json_sqlite_in_app_but_not_skill_or_model(service, tmp_path):
+    import json
+    import sqlite3
+    import tarfile
+    import zipfile
+    from test_app_delivery import proposal, ConfiguredProvider
+    from coworker.providers.base import AssistantTurn, ToolCall
+
+    original = tmp_path / 'original-app'
+    original.mkdir()
+    (original / 'main.py').write_text("print('original')\n")
+    (original / 'Dockerfile').write_text('FROM python:3.11-alpine\nWORKDIR /app\nCOPY . .\nCMD ["python", "main.py"]\n')
+    (original / '.env').write_text('PASSWORD=original-env-value\n')
+    (original / 'data.json').write_text('{"passwordHash":"existing-account-hash","supplier":"original"}')
+    with sqlite3.connect(original / 'business.sqlite') as db:
+        db.execute('CREATE TABLE records (id INTEGER, value TEXT)')
+        db.execute("INSERT INTO records VALUES (1, 'existing-business-record')")
+    preserved = {name: (original / name).read_bytes() for name in ['.env', 'data.json', 'business.sqlite']}
+
+    class DataProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            self.model_messages = repr(messages)
+            if len(self.calls) == 1:
+                return AssistantTurn(tool_calls=[ToolCall('env', 'read_source', {'path': '.env'}), ToolCall('data', 'read_source', {'path': 'data.json'})])
+            candidate = proposal()
+            candidate['contract']['build_context'].extend(preserved)
+            return AssistantTurn(tool_calls=[ToolCall('submit', 'submit_proposal', candidate)])
+
+    service.manager.provider = DataProvider()
+    job = service.create({'name': 'Test', 'slug': 'test-app', 'app_url': 'http://test-app.apps.localhost'}, original)
+    service.launch_analysis(job['id'], '原样保留所有配置和数据')
+    await service.tasks[job['id']]
+    result = service.public(job['id'])
+    assert result['status'] == 'review'
+    assert not result['proposal']['unresolved']
+    assert 'original-env-value' not in service.manager.provider.model_messages
+    assert 'existing-account-hash' not in service.manager.provider.model_messages
+    ready = await service.approve(job['id'], {'proposal_hash': result['proposal_hash']}, technical_preparation=True)
+    assert ready['status'] == 'ready'
+    folder = service.path(job['id']) / 'bundle'
+    with tarfile.open(folder / 'app.tar') as archive:
+        for name, content in preserved.items():
+            assert archive.extractfile(name).read() == content
+            assert (original / name).read_bytes() == content
+    with zipfile.ZipFile(folder / 'skill.zip') as skill:
+        text = b'\n'.join(skill.read(name) for name in skill.namelist())
+        assert b'original-env-value' not in text and b'existing-account-hash' not in text
+        assert b'existing-business-record' not in text
+    assert not json.loads((folder / 'app-manifest.json').read_text())['configs']
 
 
 @pytest.mark.asyncio
@@ -249,3 +333,62 @@ async def test_followup_keeps_question_context_for_short_natural_answers(service
     assert previous["unresolved"] == ["数据库怎么连接？"]
     assert previous["decisions"][0]["options"] == ["保留原值", "使用测试库"]
     assert service.load(job["id"])["feedback"] == "保留原值"
+
+
+def test_npm_script_names_are_not_credentials_but_command_secrets_are():
+    import json
+    from coworker.app_delivery_skill.scripts import delivery
+    assert delivery.secret_lines(json.dumps({'scripts': {'change-password': 'node scripts/change-password.mjs'}}, indent=2), 'package.json') == []
+    assert delivery.secret_lines(json.dumps({'scripts': {'change-password': 'PASSWORD=real-secret node reset.mjs'}}, indent=2), 'package.json')
+    assert delivery.secret_lines('{"password": "real-secret"}', 'package.json')
+    assert not delivery.secret_lines('const field = isNew ? "new-password" : "current-password";', 'login.js')
+    assert delivery.secret_lines('const config = ok ? {password: "real-secret"} : {};', 'login.js')
+    for suffix in ('mjs', 'cjs'):
+        assert not delivery.secret_lines('const token = randomUUID();\npasswordHash: hashPassword(body.password),\ncandidate.passwordHash === hashPassword(body.password)', 'server.' + suffix)
+        assert delivery.secret_lines('const token = "real-secret";', 'server.' + suffix)
+
+
+@pytest.mark.asyncio
+async def test_preflight_catches_packaging_errors_without_mutating_source(service):
+    import copy
+    from coworker.app_delivery import AppDelivery
+    job = await analyzed(service)
+    work = service.path(job['id']) / 'review'
+    source = work / 'source/main.py'
+    before = source.read_bytes()
+    proposal = copy.deepcopy(service.load(job['id'])['proposal'])
+    proposal['contract']['apis'][0]['request_body'] = {'schema': {'type': 'object'}}
+    with pytest.raises(ValueError, match='request body needs schema'):
+        AppDelivery.preflight_proposal(work, proposal)
+    proposal['contract']['apis'][0]['request_body']['required'] = False
+    AppDelivery.preflight_proposal(work, proposal)
+    proposal['changes'][0]['content'] = 'password = "actual-secret"\n'
+    AppDelivery.preflight_proposal(work, proposal)  # original app credentials are no longer a packaging gate
+    assert source.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_existing_cookie_auth_can_be_described_without_changing_application_login(service):
+    from coworker.app_delivery_skill.scripts.invoke_api import build_request
+    job = await analyzed(service)
+    plan = service.load(job['id'])['proposal']
+    contract = plan['contract']
+    contract['apis'][0]['auth'] = {'type': 'header', 'header': 'Cookie', 'env': 'APP_SESSION_COOKIE'}
+    service.preflight_proposal(service.path(job['id']) / 'review', plan)
+    request = build_request(contract, 'lookup', {}, None, credential_env={'APP_SESSION_COOKIE': 'sid=fixture-session'})
+    assert request.get_header('Cookie') == 'sid=fixture-session'
+    assert request.full_url == 'http://test-app.apps.localhost/lookup'
+    with pytest.raises(ValueError, match='missing credential'):
+        build_request(contract, 'lookup', {}, None, credential_env={})
+    with pytest.raises(ValueError, match='invalid header name/value'):
+        build_request(contract, 'lookup', {}, None, credential_env={'APP_SESSION_COOKIE': 'sid=fixture\r\nHost: other'})
+
+
+@pytest.mark.asyncio
+async def test_ready_proposal_must_meet_actual_platform_health_route(service):
+    job = await analyzed(service)
+    data = service.load(job['id'])
+    proposal = data['proposal']
+    proposal['contract']['health'] = {'path': '/api/health', 'status': 200, 'json_contains': {'ok': True}}
+    with pytest.raises(ValueError, match='部署平台固定检查 /healthz'):
+        service.validate_proposal(data, service.path(job['id']) / 'review/source', proposal)

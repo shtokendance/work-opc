@@ -373,7 +373,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               role="alert"
               className="flex-1 rounded-2xl rounded-tl-xs border border-danger/30 bg-danger/5 p-4 space-y-3"
             >
-              <div className="text-xs font-medium text-danger">遇到未完成的问题，可点击下方按钮让 AI 直接处理：</div>
+              <div className="text-xs font-medium text-danger">技术准备未通过。你已回答的选择会保留，无需重复确认；AI 需要修正下面的检查问题。</div>
               <p className="text-ink whitespace-pre-wrap leading-relaxed font-mono text-xs bg-panel/80 p-3 rounded-xl border border-danger/20">
                 {activeError}
               </p>

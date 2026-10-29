@@ -117,6 +117,10 @@ describe("AppsView Component", () => {
     expect(value.value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "恢复原值" }));
     expect(value.value).toBe("OPC_TEST_KEEP_ORIGINAL");
+    fireEvent.click(screen.getByRole("tab", { name: /应用技能/ }));
+    expect(screen.getByLabelText("生成的业务技能")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /改造与检查/ }));
+    expect(screen.getByLabelText("本次改造摘要")).toBeTruthy();
   });
   it("allows selecting new source for the same failed application without treating its slug as a new collision", async () => {
     const original = await listDeployedApps();

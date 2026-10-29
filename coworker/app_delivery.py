@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import uuid
 import zipfile
 
@@ -197,8 +198,8 @@ class AppDelivery:
 处理要求：
 1. 阅读实际入口、配置、依赖、页面和接口，先用普通人能理解的语言说明应用用途、要改哪里、为什么，以及是否影响业务。
 2. 自动完成 Dockerfile、启动方式等技术适配，不要求我审查代码。保留原业务行为、原数据和原连接；数据库、Redis、MongoDB、外部服务等任何连接替换，以及业务或数据变更，必须单独让我确认。
-3. 所有原配置默认保留，包括密码、密钥、端口和连接地址。不要因为被遮盖就清空。只有确切的部署冲突才建议调整，不要把所有内网 IP 判定为不通。无法判断时提问。
-4. 密码和密钥仅在本机处理，不发给模型、不写入交接报告、镜像构建文件或技能。需要运行时注入时保留原值并记录字段映射；请勿把敏感值粘贴到对话。
+3. 所有原配置默认保留，包括密码、密钥、端口和连接地址。不要因为被遮盖就清空。只有确切的部署冲突才建议调整，不要把所有内网 IP 判定为不通。尚未验证的连通性标记待部署验证，不因未知而阻塞。
+4. 一期允许原配置（含密码/.env）、JSON、SQLite、账户和业务数据按原文件进入部署包及镜像，保留原加载方式；不要求拆凭据、安全导入、重新初始化或确认未来数据丢失风险。密码和数据不得复制到模型、交接报告或业务技能。只有实际需要配置覆盖时才增加原值引用和环境变量，不虚构文件导入能力。
 5. 保留原语言、数据库类型、鉴权和业务行为，不换成演示程序，不造数据，不运行生产迁移或外部写操作。未知源码、依赖脚本不要直接在宿主执行。
 6. 按原框架补齐容器构建/启动、正确监听地址和端口、同一服务的 /healthz 健康接口。健康响应需标识 service={data['slug']}。
 7. 生成应用业务技能：写明真实完整 URL、页面用途和操作方式、每个 API 的参数/请求体/返回值/认证、常用业务流程。区分只读、写入、删除和外部操作，后三类调用前必须确认。不把接口列表当成完整业务技能。
@@ -328,7 +329,7 @@ class AppDelivery:
 
         def read_adapter_reference(name: str) -> str:
             """Read the adapter contract.md or framework-checks.md reference."""
-            if name not in {"contract.md", "framework-checks.md"}:
+            if name not in {"contract.md", "framework-checks.md", "preparation-checks.md"}:
                 raise ValueError("Unknown adapter reference")
             return (SKILL / "references" / name).read_text()
 
@@ -374,6 +375,8 @@ class AppDelivery:
                     resolved.append(change)
                 candidate["changes"] = resolved
                 self.validate_proposal(data, source, candidate)
+                if not candidate.get("unresolved") and not candidate["contract"].get("unresolved"):
+                    self.preflight_proposal(work, candidate)
             except (ValueError, OSError) as exc:
                 reason = redacted(str(exc))[:1000]
                 validation_errors.append(reason)
@@ -457,6 +460,20 @@ for an explanation instead of agreeing. If one clear proposal was asked, an affi
 approve that proposal only. Keep remaining questions, with what is still missing and why.
 For technical code defects, investigate and repair in the isolated proposal without asking users to
 debug. Ask about business intent only if a fix changes behavior or cannot be inferred from code.
+PHASE ONE POLICY (supersedes older plans/history discussing credential splitting or protected import):
+Preserve the supplied application's existing passwords, keys, config files (including .env), JSON,
+SQLite, account records, uploads and business data byte-for-byte wherever no deployment change is
+required. Include required original files in build_context and Docker COPY without reconstructing
+redacted content. Credentials in original deployment inputs are permitted; their presence alone is
+NOT a blocker. Do not request protected import, credential extraction, new storage, initialization,
+security hardening or repeated acceptance of container data-loss risk. Preserve existing file paths
+and loading behavior. Mention future persistence limitations only as optional information.
+Only adapt what deploy-opc needs: actual build/start entrypoint, dependencies, target port/listening,
+required runtime assets and health route. Ask only when a demonstrated deployment incompatibility
+cannot be resolved without a user choice. Unknown connectivity is not proven failure. Preserve the
+original connections unless concrete evidence proves they cannot work from the target container or
+the user requests replacement. Never remove auth or data to pass checks. Do not copy credential
+values into AI messages, contracts, reports or business skill packages.
 Preparation checks here validate structure and packaging; there is NO compiler, Docker or network tool
 in this analysis runtime. Never claim a build, connection or business test passed. Local connection
 failures do not prove target-server failures. Work separately checks required configuration sources.
@@ -466,7 +483,7 @@ logic, auth, data and existing infrastructure values unchanged. Ask only for a r
 blocker or a user decision that changes a connection, storage engine, business behavior or data.
 All database/Redis/MongoDB/external-service connection replacements still require user selection;
 keep configs.source mapped to the original values, never replace them as part of technical preparation.
-Use environment inputs for connections. Never auto-select an online resource, change database type,
+Preserve existing connection loading; add environment overrides only when necessary. Never auto-select an online resource, change database type,
 seed data, execute migrations, disable auth, or replace a backend with a mock/static server.
 Return credential config defaults empty, secret=true. No real secret is available to you.
 Preserve ALL existing configuration unless the user explicitly requests a change or a concrete
@@ -476,21 +493,18 @@ exact {"path":"conf/config.yaml","keys":["databases","devops-db","dsn"]} referen
 read_source metadata. Work reads this value locally, preserves it in the protected configuration
 step, and injects it at runtime after confirmation. This works for non-secret values too.
 Do NOT replace existing passwords/keys/DSNs/endpoints with empty defaults or invented values.
-Credentials must still stay out of build inputs and skill packages: propose runtime environment
-overrides/template loading, preserving all unrelated settings. source references retain the original
-value even when secret default is empty; they never put that value into model context or artifacts.
-Platform deployment provides runtime environment variables, not arbitrary host-file mounts. You
-already have this capability information; do not ask the user to research it. If the application
-loads a YAML/JSON config file but has no verified environment expansion, propose a secret-free
-template plus a container startup wrapper. Keep all original non-secret fields; inject the locally
-retained source values from environment variables using structural parsing and safe serialization,
-write a private runtime-only file, then exec the verified original CLI with its correct path rules.
-Explicitly include the wrapper, template, parsing dependency and Dockerfile in the changes and build
-inputs. This avoids guessing SDK environment support or sending secret values to the model. All
-Technical preparation is automatic in the isolated copy. Only ask if the actual file-loading entrypoint is also unknown.
+Existing config/data files may stay unchanged in the deployment archive and image. Do not create
+runtime templates, credential wrappers or source mappings just because a file contains secrets.
+configs[].source is optional, used only if an actual necessary or user-requested override is added;
+otherwise keep the original file and loading path without declaring duplicate required environment
+variables. A model-redacted value remains present in the local original file and is packaged locally.
+Platform supports environment inputs, not an invented protected file-import service or arbitrary
+host mounts. Do not ask users to authorize unsupported import mechanisms.
 Do not assume a private/internal address cannot be reached merely because this is a container.
 Only demonstrated loopback/cross-container mistakes or verified network failures justify a warning;
 ask the user to retain or replace the connection in the configuration step. Never auto-bind a resource.
+Existing Cookie-based APIs may use auth={"type":"header","header":"Cookie","env":"APP_SESSION_COOKIE"};
+the user provides an authorized session at invocation, not as a deployment prerequisite. Preserve login.
 Keep existing business write/external APIs, classify their effects and require approval on invocation.
 Do not require permission to CALL them during deployment: they will NOT be called as probes.
 Optional online resources are choices in the next step, not mandatory analysis questions. Preserve
@@ -516,21 +530,23 @@ Only include genuinely blocking user decisions in unresolved. Build/start/probes
 stages, so their not-yet-executed status belongs in summary, never in unresolved. If the proposed official
 multi-architecture image and build support both Linux arm64 and amd64, do not require a choice merely
 to continue; ask only when source/native dependencies actually require a specific architecture decision.
-Required credential VALUES are entered in the later protected configuration step, not in AI feedback;
-declare secret configs with empty defaults instead of making their later entry an unresolved question.
+Only genuinely missing, required NEW environment values belong in the later configuration step,
+not AI feedback. Existing file-based credentials require neither extraction nor re-entry.
 For DTO fields visible in source, include their actual properties/types in request and response schemas,
 including nested response wrappers; do not replace known structures with an empty object schema.
 When available_resource_metadata lists server foundation services (e.g. PostgreSQL, Redis, MinIO S3):
 - For compatible database/cache/object-storage connections, align contract.configs[].key with the server
-  resource's env_keys (e.g. DATABASE_URL, PGHOST, REDIS_URL, S3_ENDPOINT) or support those env_keys in your
-  proposed startup/config wrapper while keeping original source references by default (never auto-bind).
+  resource's env_keys only when the user chooses replacement or a proven incompatibility requires it.
+  Do not add configuration wrappers merely because online resources exist (never auto-bind).
 - In issues and summary, explain foundation service replacement and migration requirements in plain Chinese:
   (1) Same-engine DB replacement: state that switching to the server DB selects that database (local data is not
       auto-copied; the target may already contain data), and explicitly state whether the app auto-creates tables/migrations on startup or requires
       manual schema/table initialization (offer to add startup schema creation if the user asks).
   (2) Redis replacement: inspect its actual use. Only disposable, rebuildable caches may omit migration; sessions and business state need an explicit decision.
   (3) Local file storage: inspect existing persistence. Unmounted writable container data is not durable.
-      Explain this limitation; never claim a volume has been configured without platform support.
+      Keep supplied JSON/SQLite/uploads in the deployment inputs and their original loading paths.
+      Mention this limitation without making it an unresolved question or requiring risk acceptance;
+      never claim a volume has been configured without platform support.
       Changing storage engine or initializing business tables requires a separate explicit user decision.
 - Whenever source files are sufficient to build a working container, ALWAYS submit a complete, buildable
   proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.0.0.0 and PORT=container_port)
@@ -549,6 +565,8 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
                         # A validated tool result is terminal; do not require another model call.
                         if proposal:
                             return
+                        if len(validation_errors) >= 6:
+                            raise ValueError("技术方案连续校验未通过，已停止自动重试；你的选择已保留。最后原因：" + validation_errors[-1])
                         if event.type == EventType.ERROR:
                             raise ValueError(str(event.data.get("message", event.data.get("error", "AI 执行失败"))))
                 if attempt < 2:
@@ -572,6 +590,24 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
                 message = "AI 服务连接中断，原源码和已有回答已保留。请检查模型连接后重新分析。"
             data.update(status="failed", error=message)
         self.save(data)
+
+    @staticmethod
+    def preflight_proposal(work, proposal):
+        """Run the packager's actual checks before accepting an AI result.
+
+        Only a disposable copy is changed. No builds, execution or user approval.
+        """
+        with tempfile.TemporaryDirectory(prefix="opc-proposal-") as folder:
+            stage = Path(folder) / "check"
+            shutil.copytree(work, stage)
+            for change in proposal["changes"]:
+                path = delivery.relative(stage / "source", change["path"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(change["content"])
+            delivery.save(stage / "app-contract.json", proposal["contract"])
+            delivery.save(stage / "review.json", {"kind": "ai-technical", "scope": "deployment-adaptation", "source": "proposal-validation-only", "approved_issue_ids": ["PRECHECK"], "unresolved": []})
+            (stage / "analysis.md").write_text(proposal["summary"])
+            delivery.check_work(stage)
 
     @staticmethod
     def validate_file_change(source, change):
@@ -638,6 +674,10 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
             raise ValueError("模型不能更改已确认的唯一标识或 URL")
         if not proposal.get("unresolved") and contract.get("runtime", {}).get("port") != data["port"]:
             raise ValueError("模型不能静默改变用户选择的容器端口")
+        if not proposal.get("unresolved") and not contract.get("unresolved"):
+            health = contract.get("health", {})
+            if health.get("path") != "/healthz" or health.get("json_contains", {}).get("service") != data["slug"]:
+                raise ValueError("部署平台固定检查 /healthz；请在同一应用服务补齐返回 HTTP 200、JSON service=" + data["slug"] + " 的无副作用健康入口，并同步 contract.health。保留原健康接口，不改业务/配置/数据；这是自动技术适配，不需要用户决定。")
         seen = set()
         paths = set()
         for change in proposal["changes"]:
