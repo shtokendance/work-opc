@@ -29,3 +29,15 @@ def test_original_reference_cannot_escape_or_silently_fall_back_to_empty(tmp_pat
     for ref in [{"path": "../outside.yaml", "keys": ["password"]}, {"path": "config.yaml", "keys": ["missing"]}, {"path": "config.yaml", "keys": ["db"]}]:
         with pytest.raises(ValueError):
             original_value(tmp_path, ref)
+
+
+def test_loopback_connection_metadata_preserves_values_without_exposing_them(tmp_path):
+    from coworker.app_delivery_config import original_fields, loopback_connection
+    (tmp_path / '.env').write_text('DATABASE_URL=mysql://reader:private-token@127.0.0.1:3306/app\nHOST=127.0.0.1\n')
+    metadata = original_fields(tmp_path, '.env')
+    assert metadata[0]['connection_hint'].startswith('loopback:')
+    assert 'private-token' not in str(metadata)
+    assert 'connection_hint' not in metadata[1]
+    assert loopback_connection('DB_DSN', 'reader:secret@tcp(127.1.1.0:3306)/app')
+    assert not loopback_connection('DATABASE_URL', 'mysql://reader:127.0.0.1@internal-db:3306/app')
+    assert not loopback_connection('DATABASE_URL', 'postgres://10.101.102.116/app')

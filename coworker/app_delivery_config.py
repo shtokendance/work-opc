@@ -65,6 +65,13 @@ def original_value(source: Path, reference: dict) -> str:
     return str(value).lower() if type(value) is bool else str(value)
 
 
+def loopback_connection(key: str, value: str) -> bool:
+    """Conservative address hint, never returns credentials or assumes network reachability."""
+    if key.upper() in {"HOST", "PORT", "BIND_HOST", "LISTEN_HOST"} or not re.search(r"URL|URI|DSN|HOST|ENDPOINT|CONNECTION|SERVER", key, re.I):
+        return False
+    return bool(re.search(r"(?:^|://|@|tcp\(|(?:host|server)\s*=)(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])(?=[:/,;)]|$)", value.strip(), re.I))
+
+
 def original_fields(source: Path, name: str) -> list[dict]:
     """Metadata only, including exact paths for masked fields; no original values."""
     try:
@@ -84,7 +91,10 @@ def original_fields(source: Path, name: str) -> list[dict]:
             for key, item in enumerate(value):
                 walk(item, [*keys, key])
         elif keys and (value is None or type(value) in {str, int, float, bool}):
-            fields.append({"source": {"path": name, "keys": keys}, "has_value": value is not None and str(value) != ""})
+            metadata = {"source": {"path": name, "keys": keys}, "has_value": value is not None and str(value) != ""}
+            if loopback_connection("_".join(map(str, keys)), str(value or "")):
+                metadata["connection_hint"] = "loopback: points to the container itself after deployment; inspect whether dependency is in that same container"
+            fields.append(metadata)
 
     walk(root, [])
     return fields

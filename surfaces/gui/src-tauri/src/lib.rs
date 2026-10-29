@@ -31,6 +31,9 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 use uuid::Uuid;
 
+#[cfg(target_os = "macos")]
+mod enterprise_keychain;
+
 /// The sidecar server child — killed on exit (orphaned servers have bitten us before).
 struct ServerProcess(Mutex<Option<Child>>);
 /// The active keep-awake guard while keep-awake is on (None when off). Dropping the guard
@@ -662,7 +665,21 @@ fn enterprise_secret_put(profile: String, secret: String) -> Result<bool, String
 }
 
 #[tauri::command]
-fn enterprise_secret_get(profile: String) -> Result<Option<String>, String> {
+async fn enterprise_secret_get(profile: String) -> Result<Option<String>, String> {
+    // Automatic session restore must never open a system dialog or block the
+    // desktop UI. A locked/untrusted entry stays in Keychain for explicit login.
+    tauri::async_runtime::spawn_blocking(move || enterprise_secret_read(&profile))
+        .await
+        .map_err(|_| "keychain read task failed".to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn enterprise_secret_read(profile: &str) -> Result<Option<String>, String> {
+    enterprise_keychain::read_without_prompt(ENTERPRISE_KEYCHAIN_SERVICE, profile)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enterprise_secret_read(profile: &str) -> Result<Option<String>, String> {
     let entry = enterprise_entry(&profile)?;
     match entry.get_password() {
         Ok(secret) => Ok(Some(secret)),

@@ -1,6 +1,6 @@
 # 交付契约与工具
 
-Python 3.11+ 标准库即可运行。Docker 仅用于 smoke。辅助工具只做机械检查，AI 必须真正读代码、形成方案、等待用户确认并修改源码。
+Python 3.11+ 标准库即可运行。Docker 仅用于 smoke。辅助工具只做机械检查，AI 必须真正读代码、形成方案并保留原业务。Work 中的技术适配可自动完成；连接替换、数据或业务行为变化和最终部署由用户决定。
 
 ## 工作目录
 
@@ -11,6 +11,8 @@ review.json 示例（只在确实收到确认后写）：
 ```json
 {"kind":"human","source":"用户在当前对话确认 P01/P02，保留原数据库","approved_issue_ids":["P01","P02"],"unresolved":[]}
 ```
+
+Work 自动技术准备记录 `kind: ai-technical`、`scope: deployment-adaptation`，来源明确写为 AI 技术准备；这不代表人工审查或授权部署，不能跳过 unresolved。
 
 工具不能证明审批真伪，Agent 应如实记录。生成的回归样例用 `kind: fixture`，来源注明用户已授权生成测试工程，不代表真实应用人工验收。
 

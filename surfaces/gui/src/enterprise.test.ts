@@ -53,6 +53,26 @@ afterEach(() => {
 });
 
 describe("enterprise sign-in state machine", () => {
+  it("leaves an inaccessible Keychain credential untouched during automatic restore", async () => {
+    const { deps, secrets, opened } = makeDeps();
+    // The native silent read returns null when macOS would require permission.
+    secrets.values.set(ENTERPRISE_KEYCHAIN_PROFILE, "saved-but-protected");
+    secrets.get.mockResolvedValue(null);
+    const fetchMock = vi.fn(async () => jsonResponse(404, {}));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = createEnterpriseSession(deps);
+
+    await session.syncFromServer();
+
+    expect(session.state()).toEqual({ kind: "idle" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(secrets.put).not.toHaveBeenCalled();
+    expect(secrets.delete).not.toHaveBeenCalled();
+    expect(secrets.values.get(ENTERPRISE_KEYCHAIN_PROFILE)).toBe("saved-but-protected");
+    expect(opened).toEqual([]);
+    session.dispose();
+  });
+
   it("degrades to desktop-only in the browser build", async () => {
     const { deps } = makeDeps({ isDesktop: () => false });
     const fetchMock = vi.fn();

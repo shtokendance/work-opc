@@ -99,7 +99,7 @@ describe("AppsView Component", () => {
   it("carries original configuration into the next step and requires an explicit replacement", async () => {
     vi.mocked(transformApp).mockResolvedValueOnce({ ok: true, job_id: "preserved-job" });
     const job = { id: "preserved-job", slug: "stock", name: "Stock", model: "configured-model", app_url: "http://stock.apps.localhost", status: "ready", events: [], artifact_hash: "hash", manifest: { container_port: 8080, configs: [{ key: "DATABASE_URL", value: "" }] }, runtime_configs: [{ key: "DATABASE_URL", value: "OPC_TEST_KEEP_ORIGINAL", value_source: "original", secret: true, required: true }], proposal: { summary: "保留配置", changes: [], issues: [], configs: [{ key: "DATABASE_URL", secret: true, required: true }], apis: [], pages: [], unresolved: [] } };
-    vi.mocked(getAppDeliveryJob).mockResolvedValueOnce(job);
+    vi.mocked(getAppDeliveryJob).mockResolvedValue(job);
     render(<AppsView />);
     fireEvent.click(screen.getByRole("button", { name: "新建应用" }));
     const textboxes = screen.getAllByRole("textbox");
@@ -107,8 +107,8 @@ describe("AppsView Component", () => {
     fireEvent.change(textboxes.find(e => e.getAttribute("placeholder")?.includes("devops-aly"))!, { target: { value: "stock" } });
     fireEvent.change(screen.getByLabelText("或输入源码文件夹 / ZIP 的完整路径"), { target: { value: "/tmp/stock.zip" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步 (AI 改造)" }));
-    fireEvent.click(await screen.findByRole("button", { name: /进入配置，核对原值/ }));
-    const value = screen.getByLabelText("DATABASE_URL 配置值") as HTMLInputElement;
+    fireEvent.click(await screen.findByRole("button", { name: /下一步：核对部署内容/ }));
+    const value = await screen.findByLabelText("DATABASE_URL 配置值") as HTMLInputElement;
     expect(value.value).toBe("OPC_TEST_KEEP_ORIGINAL");
     expect(screen.getByLabelText("DATABASE_URL 原始值").getAttribute("readonly")).not.toBeNull();
     expect(screen.getByRole("button", { name: "使用内网公共 PostgreSQL替换 DATABASE_URL" })).toBeTruthy();
@@ -156,7 +156,7 @@ describe("AppsView Component", () => {
     });
     render(<AppsView />);
     fireEvent.click(await screen.findByRole("button", { name: /修复.*部署|重新部署/ }));
-    fireEvent.click(await screen.findByLabelText("我已核对以上配置，同意上传并部署"));
+    fireEvent.click(await screen.findByLabelText("我已核对应用和连接配置，同意上传并部署"));
     fireEvent.click(screen.getByRole("button", { name: "确认并上传部署" }));
     fireEvent.click(await screen.findByRole("button", { name: "仅重试业务验证" }, { timeout: 5000 }));
     await waitFor(() => expect(screen.getByText("应用健康与只读业务验证通过，本地技能已启用")).toBeTruthy());
