@@ -131,6 +131,20 @@ def register_app_delivery_routes(app, manager):
         except (ValueError, OSError) as exc:
             raise fail(exc)
 
+    @app.get("/v1/apps/jobs/{job_id}/skill-preview")
+    def skill_preview(job_id: str):
+        try:
+            return service.skill_preview(job_id)
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
+
+    @app.post("/v1/apps/jobs/{job_id}/config-draft")
+    def config_draft(job_id: str, body: dict):
+        try:
+            return service.save_config_draft(job_id, body)
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
+
     @app.post("/v1/apps/jobs/{job_id}/analyze")
     async def analyze(job_id: str, body: dict):
         try:
@@ -143,6 +157,22 @@ def register_app_delivery_routes(app, manager):
     async def approve(job_id: str, body: dict):
         try:
             return await service.approve(job_id, body)
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
+
+    @app.post("/v1/apps/jobs/{job_id}/prepare")
+    async def prepare_job(job_id: str, body: dict):
+        try:
+            # Legacy drafts were prepared under different approval rules. Reanalyze them
+            # before automatic writes instead of treating old file proposals as authorized.
+            data = service.load(job_id)
+            if data.get("preparation_policy") != "technical-preparation-v1":
+                if data["status"] != "review" or body.get("proposal_hash") != data.get("proposal_hash"):
+                    raise ValueError("方案已变化，请重新读取")
+                service.launch_analysis(job_id, "请按最新流程重新检查：自动完成技术适配，保留原业务、数据和连接；仅真实部署阻塞和连接替换需要用户决定。")
+                return service.public(job_id)
+            # Technical preparation does not approve resource replacement or deployment.
+            return await service.approve(job_id, body, technical_preparation=True)
         except (ValueError, OSError) as exc:
             raise fail(exc)
 

@@ -13,6 +13,11 @@ const names: Record<string, string> = {
 };
 export const configName = (item: AppConfigItem) => names[item.key] || item.description?.split(/[。；\n]/)[0] || item.key || "新增配置";
 
+export function needsConnectionDecision(item: AppConfigItem) {
+  return !["HOST", "PORT", "BIND_HOST", "LISTEN_HOST"].includes(item.key.toUpperCase()) && /URL|URI|DSN|HOST|ENDPOINT|CONNECTION|SERVER/i.test(item.key)
+    && /(?:^|:\/\/|@|tcp\(|(?:host|server)\s*=)(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])(?=[:/,;)]|$)/i.test(item.value.trim()) && !item.local_connection_confirmed;
+}
+
 function matches(item: AppConfigItem, resource: ResourceSummary) {
   if (!resource.env_keys.includes(item.key)) return false;
   // A shared key such as DATABASE_URL is not proof that database types are interchangeable.
@@ -27,10 +32,10 @@ function matches(item: AppConfigItem, resource: ResourceSummary) {
 function resourceMigrationNote(resource: ResourceSummary) {
   const type = (resource.type || "").toLowerCase();
   if (/postgres|mysql|mariadb|sqlserver|mssql|mongo/.test(type)) {
-    return "💡 迁移提醒：切换后将连接服务器新库，本机存量数据不会自动迁移；请确保应用具备启动自动建表逻辑或已初始化表结构。";
+    return "💡 迁移提醒：切换后将连接所选数据库，本机存量数据不会自动迁移；需核对目标表结构；初始化和迁移数据需要另外确认。";
   }
   if (/redis|memcache/.test(type)) {
-    return "✅ 迁移提醒：缓存服务可直接切换，无需迁移本机历史数据。";
+    return "请先确认用途：可重建缓存通常无需迁移；登录会话和业务状态需要另行处理，不能直接丢弃。";
   }
   if (/s3|minio|oss|cos|storage/.test(type)) {
     return "💡 迁移提醒：切换后新上传文件将持久保存在服务器存储桶中。";
@@ -38,20 +43,21 @@ function resourceMigrationNote(resource: ResourceSummary) {
   return "";
 }
 
-export function AppDeliveryConfig({ configs, originals, resources, onChange }: {
+export function AppDeliveryConfig({ configs, originals, resources, onChange, compact = false }: {
   configs: AppConfigItem[]; originals: AppConfigItem[]; resources: ResourceSummary[];
+  compact?: boolean;
   onChange: (items: AppConfigItem[]) => void;
 }) {
   const update = (index: number, value: AppConfigItem) => onChange(configs.map((item, i) => i === index ? value : item));
   const replacements = configs.filter(item => item.resource_id || (item.value_source === "manual" && item.value !== originals.find(o => o.key === item.key)?.value));
   return <section className="space-y-4" aria-label="应用配置对照">
-    <div className="rounded-xl border border-line bg-paper/50 p-4 space-y-1.5">
+    {!compact && <div className="rounded-xl border border-line bg-paper/50 p-4 space-y-1.5">
       <h3 className="font-semibold text-ink">核对最终部署配置与服务器资源</h3>
       <p className="text-ui text-muted">
-        每一项配置都展示了<b>最终部署生效的值</b>。如果应用原本连接的是本机数据库或缓存，可在右侧一键切换为服务器现成的基础服务；不需要更换的配置保持默认即可。
+        每一项配置都展示了<b>最终部署生效的值</b>。左边是原值，右边是部署时使用的值；有匹配的服务器资源时会列在下方。不需要更换的保持原样即可。
       </p>
       <p className="text-xs text-muted">原值仅在本机显示核对；密码和密钥不会发给 AI，也不会写进业务技能包。</p>
-    </div>
+    </div>}
     {configs.length === 0 && <p className="text-muted text-ui">这个应用暂时没有需要填写的配置，可以继续部署。</p>}
     {configs.map((item, index) => {
       const original = originals.find(o => o.key === item.key);
@@ -66,118 +72,36 @@ export function AppDeliveryConfig({ configs, originals, resources, onChange }: {
         : hasOriginalFileSource
         ? "保留原配置值"
         : item.value
-        ? `AI 适配推荐值 (${item.value})`
+        ? "采用 AI 建议值"
         : original
         ? "保持原样"
         : "请填写或选择";
 
-      return <article key={index} className="rounded-xl border border-line overflow-hidden bg-panel" aria-label={configName(item)}>
-        <header className="bg-paper px-4 py-3 flex flex-wrap items-center justify-between gap-2 border-b border-line">
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className="font-semibold">{configName(item)}</h4>
-            <code className="text-xs px-1.5 py-0.5 rounded bg-panel border border-line text-muted font-mono">{item.key || "未命名"}</code>
-            {item.required && <span className="text-xs text-warnInk font-medium">必填</span>}
-          </div>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded ${changed ? "bg-accentSoft/40 text-accent" : "bg-panel border border-line text-muted"}`}>
-            {statusLabel}
-          </span>
+      return <article key={index} className="rounded-xl border border-line p-4 bg-panel space-y-3" aria-label={configName(item)}>
+        <header className="flex flex-wrap justify-between gap-2">
+          <div><h4 className="font-semibold">{configName(item)} {item.required && <span className="text-xs text-muted">· 必填</span>}</h4><code className="text-xs text-muted">{item.key || "未命名"}</code></div>
+          <span className={`text-xs ${changed ? "text-accent" : "text-muted"}`}>{statusLabel}</span>
         </header>
-
-        {/* 直接可见的最终生效配置输入区 */}
-        <div className="p-4 border-b border-line bg-panel space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <label className="text-xs font-semibold text-ink">
-              部署时最终生效的值
-              {selected && <span className="text-accent font-normal ml-2">（已绑定「{selected.name}」，部署时由服务器自动注入；如手动输入将改为使用输入值）</span>}
-            </label>
-            {changed && original && (
-              <button
-                type="button"
-                className="text-xs text-accent underline"
-                onClick={() => update(index, { ...original, resource_id: undefined, value_source: original.value_source || "manual" })}
-              >
-                恢复原值
-              </button>
-            )}
-          </div>
-          {!original && (
-            <input
-              aria-label="新增配置名称"
-              value={item.key}
-              placeholder="例如 SERVICE_URL"
-              className="w-full border border-line rounded-lg p-2 mb-2 bg-paper text-ui font-mono"
-              onChange={e => update(index, { ...item, key: e.target.value, resource_id: undefined, value_source: "manual" })}
-            />
-          )}
-          <input
-            aria-label={`${item.key} 配置值`}
-            type="text"
-            value={item.value}
-            placeholder={selected ? `已选择服务器资源「${selected.name}」自动注入；在此输入会改用你填写的值` : "填写后，部署时将使用这个值"}
-            className="w-full border border-line rounded-lg px-3 py-2 bg-paper text-ink text-ui font-mono"
-            onChange={e => update(index, { ...item, value: e.target.value, resource_id: undefined, value_source: "manual" })}
-          />
-          {item.description && <p className="text-xs text-muted break-words">{item.description}</p>}
+        {!original && <input aria-label="新增配置名称" value={item.key} placeholder="例如 SERVICE_URL" className="w-full border border-line rounded p-2" onChange={e => update(index, {...item, key:e.target.value, resource_id:undefined, value_source:"manual"})} />}
+        <div className="grid md:grid-cols-2 gap-4 text-xs">
+          <label className="space-y-2"><span className="block text-muted">{hasOriginalFileSource ? "原应用的值（默认保留）" : "AI 建议的初始值"}</span><textarea aria-label={`${item.key} 原始值`} readOnly rows={2} value={original?.value || ""} placeholder="此项尚无值" className="w-full border border-line rounded-lg p-2 bg-paper font-mono resize-y" /></label>
+          <label className="space-y-2"><span className="block font-medium">部署时使用</span><input aria-label={`${item.key} 配置值`} type="text" value={item.value} placeholder={selected ? `由「${selected.name}」提供` : "保留原值，或填写你确认的新值"} className="w-full border border-line rounded-lg p-2 bg-panel font-mono" onChange={e => update(index, {...item, value:e.target.value, resource_id:undefined, local_connection_confirmed:false, value_source:"manual"})} />
+            {selected && <span className="block text-accent">已选择服务器资源，真实值由服务器注入。</span>}
+            {changed && original && <button type="button" className="text-accent underline" onClick={() => update(index, {...original, resource_id:undefined, value_source:original.value_source || "manual"})}>恢复原值</button>}
+          </label>
         </div>
-
-        {/* 左右对照：原项目值 vs 服务器可用替换资源 */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-line text-xs">
-          <div className="p-3.5 space-y-1.5 min-w-0 bg-paper/30">
-            <p className="font-medium text-muted">
-              {hasOriginalFileSource ? `原项目中的值${original?.source_label ? `（来自 ${original.source_label}）` : ""}` : "默认基准值"}
-            </p>
-            <textarea
-              aria-label={`${item.key} 原始值`}
-              readOnly
-              rows={2}
-              value={original?.value || ""}
-              placeholder="原应用未单独配置此项"
-              className="w-full resize-y rounded-lg border border-line bg-paper px-3 py-1.5 text-xs font-mono break-all text-muted"
-            />
-          </div>
-          <div className="p-3.5 space-y-2 min-w-0 bg-paper/30">
-            <p className="font-medium text-muted">服务器上可替换的现成基础服务</p>
-            {candidates.length === 0 ? (
-              <p className="text-muted">该配置项属于应用自身参数，无需绑定服务器外部资源。</p>
-            ) : candidates.map(resource => {
-              const preview = resource.env_preview?.[item.key];
-              const active = item.resource_id === resource.id;
-              const migrationNote = resourceMigrationNote(resource);
-              return <div key={resource.id} className={`rounded-lg border p-3 space-y-1.5 ${active ? "border-accent bg-accentSoft/30" : "border-line bg-panel"}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-ui font-medium text-ink">{resource.name}</p>
-                  <button
-                    type="button"
-                    aria-label={`使用${resource.name}替换 ${item.key}`}
-                    disabled={active}
-                    className="px-2.5 py-1 rounded-md border border-accent/40 bg-accentSoft/20 text-xs text-accent font-medium hover:bg-accentSoft/40 disabled:opacity-60"
-                    onClick={() => update(index, { ...item, value: "", value_source: "resource", resource_id: resource.id })}
-                  >
-                    {active ? "✓ 已选择这项" : "改用这项"}
-                  </button>
-                </div>
-                {resource.description && <p className="text-xs text-muted break-words">{resource.description}</p>}
-                <p className="text-xs text-muted break-all whitespace-pre-wrap font-mono">
-                  {preview && preview !== "[REDACTED]" ? preview : "连接地址与凭据由服务器在部署时自动注入，无需手动填写"}
-                </p>
-                {migrationNote && <p className="text-xs text-ink bg-paper/80 rounded p-2 border border-line leading-relaxed">{migrationNote}</p>}
-              </div>;
-            })}
-          </div>
-        </div>
-
-        {/(?:\blocalhost\b|\b127\.\d+\.\d+\.\d+\b|\[::1\])/.test(item.value) && (
-          <p role="note" className="px-4 py-3 border-t border-line text-xs text-warnInk bg-warnSoft/40">
-            ⚠️ 这个地址（<code>127.0.0.1</code> / <code>localhost</code>）在服务器上指向容器自己，无法连回你电脑上的本地服务。如果是服务监听地址建议改为 <code>0.0.0.0</code>；如果是数据库或缓存连接，请在右侧选择服务器现成资源或填写内网可达地址。
-          </p>
-        )}
+        {!!candidates.length && <div className="border-t border-line pt-3 text-xs space-y-2"><p className="text-muted">也可以换成以下服务器资源（点击才选择）：</p><div className="flex flex-wrap gap-2">{candidates.map(resource => <button key={resource.id} type="button" aria-label={`使用${resource.name}替换 ${item.key}`} disabled={item.resource_id === resource.id} className="border border-line rounded-lg px-3 py-2 text-accent disabled:bg-accentSoft" onClick={() => update(index, {...item, value:"", value_source:"resource", resource_id:resource.id})}>{item.resource_id === resource.id ? "✓ " : "改用 "}{resource.name}</button>)}</div>
+          {selected && <div className="text-muted space-y-1"><p>{selected.env_preview?.[item.key] && selected.env_preview[item.key] !== "[REDACTED]" ? selected.env_preview[item.key] : "连接凭据由服务器提供"}</p><p>{resourceMigrationNote(selected)}</p></div>}
+        </div>}
+        {item.description && <details className="text-xs text-muted"><summary className="cursor-pointer">用途与来源说明</summary><p className="mt-2">{item.description}</p>{original?.source_label && <p>{original.source_label}</p>}</details>}
+        {(needsConnectionDecision(item) || item.local_connection_confirmed) && <div role="note" className="text-xs text-warnInk space-y-2 border-t border-line pt-3"><p>这个连接指向容器自己，部署后不能连接你电脑上的服务。请选择上面的服务器资源，或填写服务器能访问的地址。</p><label className="flex gap-2"><input type="checkbox" checked={!!item.local_connection_confirmed} onChange={e => update(index, {...item, local_connection_confirmed:e.target.checked})} />只有该服务确实和应用放在同一个容器内时，才勾选保留此连接</label></div>}
       </article>;
     })}
-    <button type="button" className="text-ui text-accent font-medium" onClick={() => onChange([...configs, { key: "", value: "", description: "", value_source: "manual" }])}>＋ 添加其他环境变量配置</button>
-    <div className="rounded-xl border border-line bg-paper p-4 text-ui" aria-label="配置更改汇总">
+    {!compact && <details className="text-xs text-muted"><summary className="cursor-pointer">高级配置</summary><button type="button" className="text-ui text-accent font-medium mt-3" onClick={() => onChange([...configs, { key: "", value: "", description: "", value_source: "manual" }])}>＋ 添加其他环境变量配置</button></details>}
+    {!compact && <div className="rounded-xl border border-line bg-paper p-4 text-ui" aria-label="配置更改汇总">
       <p className="font-medium">部署前配置汇总</p>
       <p className="text-muted mt-1">{replacements.length ? `你调整了 ${replacements.length} 项配置或服务器资源，其余配置使用默认或原值。` : "当前全部采用推荐默认值或应用原值，未绑定额外替换资源。"}</p>
       {replacements.map(item => <p key={item.key} className="mt-2 text-xs font-medium text-ink">• {configName(item)} ({item.key}) → {resources.find(r => r.id === item.resource_id)?.name || `自定义值 (${item.value})`}</p>)}
-    </div>
+    </div>}
   </section>;
 }

@@ -1,107 +1,88 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppDeliveryReview } from "./AppDeliveryReview";
 import { appDeliveryRequest, getAppDeliveryJob } from "../api";
-
 vi.mock("../api", () => ({ getAppDeliveryJob: vi.fn(), appDeliveryRequest: vi.fn() }));
-const plan = {
-  id: "job", slug: "stock", name: "Stock", status: "review", model: "configured-model", app_url: "http://stock.apps.localhost", events: ["read_source"], proposal_hash: "fixed-plan",
-  proposal: { summary: "Preserve business behavior", unresolved: [], issues: [{ id: "P1", impact: "Localhost connection cannot reach another container", recommendation: "Choose an approved resource", evidence: "settings.py:3" }], changes: [{ id: "C1", path: "settings.py", reason: "Use confirmed Redis environment input", diff: "-127.0.0.1\n+REDIS_HOST" }], configs: [{ key: "REDIS_HOST", secret: false, required: true, description: "Redis connection" }], apis: [], pages: [] },
-};
+const plan = { id:"job", slug:"stock", name:"Stock", status:"review", model:"configured", app_url:"http://stock.test", events:[], proposal_hash:"v1", proposal: {summary:"保留业务", unresolved:[] as string[], issues:[], changes:[{id:"C1",path:"settings.py",reason:"支持服务器启动",diff:"-before\n+after"}], configs:[], apis:[],pages:[]} };
+const ready = {...plan,status:"ready",artifact_hash:"a"};
 afterEach(cleanup);
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(getAppDeliveryJob).mockResolvedValue(plan); });
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(getAppDeliveryJob).mockResolvedValue(plan); vi.mocked(appDeliveryRequest).mockResolvedValue(ready); });
+it("automatically prepares technical changes but advances only after explicit next with a fresh version", async () => {
+  const onReady=vi.fn(), next=vi.fn();
+  render(<AppDeliveryReview jobId="job" onReady={onReady} onNextStep={next} />);
+  await waitFor(()=>expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/prepare",{proposal_hash:"v1"}));
+  const advance=await screen.findByRole("button",{name:"下一步：核对部署内容"});
+  expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  expect(screen.getAllByRole("textbox")).toHaveLength(1);
+  expect(onReady).not.toHaveBeenCalled();
+  vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
+  fireEvent.click(advance);
+  await waitFor(()=>expect(next).toHaveBeenCalledOnce());
+  expect(onReady).toHaveBeenCalledWith(ready);
+});
+it("keeps one composer, permits partial answers and never prepares while questions remain", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({...plan,proposal:{...plan.proposal,unresolved:["数据库怎么连接？","是否迁移旧数据？"],decisions:[{id:"db",question:"数据库怎么连接？",impact:"原连接指向电脑",options:["保留 MySQL"]}]}});
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button",{name:"保留 MySQL"}));
+  expect(appDeliveryRequest).not.toHaveBeenCalled();
+  expect(screen.getAllByRole("textbox")).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText("给 AI 的回答或要求"),{target:{value:"保留 MySQL。先解释迁移的影响，我还没同意迁移。"}});
+  fireEvent.click(screen.getByRole("button",{name:"发送"}));
+  await waitFor(()=>expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/analyze",{feedback:"保留 MySQL。先解释迁移的影响，我还没同意迁移。"}));
+  expect(appDeliveryRequest).not.toHaveBeenCalledWith("jobs/job/prepare",expect.anything());
+});
+it("blocks next for unsent changes and invalidates old parent readiness on reanalysis", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
+  const invalidate=vi.fn();
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} onInvalidate={invalidate} />);
+  await screen.findByText("应用已准备好，可以核对部署内容");
+  fireEvent.change(screen.getByLabelText("给 AI 的回答或要求"),{target:{value:"保留原数据库"}});
+  expect((screen.getByRole("button",{name:"下一步：核对部署内容"}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button",{name:"发送"}));
+  await waitFor(()=>expect(invalidate).toHaveBeenCalledOnce());
+});
+it("rejects next when the server package changes between polling and clicking", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
+  const next=vi.fn();
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} onNextStep={next} />);
+  const button=await screen.findByRole("button",{name:"下一步：核对部署内容"});
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({...ready,artifact_hash:"new"});
+  fireEvent.click(button);
+  await screen.findByRole("alert");
+  expect(next).not.toHaveBeenCalled();
+});
+it("keeps loopback decisions on the preparation page and saves configuration outside AI feedback", async () => {
+  const configs=[{key:"DATABASE_URL",value:"mysql://localhost/app",required:true,secret:true}];
+  const pending={...ready, runtime_configs:configs, configuration_problems:[{key:"DATABASE_URL",reason:"连接指向容器自己"}]};
+  vi.mocked(getAppDeliveryJob).mockResolvedValue(pending);
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  fireEvent.change(await screen.findByLabelText("DATABASE_URL 配置值"),{target:{value:"mysql://internal-db/app"}});
+  expect(screen.queryByRole("button",{name:"下一步：核对部署内容"})).toBeNull();
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({...pending,configuration_problems:[],config_draft:{artifact_hash:"a",configs:[{...configs[0],value:"mysql://internal-db/app"}]}});
+  fireEvent.click(screen.getByRole("button",{name:"确认配置并检查"}));
+  await screen.findByRole("button",{name:"下一步：核对部署内容"});
+  expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/config-draft",expect.objectContaining({artifact_hash:"a",configs:[expect.objectContaining({value:"mysql://internal-db/app"})]}));
+  expect(appDeliveryRequest).not.toHaveBeenCalledWith("jobs/job/analyze",expect.anything());
+});
+it("exports versioned external AI handoff without deployment approval", async () => {
+  const copy=vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:copy}});
+  vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
+  vi.mocked(appDeliveryRequest).mockResolvedValue({prompt:"保留原配置",source_path:"/tmp/handoff-v1"});
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  await screen.findByText("应用已准备好，可以核对部署内容");
+  fireEvent.click(screen.getByRole("button",{name:"复制交接说明"}));
+  await waitFor(()=>expect(copy).toHaveBeenCalledWith("保留原配置"));
+  expect(screen.getByText(/handoff-v1/)).toBeTruthy();
+  expect(appDeliveryRequest).not.toHaveBeenCalledWith("jobs/job/confirm-deployment",expect.anything());
+});
 
-describe("App delivery approval", () => {
-  it("copies the local AI handoff and offers returning to source selection without approval", async () => {
-    const copy = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
-    vi.mocked(appDeliveryRequest).mockResolvedValue({ prompt: "请按原业务改造，保留原配置。" });
-    const replace = vi.fn();
-    render(<AppDeliveryReview jobId="job" onReady={vi.fn()} onReplaceSource={replace} />);
-    fireEvent.click(await screen.findByRole("button", { name: "复制交接提示词" }));
-    await waitFor(() => expect(copy).toHaveBeenCalledWith("请按原业务改造，保留原配置。"));
-    expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/handoff");
-    fireEvent.click(screen.getByRole("button", { name: "已经改好了，重新选择源码" }));
-    expect(replace).toHaveBeenCalledOnce();
-    expect(appDeliveryRequest).not.toHaveBeenCalledWith("jobs/job/approve", expect.anything());
-  });
-  it("requires individual file approval and explicit infrastructure confirmation", async () => {
-    const onReady = vi.fn();
-    vi.mocked(appDeliveryRequest).mockResolvedValue({ ...plan, status: "ready", artifact_hash: "artifact" });
-    render(<AppDeliveryReview jobId="job" onReady={onReady} />);
-    const button = await screen.findByRole("button", { name: "批准所选修改并生成交付包" });
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    const boxes = screen.getAllByRole("checkbox");
-    fireEvent.click(boxes[0]);
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(boxes[1]);
-    expect((button as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(button);
-    await waitFor(() => expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/approve", { proposal_hash: "fixed-plan", approved_changes: ["C1"], confirm_config_changes: true }));
-    await waitFor(() => expect(onReady).toHaveBeenCalled());
-  });
-
-  it("does not allow approval while questions remain unresolved", async () => {
-    vi.mocked(getAppDeliveryJob).mockResolvedValue({ ...plan, proposal: { ...plan.proposal, unresolved: ["Which MongoDB resource should be used?"] } });
-    render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
-    await screen.findByText(/Which MongoDB resource should be used/);
-    screen.getAllByRole("checkbox").forEach(box => fireEvent.click(box));
-    expect((screen.getByRole("button", { name: "批准所选修改并生成交付包" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(appDeliveryRequest).not.toHaveBeenCalled();
-  });
-
-  it("explains the blocker and submits answers tied to each question for a new analysis", async () => {
-    vi.mocked(getAppDeliveryJob).mockResolvedValue({ ...plan, proposal: { ...plan.proposal, changes: [], unresolved: ["保留原 Redis 吗？", "监听端口使用哪个？"] } });
-    render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
-    await screen.findByText("分析完成，需要你补充信息");
-    expect(screen.getByText(/还有 2 个问题需要回答并重新分析/)).toBeTruthy();
-    expect(screen.getByText(/模型尚未给出可执行的文件修改/)).toBeTruthy();
-    const retry = screen.getByRole("button", { name: "根据回答重新分析" }) as HTMLButtonElement;
-    expect(retry.disabled).toBe(true);
-    fireEvent.change(screen.getByRole("textbox", { name: "问题 1 的回答" }), { target: { value: "保留原地址和密码" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "问题 2 的回答" }), { target: { value: "8080" } });
-    fireEvent.click(retry);
-    await waitFor(() => expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/analyze", { feedback: "问题：保留原 Redis 吗？\n用户回答：保留原地址和密码\n\n问题：监听端口使用哪个？\n用户回答：8080" }));
-  });
-
-  it("describes an original masked value as preserved instead of requiring re-entry", async () => {
-    vi.mocked(getAppDeliveryJob).mockResolvedValue({ ...plan, proposal: { ...plan.proposal, configs: [{ key: "DB_PASSWORD", secret: true, required: true, has_original_value: true, source: { path: "config.yaml", keys: ["db", "password"] } }] } });
-    render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
-    expect(await screen.findByText("保留原配置值")).toBeTruthy();
-    expect(screen.queryByText("秘密值：运行时提供")).toBeNull();
-  });
-
-  it("shows server foundation service migration guidance and allows bypassing non-blocking questions when changes exist", async () => {
-    const onReady = vi.fn();
-    vi.mocked(getAppDeliveryJob).mockResolvedValue({
-      ...plan,
-      resources: [
-        { id: "pg-main", name: "平台共享 PostgreSQL", type: "postgres", description: "内网共享数据库", env_keys: ["DATABASE_URL"] },
-        { id: "redis-main", name: "平台共享 Redis", type: "redis", description: "内网共享缓存", env_keys: ["REDIS_HOST"] },
-      ],
-      proposal: {
-        ...plan.proposal,
-        unresolved: ["是否仅用于受控试点？"],
-      },
-    });
-    vi.mocked(appDeliveryRequest).mockResolvedValue({ ...plan, status: "ready", artifact_hash: "artifact" });
-    render(<AppDeliveryReview jobId="job" onReady={onReady} />);
-    expect(await screen.findByText(/平台共享 PostgreSQL/)).toBeTruthy();
-    expect(screen.getByText(/本机原有数据不会自动搬迁/)).toBeTruthy();
-    expect(screen.getByText(/缓存数据属于临时状态，无需迁移/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "一键全选修改并确认方案" }));
-    const approveBtn = screen.getByRole("button", { name: "批准所选修改并生成交付包" }) as HTMLButtonElement;
-    expect(approveBtn.disabled).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "这些问题不影响，直接按默认方案继续" }));
-    expect(approveBtn.disabled).toBe(false);
-    fireEvent.click(approveBtn);
-    await waitFor(() => expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/approve", {
-      proposal_hash: "fixed-plan",
-      approved_changes: ["C1"],
-      confirm_config_changes: true,
-      ignore_unresolved: true,
-    }));
-  });
+it("uses a short editable answer and replaces a previous suggestion for the same question", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({...plan,proposal:{...plan.proposal,unresolved:["数据库怎么连接？"],decisions:[{id:"db",question:"数据库怎么连接？",impact:"需要明确目标",options:["保留原值","使用测试库"]}]}});
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button",{name:"保留原值"}));
+  expect((screen.getByLabelText("给 AI 的回答或要求") as HTMLTextAreaElement).value).toBe("保留原值");
+  fireEvent.click(screen.getByRole("button",{name:"使用测试库"}));
+  expect((screen.getByLabelText("给 AI 的回答或要求") as HTMLTextAreaElement).value).toBe("使用测试库");
+  expect(appDeliveryRequest).not.toHaveBeenCalled();
 });

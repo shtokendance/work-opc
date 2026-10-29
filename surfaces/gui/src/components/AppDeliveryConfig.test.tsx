@@ -33,3 +33,16 @@ it("shows readable originals beside compatible choices and changes only the conf
   expect(items[0]).toMatchObject({ value: "my-own-value", value_source: "manual" });
   expect(items[1]).toEqual(originals[1]);
 });
+
+it("requires a decision for a loopback dependency and clears confirmation after editing", () => {
+  const saved=vi.fn();
+  function Editor() {
+    const [items,setItems]=useState<AppConfigItem[]>([{key:"DATABASE_URL",value:"mysql://fixture@127.0.0.1/app"}]);
+    return <AppDeliveryConfig configs={items} originals={items} resources={[]} onChange={next=>{saved(next);setItems(next);}} />;
+  }
+  render(<Editor />);
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(saved.mock.lastCall![0][0].local_connection_confirmed).toBe(true);
+  fireEvent.change(screen.getByLabelText("DATABASE_URL 配置值"), {target:{value:"mysql://fixture@127.1.1.0/app"}});
+  expect(saved.mock.lastCall![0][0].local_connection_confirmed).toBe(false);
+});

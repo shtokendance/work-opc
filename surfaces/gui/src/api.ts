@@ -4217,6 +4217,7 @@ export interface AppConfigItem {
   required?: boolean;
   secret?: boolean;
   has_value?: boolean;
+  local_connection_confirmed?: boolean;
   value_source?: string;
   source_label?: string;
   resource_id?: string;
@@ -4298,6 +4299,7 @@ export async function updateDeployedAppConfig(
 }
 
 export async function transformApp(params: {
+  previous_job_id?: string;
   slug: string;
   name: string;
   description: string;
@@ -4347,6 +4349,12 @@ export async function enableLocalSkill(slug: string, job_id: string): Promise<{ 
 }
 
 export interface AppDeliveryJob {
+  preparation_checks?: { label: string; status: string; detail: string }[];
+  configuration_problems?: { key: string; reason: string }[];
+  revision?: number;
+  conversation?: { role: string; text: string; revision?: number }[];
+  config_draft?: { artifact_hash: string; configs: AppConfigItem[] };
+  verification?: { status: string; checks: { operation: string; passed: boolean }[]; pages_verified: boolean };
   id: string;
   slug: string;
   name: string;
@@ -4368,7 +4376,8 @@ export interface AppDeliveryJob {
     summary: string;
     issues: { id: string; evidence: unknown; impact: string; recommendation: string }[];
     unresolved: unknown[];
-    changes: { id: string; path: string; reason: string; diff: string }[];
+    decisions?: { id: string; question: string; impact: string; options: string[] }[];
+    changes: { id: string; path: string; reason: string; group?: string; diff: string }[];
     configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean; has_original_value?: boolean; source?: { path: string; keys: (string | number)[] } }[];
     detected_resources?: { id?: string; type?: string; purpose?: string; env?: string[]; current_hint?: string }[];
     apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
