@@ -86,3 +86,27 @@ it("uses a short editable answer and replaces a previous suggestion for the same
   expect((screen.getByLabelText("给 AI 的回答或要求") as HTMLTextAreaElement).value).toBe("使用测试库");
   expect(appDeliveryRequest).not.toHaveBeenCalled();
 });
+
+it("displays multi-round conversation as chat messages and sends AI fix request directly on click", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({
+    ...plan,
+    status: "failed",
+    revision: 2,
+    error: "possible secret in build input: package.json",
+    conversation: [
+      { role: "assistant", text: "第一轮分析结论", revision: 1 },
+      { role: "user", text: "不切换保留现有存储", revision: 1 },
+      { role: "assistant", text: "第二轮分析结论", revision: 2 },
+    ],
+  });
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  expect(await screen.findByText("第一轮分析结论")).toBeTruthy();
+  expect(screen.getByText("不切换保留现有存储")).toBeTruthy();
+  expect(screen.getByText("第二轮分析结论")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "请 AI 帮我处理" }));
+  await waitFor(() =>
+    expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/analyze", {
+      feedback: "请处理这次未完成的问题，保留原业务和已确认的选择：\npossible secret in build input: package.json",
+    })
+  );
+});
