@@ -652,20 +652,9 @@ export function AppsView({ onBack }: Props) {
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-4">
-                    <details className="text-meta">
-                      <summary className="cursor-pointer text-muted mb-2">高级设置（通常不用修改）</summary>
-                      <label className="block text-meta font-medium text-ink mb-1.5">容器监听端口</label>
-                      <input
-                        type="number"
-                        value={containerPort}
-                        onChange={(e) => setContainerPort(Number(e.target.value))}
-                        className="w-full px-3.5 py-2 rounded-xl border border-line bg-paper text-ink font-mono focus:outline-accent focus:border-accent"
-                      />
-                    </details>
-                    <div>
-                      <label htmlFor="app-adapter-model" className="block text-meta font-medium text-ink mb-1.5">AI 改造模型</label>
-                      <div className="relative">
+                  <div>
+                    <label htmlFor="app-adapter-model" className="block text-meta font-medium text-ink mb-1.5">AI 改造模型</label>
+                    <div className="relative">
                       <select
                         id="app-adapter-model"
                         value={selectedModel}
@@ -684,7 +673,6 @@ export function AppsView({ onBack }: Props) {
                         )}
                       </select>
                       <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted" />
-                      </div>
                     </div>
                   </div>
 
@@ -692,58 +680,141 @@ export function AppsView({ onBack }: Props) {
                     <label className="block text-meta font-medium text-ink mb-1.5">
                       选择应用源码（文件夹或 ZIP） <span className="text-danger">*</span>
                     </label>
-                    <button type="button" className="mb-3 px-4 py-2 rounded-lg border border-line hover:bg-paper text-ui" onClick={async () => { const path = await chooseFolder(); if (path) { setSourcePath(path); setSelectedFile(null); } }}>选择源码文件夹</button>
-                    {sourcePath && <p className="mb-3 text-xs text-muted break-all">已选择：{sourcePath}。分析时会创建副本，不改动原文件夹。</p>}
-                    <div className="relative">
-                      <input
-                        type="file"
-                        id="app-zip-file-input"
-                        accept=".zip"
-                        onChange={(e) => { setSelectedFile(e.target.files?.[0] || null); setSourcePath(""); }}
-                        className="sr-only"
-                      />
-                      {!selectedFile ? (
+                    <input
+                      type="file"
+                      id="app-zip-file-input"
+                      accept=".zip"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        if (file) {
+                          setSelectedFile(file);
+                          setSourcePath("");
+                        }
+                      }}
+                      className="sr-only"
+                    />
+
+                    {sourcePath && !selectedFile ? (
+                      <div className="flex items-center justify-between p-3.5 rounded-xl border border-okLine bg-okSoft/30 text-ink">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-okSoft text-ok flex items-center justify-center shrink-0">
+                            <Icon name="folder" size={18} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-ui truncate">
+                              {sourcePath.split(/[/\\]/).filter(Boolean).pop() || sourcePath}
+                            </div>
+                            <div className="text-meta text-muted truncate">
+                              已选择：{sourcePath} · 分析时会创建副本，不改动原文件夹
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const path = await chooseFolder();
+                            if (path) {
+                              setSourcePath(path);
+                              setSelectedFile(null);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink cursor-pointer shrink-0 transition-colors"
+                        >
+                          更换文件夹
+                        </button>
+                      </div>
+                    ) : selectedFile ? (
+                      <div className="flex items-center justify-between p-3.5 rounded-xl border border-okLine bg-okSoft/30 text-ink">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-okSoft text-ok flex items-center justify-center shrink-0">
+                            <Icon name="archive" size={18} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-ui truncate">{selectedFile.name}</div>
+                            <div className="text-meta text-muted">
+                              {(selectedFile.size / 1024).toFixed(1)} KB · 已准备就绪
+                            </div>
+                          </div>
+                        </div>
                         <label
                           htmlFor="app-zip-file-input"
-                          className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-line hover:border-accent/60 bg-paper/60 hover:bg-paper rounded-xl2 cursor-pointer transition-all group text-center"
+                          className="px-3 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink cursor-pointer shrink-0 transition-colors"
                         >
-                          <div className="w-10 h-10 rounded-xl bg-panel border border-line flex items-center justify-center text-muted group-hover:text-accent group-hover:scale-105 transition-all mb-2">
-                            <Icon name="folderPlus" size={20} />
-                          </div>
-                          <span className="text-ui font-medium text-ink group-hover:text-accent">
-                            点击选择或拖拽源码压缩包 (.zip)
-                          </span>
-                          <span className="text-meta text-muted mt-1">
-                            支持 Go、Python、Node.js、Java、容器化 C# 等单应用；部署前检查实际依赖与构建条件
-                          </span>
+                          更换文件
                         </label>
-                      ) : (
-                        <div className="flex items-center justify-between p-3.5 rounded-xl border border-okLine bg-okSoft/30 text-ink">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-9 h-9 rounded-lg bg-okSoft text-ok flex items-center justify-center shrink-0">
-                              <Icon name="file" size={18} />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="font-semibold text-ui truncate">{selectedFile.name}</div>
-                              <div className="text-meta text-muted">
-                                {(selectedFile.size / 1024).toFixed(1)} KB · 已准备就绪
-                              </div>
-                            </div>
-                          </div>
+                      </div>
+                    ) : (
+                      <div
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) {
+                            if (file.name.endsWith(".zip")) {
+                              setSelectedFile(file);
+                              setSourcePath("");
+                            } else {
+                              alert("请拖拽 .zip 格式的源码压缩包，或点击下方按钮选择文件夹");
+                            }
+                          }
+                        }}
+                        className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-line hover:border-accent/60 bg-paper/60 hover:bg-paper rounded-2xl transition-all text-center"
+                      >
+                        <div className="w-12 h-12 rounded-2xl bg-panel border border-line flex items-center justify-center text-muted mb-3">
+                          <Icon name="folderPlus" size={22} />
+                        </div>
+                        <span className="text-ui font-medium text-ink mb-1">
+                          选择本地应用源码
+                        </span>
+                        <span className="text-meta text-muted mb-4 max-w-md">
+                          支持直接选择源码文件夹，或拖拽上传 .zip 压缩包；涵盖 Go、Python、Node.js、Java、容器化 C# 等单应用
+                        </span>
+                        <div className="flex items-center justify-center gap-3">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-accent text-white hover:bg-accentHover font-medium text-ui shadow-sm transition-colors cursor-pointer"
+                            onClick={async () => {
+                              const path = await chooseFolder();
+                              if (path) {
+                                setSourcePath(path);
+                                setSelectedFile(null);
+                              }
+                            }}
+                          >
+                            <Icon name="folder" size={16} />
+                            选择源码文件夹
+                          </button>
                           <label
                             htmlFor="app-zip-file-input"
-                            className="px-3 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink cursor-pointer shrink-0 transition-colors"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-line bg-panel hover:bg-paper font-medium text-ui text-ink transition-colors cursor-pointer"
                           >
-                            更换文件
+                            <Icon name="archive" size={16} />
+                            选择 ZIP 压缩包
                           </label>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {step === 1 && <div className="border-t border-line pt-3"><label className="text-ui font-medium block mb-2" htmlFor="app-source-path">或输入源码文件夹 / ZIP 的完整路径</label><input id="app-source-path" className="w-full rounded-md border border-line bg-panel px-3 py-2 text-ui font-mono" value={sourcePath} onChange={e => { setSourcePath(e.target.value); setSelectedFile(null); }} placeholder="/path/to/my-app 或 /path/to/application.zip" /></div>}
+              {step === 1 && (
+                <div className="border-t border-line pt-3">
+                  <label className="text-meta text-muted block mb-1.5" htmlFor="app-source-path">
+                    或输入源码文件夹 / ZIP 的完整路径
+                  </label>
+                  <input
+                    id="app-source-path"
+                    className="w-full rounded-xl border border-line bg-paper px-3.5 py-2 text-ui font-mono text-ink placeholder:text-muted/60 focus:outline-accent focus:border-accent"
+                    value={sourcePath}
+                    onChange={(e) => {
+                      setSourcePath(e.target.value);
+                      setSelectedFile(null);
+                    }}
+                    placeholder="/path/to/my-app 或 /path/to/application.zip"
+                  />
+                </div>
+              )}
 
               {/* STEP 2 */}
               {step === 2 && (jobId
