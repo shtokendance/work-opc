@@ -1137,7 +1137,7 @@ export function Sidebar(props: Props) {
             <Icon name="sidebar" size={16} />
           </button>
         )}
-        <div className="brand-wordmark text-body">OpenWorker<span className="beta-tag">beta</span></div>
+        <div className="brand-wordmark text-body">Work-OPC<span className="beta-tag">beta</span></div>
       </div>
 
       {props.settingsRail ? (

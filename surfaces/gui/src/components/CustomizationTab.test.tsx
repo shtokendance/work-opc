@@ -92,7 +92,7 @@ describe("Settings ▸ Customization ▸ Web search", () => {
     render(<CustomizationTab />);
     await screen.findByTestId("websearch-providers");
     expect(screen.getByText("Customization")).toBeTruthy();
-    expect(screen.getByText("Pick the services OpenWorker uses behind its tools. Each choice applies to new sessions on this machine.")).toBeTruthy();
+    expect(screen.getByText("Pick the services Work-OPC uses behind its tools. Each choice applies to new sessions on this machine.")).toBeTruthy();
     const names = within(screen.getByTestId("websearch-providers")).getAllByRole("radio").map((r) => r.getAttribute("data-testid"));
     expect(names).toEqual(base.providers.map((p) => `websearch-radio-${p.name}`));
 

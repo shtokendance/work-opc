@@ -191,7 +191,7 @@ describe("SkillsTab", () => {
     });
   });
 
-  it("Add skill menu: three doors; Create with OPC Work hands off to a conversation", async () => {
+  it("Add skill menu: three doors; Create with Work-OPC hands off to a conversation", async () => {
     const calls = stubFetch([{ match: "/v1/skills", method: "GET", json: { skills: [] } }]);
     const onCreateSkill = vi.fn();
     render(<SkillsTab onCreateSkill={onCreateSkill} />);
@@ -201,7 +201,7 @@ describe("SkillsTab", () => {
     expect(screen.getByText("Import a file")).toBeTruthy();
     expect(screen.getByText(/you review before it installs/)).toBeTruthy();
     expect(screen.getByText(/asks before adding it to\s+your skills/)).toBeTruthy();
-    fireEvent.click(screen.getByText("Create with OPC Work"));
+    fireEvent.click(screen.getByText("Create with Work-OPC"));
     // Straight to the conversation — the composer is where you describe it (§5.2).
     expect(onCreateSkill).toHaveBeenCalledWith("");
     // Settings never drafts: no POST of any kind happened.
