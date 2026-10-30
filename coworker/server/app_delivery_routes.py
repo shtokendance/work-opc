@@ -20,6 +20,15 @@ from ..secrets import state_dir
 DEFAULT_PLATFORM_URL = "https://shtokendance.benlai.com"
 
 
+def verification_credentials(contract, deployment_config, supplied):
+    """Transient probe credentials; never add login sessions to deployment config."""
+    allowed = {a.get("auth", {}).get("env") for a in contract.get("apis", []) if a.get("auth", {}).get("type") in {"header", "bearer"}}
+    supplied = {} if supplied is None else supplied
+    if not isinstance(supplied, dict) or any(k not in allowed or not isinstance(v, str) or len(v) > 16384 or any(c in v for c in "\r\n\x00") for k, v in supplied.items()):
+        raise ValueError("业务验证凭据无效，请仅填写本应用声明的登录凭据")
+    return {**{c["key"]: c.get("value", "") for c in deployment_config}, **supplied}
+
+
 def default_platform_url() -> str:
     env_url = (
         os.environ.get("OPC_PLATFORM_HTTP")
@@ -232,7 +241,7 @@ def register_app_delivery_routes(app, manager):
             code, content_type, content = await read_only_probe(health_contract, "health", {})
             if code != health["status"] or "application/json" not in content_type or not delivery.subset(json.loads(content), health["json_contains"]):
                 raise ValueError("应用健康身份校验失败，不能启用业务技能")
-            credentials = {c["key"]: c.get("value", "") for c in data["deployment_confirmation"]["app_config"]}
+            credentials = verification_credentials(contract, data["deployment_confirmation"]["app_config"], body.get("verification_credentials"))
             checks = []
             for case in contract["verification"].get("cases", []):
                 operation = next((api for api in contract["apis"] if api["id"] == case["operation"]), {})

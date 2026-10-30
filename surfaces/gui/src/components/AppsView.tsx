@@ -56,6 +56,8 @@ export function AppsView({ onBack }: Props) {
   const [repairFeedback, setRepairFeedback] = useState("");
   const [deliveryJob, setDeliveryJob] = useState<AppDeliveryJob | null>(null);
   const [finalConfirmed, setFinalConfirmed] = useState(false);
+  const [probeCredentials, setProbeCredentials] = useState<Record<string, string>>({});
+  useEffect(() => { setProbeCredentials({}); }, [jobId, isModalOpen]);
   const readyArtifact = useRef("");
   const draftSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [onlineResources, setOnlineResources] = useState<ResourceSummary[]>([]);
@@ -194,7 +196,8 @@ export function AppsView({ onBack }: Props) {
     setDeploying(true);
     setDeployStatus("verifying");
     try {
-      await appDeliveryRequest("enable-skill", { slug: slug.trim(), job_id: jobId });
+      await appDeliveryRequest("enable-skill", { slug: slug.trim(), job_id: jobId, verification_credentials: probeCredentials });
+      setProbeCredentials({});
       setDeployStatus("running");
       setBuildLogs(logs + "\n业务验证通过，应用技能已启用。");
     } catch (e) {
@@ -1053,6 +1056,18 @@ export function AppsView({ onBack }: Props) {
                         : deployStatus === "verifying" ? "正在核对交付版本并执行只读业务验证…" : "服务器正在构建并启动应用，请稍候。"}
                     </span>
                   </div>
+
+                  {deployStatus === "verification_failed" && deliveryJob?.proposal?.apis?.some(api => api.auth?.env) && (
+                    <section className="p-4 rounded-xl border border-line bg-panel space-y-3">
+                      <h3 className="font-semibold">登录后验证应用业务</h3>
+                      <p className="text-meta text-muted">应用已运行。需要登录的查询，请提供本应用有效的会话凭据，再点“仅重试业务验证”。仅用于本次验证，不上传为部署配置；关闭或切换应用后清空。</p>
+                      {[...new Set(deliveryJob.proposal.apis.map(api => api.auth?.env).filter((key): key is string => !!key))].map(key => (
+                        <label key={key} className="block text-meta">{key}
+                          <input type="password" autoComplete="off" aria-label={`业务验证凭据 ${key}`} value={probeCredentials[key] || ""} onChange={event => setProbeCredentials(values => ({...values, [key]: event.target.value}))} className="mt-1 block w-full rounded-lg border border-line bg-paper px-3 py-2" />
+                        </label>
+                      ))}
+                    </section>
+                  )}
 
                   {["failed", "verification_failed"].includes(deployStatus) && (
                     <div className="p-4 rounded-xl bg-danger/10 border border-danger/25 text-danger space-y-2.5">

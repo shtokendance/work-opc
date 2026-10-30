@@ -425,7 +425,11 @@ def subset(actual, expected):
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(k in actual and subset(actual[k], v) for k, v in expected.items())
     if isinstance(expected, list):
-        return isinstance(actual, list) and len(actual) == len(expected) and all(subset(a, e) for a, e in zip(actual, expected))
+        if not isinstance(actual, list):
+            return False
+        if not expected:
+            return not actual
+        return all(any(subset(item, sample) for item in actual) for sample in expected)
     return type(actual) is type(expected) and actual == expected
 
 

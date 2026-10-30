@@ -154,7 +154,7 @@ describe("AppsView Component", () => {
     vi.mocked(publishAppToPlatform).mockClear();
     let verifies = 0;
     vi.mocked(appDeliveryRequest).mockImplementation(async <T,>(path: string) => {
-      if (path.startsWith("jobs?")) return { jobs: [{ id: "ready-job", artifact_hash: "hash", proposal: { summary: "Approved", changes: [] } }] } as T;
+      if (path.startsWith("jobs?")) return { jobs: [{ id: "ready-job", artifact_hash: "hash", proposal: { summary: "Approved", changes: [], apis: [{id:"lookup",auth:{type:"header",env:"APP_SESSION_COOKIE"}}] } }] } as T;
       if (path === "enable-skill" && ++verifies === 1) throw new Error("search business fields mismatch");
       return { confirmation_token: "confirmed", ok: true } as T;
     });
@@ -162,9 +162,11 @@ describe("AppsView Component", () => {
     fireEvent.click(await screen.findByRole("button", { name: /修复.*部署|重新部署/ }));
     fireEvent.click(await screen.findByLabelText("我已核对应用和连接配置，同意上传并部署"));
     fireEvent.click(screen.getByRole("button", { name: "确认并上传部署" }));
+    fireEvent.change(await screen.findByLabelText("业务验证凭据 APP_SESSION_COOKIE", {}, {timeout:5000}), {target:{value:"sid=test-session"}});
     fireEvent.click(await screen.findByRole("button", { name: "仅重试业务验证" }, { timeout: 5000 }));
     await waitFor(() => expect(screen.getByText("应用健康与只读业务验证通过，本地技能已启用")).toBeTruthy());
     expect(verifies).toBe(2);
+    expect(appDeliveryRequest).toHaveBeenCalledWith("enable-skill", expect.objectContaining({verification_credentials:{APP_SESSION_COOKIE:"sid=test-session"}}));
     expect(publishAppToPlatform).toHaveBeenCalledTimes(1);
     vi.mocked(appDeliveryRequest).mockResolvedValue({ jobs: [] });
   });

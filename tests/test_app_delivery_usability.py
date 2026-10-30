@@ -392,3 +392,25 @@ async def test_ready_proposal_must_meet_actual_platform_health_route(service):
     proposal['contract']['health'] = {'path': '/api/health', 'status': 200, 'json_contains': {'ok': True}}
     with pytest.raises(ValueError, match='部署平台固定检查 /healthz'):
         service.validate_proposal(data, service.path(job['id']) / 'review/source', proposal)
+
+
+def test_probe_credentials_are_transient_and_scoped_to_declared_auth():
+    from coworker.server.app_delivery_routes import verification_credentials
+    config = [{'key': 'PORT', 'value': '8080'}]
+    contract = {'apis': [{'auth': {'type': 'header', 'env': 'APP_SESSION_COOKIE'}}]}
+    result = verification_credentials(contract, config, {'APP_SESSION_COOKIE': 'sid=test'})
+    assert result == {'PORT': '8080', 'APP_SESSION_COOKIE': 'sid=test'}
+    assert config == [{'key': 'PORT', 'value': '8080'}]
+    for value in [{'PORT': 'evil'}, {'APP_SESSION_COOKIE': 'sid=x\r\nHost: evil'}, []]:
+        with pytest.raises(ValueError, match='凭据无效'):
+            verification_credentials(contract, config, value)
+
+
+def test_business_probe_contains_records_without_requiring_whole_list_equality():
+    from coworker.app_delivery_skill.scripts.delivery import subset
+    actual = [{'id': 'OTHER'}, {'id': 'S-10021', 'name': 'original'}]
+    assert subset(actual, [{'id': 'S-10021'}])
+    assert not subset(actual, [{'id': 'MISSING'}])
+    assert not subset(actual, [])
+    assert subset([], [])
+    assert not subset({'id': 'S-10021'}, [{'id': 'S-10021'}])

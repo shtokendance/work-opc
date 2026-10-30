@@ -4559,7 +4559,7 @@ export interface AppDeliveryJob {
     changes: { id: string; path: string; reason: string; group?: string; diff: string }[];
     configs: { key: string; default?: string; description?: string; secret: boolean; required: boolean; has_original_value?: boolean; source?: { path: string; keys: (string | number)[] } }[];
     detected_resources?: { id?: string; type?: string; purpose?: string; env?: string[]; current_hint?: string }[];
-    apis: { id: string; purpose: string; method: string; path: string; effect: string }[];
+    apis: { id: string; purpose: string; method: string; path: string; effect: string; auth?: { type: string; env?: string; header?: string } }[];
     pages: { path: string; purpose: string }[];
     health_path?: string;
     verification_plan?: { cases?: { operation: string }[] };
