@@ -2864,7 +2864,10 @@ class TurnEngine:
             if not getattr(caps, "vision", False):
                 placeholder = {
                     "type": "text",
-                    "text": "[image attachment — not viewable by this model]",
+                    "text": (
+                        f"[图片附件：当前模型 {self.model} 不支持直接查看图片，"
+                        "建议在输入框选择 GPT-6、Claude、Gemini、GLM-5V 等多模态模型]"
+                    ),
                 }
                 out = [
                     (

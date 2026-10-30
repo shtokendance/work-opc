@@ -306,6 +306,26 @@ def _build_openrouter_account(profile: dict[str, Any], secrets: Any) -> Provider
     return OpenAIProvider(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
 
+def _build_kimi_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    api_key = ((profile or {}).get("api_key") or "").strip() or (
+        os.environ.get("MOONSHOT_API_KEY", "").strip() or os.environ.get("KIMI_API_KEY", "").strip()
+    )
+    if not api_key:
+        raise RuntimeError("Kimi 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
+    base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.moonshot.cn/v1"
+    return OpenAIProvider(api_key=api_key, base_url=base_url)
+
+
+def _build_zai_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    api_key = ((profile or {}).get("api_key") or "").strip() or (
+        os.environ.get("ZHIPU_API_KEY", "").strip() or os.environ.get("ZAI_API_KEY", "").strip()
+    )
+    if not api_key:
+        raise RuntimeError("GLM 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
+    base_url = ((profile or {}).get("base_url") or "").strip() or "https://open.bigmodel.cn/api/paas/v4"
+    return OpenAIProvider(api_key=api_key, base_url=base_url)
+
+
 def _openai_compat(vendor: str, default_base_url: str, env_key: Optional[str] = None):
     """Builder factory for vendors reached through their OpenAI-compatible API (Z AI, DeepSeek,
     Kimi, MiniMax, Qwen, xAI, Mistral, Novita, Upstage). The key is resolved from the vendor's OWN
@@ -549,10 +569,46 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         needs_key=False,
         fields=[],
         build=_build_codex,
-        recommended_model="gpt-5.6-sol",
+        recommended_model="gpt-6.1-sol",
         blurb="Sign in with your ChatGPT plan and run OpenAI models through your "
         "subscription — no API key. Tokens stay on this machine.",
         auth="oauth",
+    ),
+    ProviderDescriptor(
+        name="kimi-account",
+        kind="subscription",
+        title="Kimi 账号订阅",
+        needs_key=False,
+        fields=[
+            ProviderField(
+                "api_key",
+                "Kimi 授权 Token / Key",
+                secret=True,
+                required=False,
+                placeholder="sk-… (可选，已登录账号自动生效)",
+            )
+        ],
+        build=_build_kimi_account,
+        recommended_model="kimi-k3",
+        blurb="连接你的 Kimi 账号或订阅服务，自动同步账号权限下的最新模型（如 Kimi K3）。",
+    ),
+    ProviderDescriptor(
+        name="zai-account",
+        kind="subscription",
+        title="GLM (智谱) 账号订阅",
+        needs_key=False,
+        fields=[
+            ProviderField(
+                "api_key",
+                "智谱 API / 订阅 Token",
+                secret=True,
+                required=False,
+                placeholder="智谱 Token 或 API Key (可选)",
+            )
+        ],
+        build=_build_zai_account,
+        recommended_model="glm-5.3",
+        blurb="连接你的 GLM (智谱) 账号订阅，自动同步最新官方大模型（如 GLM-5.3、GLM-5V）。",
     ),
     ProviderDescriptor(
         name="anthropic",
@@ -770,7 +826,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         "zai",
         "Z AI (GLM)",
         base_url="https://api.z.ai/api/paas/v4",
-        recommended_model="glm-5.2",
+        recommended_model="glm-5.3",
         env_key="ZAI_API_KEY",
         endpoint_help="Prefilled with Z AI's international endpoint. China mainland: https://open.bigmodel.cn/api/paas/v4",
     ),
@@ -785,9 +841,17 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         "kimi",
         "Kimi (Moonshot AI)",
         base_url="https://api.moonshot.ai/v1",
-        recommended_model="kimi-k2.6",
+        recommended_model="kimi-k3",
         env_key="MOONSHOT_API_KEY",
         endpoint_help="Prefilled with Moonshot's international endpoint. China mainland: https://api.moonshot.cn/v1",
+    ),
+    _compat(
+        "kimi-code",
+        "Kimi Code",
+        base_url="https://api.moonshot.cn/v1",
+        recommended_model="kimi-k3",
+        env_key="KIMI_CODE_API_KEY",
+        endpoint_help="Kimi Code 开发者 API 服务端点。默认: https://api.moonshot.cn/v1",
     ),
     _compat(
         "minimax",

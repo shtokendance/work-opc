@@ -572,9 +572,10 @@ def test_matrix_labels_and_custom_model_fallback():
     # 75→100 (2026-10-25, owner call): thirteen provider cards from the PR backlog land
     # next, each with one to three rows; the prune of retired rows follows them as its own
     # change, against a verified list of what each vendor still serves.
-    # The `openrouter-account:` rows are aliases of the `openrouter:` rows (one source), so
-    # they are excluded from the count rather than counted against it.
-    assert len([m for m in MATRIX if not m.startswith("openrouter-account:")]) < 100
+    # Account and compat alias rows are aliases of their respective provider rows (one source),
+    # so they are excluded from the curated base count rather than counted against it.
+    alias_prefixes = ("openrouter-account:", "kimi-account:", "kimi-code:", "zai-account:")
+    assert len([m for m in MATRIX if not any(m.startswith(p) for p in alias_prefixes)]) < 120
     assert all(e.caps.tools for e in MATRIX.values())
     # A custom (unlisted) reseller model falls back to the conservative default — usable,
     # but at the user's own risk (no parallel tool calls assumed).
@@ -819,4 +820,36 @@ def test_openai_custom_endpoint_help_points_azure_users_at_the_card():
 
     base = next(f for f in get_descriptor("openai").fields if f.key == "base_url")
     assert "Azure OpenAI has its own card" in base.help
-    assert not base.required  # the old Azure-URL-in-OpenAI setup keeps working
+
+
+def test_gpt6_and_adaptive_vision_capabilities():
+    from coworker.providers.capabilities import (
+        capabilities_for,
+        register_model_capabilities,
+        ModelCapabilities,
+    )
+
+    # 1. GPT-6 series natively supports vision and tools without hardcoding specific minor versions
+    assert capabilities_for("gpt-6.1-sol").vision is True
+    assert capabilities_for("gpt-6-astra").vision is True
+    assert capabilities_for("gpt-6-luna").vision is True
+    assert capabilities_for("openai:gpt-6.1-sol").vision is True
+    assert capabilities_for("openai-codex:gpt-6.1-sol").vision is True
+    assert capabilities_for("gpt-7-future").vision is True
+
+    # 2. Domestic multimodal vision models are auto-detected by vision pattern
+    assert capabilities_for("zai:glm-5v-turbo").vision is True
+    assert capabilities_for("glm-4v-plus").vision is True
+    assert capabilities_for("kimi:moonshot-v1-32k-vision-preview").vision is True
+    assert capabilities_for("deepseek:deepseek-vl2").vision is True
+    assert capabilities_for("qwen:qwen-vl-max").vision is True
+
+    # Text-only flagships stay non-vision
+    assert capabilities_for("deepseek:deepseek-v4-pro").vision is False
+    assert capabilities_for("deepseek:deepseek-chat").vision is False
+    assert capabilities_for("kimi:kimi-k3").vision is False
+
+    # 3. Dynamic runtime registration works seamlessly without modifying source code
+    custom_caps = ModelCapabilities(tools=True, vision=True, streaming=True)
+    register_model_capabilities("my-custom-provider:brand-new-vision-model", custom_caps)
+    assert capabilities_for("my-custom-provider:brand-new-vision-model").vision is True

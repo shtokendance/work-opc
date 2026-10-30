@@ -13,6 +13,7 @@ import { Icon } from "../Icon";
 type Kind = "local" | "subscription" | "api_key";
 const KINDS: Kind[] = ["local", "subscription", "api_key"];
 const FOLD = 6; // cards shown before "Show N more" (two rows of three)
+const FEATURED_API_KEYS = ["kimi", "kimi-code", "deepseek", "gemini"];
 
 export function providerKind(p: ProviderInfo): Kind {
   return p.kind || "api_key";
@@ -110,12 +111,40 @@ export function ProviderGroups({
         const connected = inKind.filter((p) => providerConnected(p, ps.keylessOk));
         const rest = inKind.filter((p) => !providerConnected(p, ps.keylessOk));
         const cards = [...connected, ...rest];
+        let displayCards: ProviderInfo[];
+        let totalCount = cards.length;
+        let foldLimit = FOLD;
+
+        if (kind === "api_key" && !q) {
+          const featuredSet = new Set(FEATURED_API_KEYS);
+          // Show connected cards and the 4 featured cards (kimi, kimi-code, deepseek, gemini) first
+          const prioritized = inKind.filter((p) => providerConnected(p, ps.keylessOk) || featuredSet.has(p.name));
+          const others = inKind.filter((p) => !providerConnected(p, ps.keylessOk) && !featuredSet.has(p.name));
+
+          prioritized.sort((a, b) => {
+            const aConn = providerConnected(a, ps.keylessOk);
+            const bConn = providerConnected(b, ps.keylessOk);
+            if (aConn !== bConn) return aConn ? -1 : 1;
+            const aIdx = FEATURED_API_KEYS.indexOf(a.name);
+            const bIdx = FEATURED_API_KEYS.indexOf(b.name);
+            if (aIdx >= 0 && bIdx >= 0) return aIdx - bIdx;
+            return a.title.localeCompare(b.title);
+          });
+
+          displayCards = expanded.has(kind) ? [...prioritized, ...others] : prioritized;
+          totalCount = prioritized.length + others.length;
+          foldLimit = prioritized.length;
+        } else {
+          displayCards = expanded.has(kind) || q ? cards : cards.slice(0, FOLD);
+          foldLimit = FOLD;
+        }
+
         return (
           <section key={kind} className="mb-6" data-testid={`provider-group-${kind}`}>
             <div className="text-label text-faint font-semibold tracking-wide uppercase mb-2.5">{t(`manage.group_${kind}`)}</div>
             {/* A long group (API keys) shows two rows, then a "Show N more" line expands it in place. */}
             <div className="grid grid-cols-2 xl:grid-cols-3 gap-3" data-testid={`provider-grid-${kind}`}>
-              {(expanded.has(kind) || q ? cards : cards.slice(0, FOLD)).map(cardFor)}
+              {displayCards.map(cardFor)}
               {/* The add box stays whatever the fold or the search shows: saving it makes a
                   new card named by the user, and the box remains for the next one. */}
               {kind === "api_key" && onAddCustom && (
@@ -132,13 +161,13 @@ export function ProviderGroups({
                 </button>
               )}
             </div>
-            {!q && cards.length > FOLD && (
+            {!q && totalCount > foldLimit && (
               <button
                 className="mt-3 text-meta text-muted hover:text-ink"
                 onClick={() => setExpanded((prev) => { const next = new Set(prev); next.has(kind) ? next.delete(kind) : next.add(kind); return next; })}
                 data-testid={`provider-more-${kind}`}
               >
-                {expanded.has(kind) ? t("manage.show_fewer") : t("manage.show_more", { count: cards.length - FOLD })}
+                {expanded.has(kind) ? t("manage.show_fewer") : t("manage.show_more", { count: totalCount - foldLimit })}
               </button>
             )}
           </section>

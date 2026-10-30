@@ -463,6 +463,10 @@ def test_matrix_curates_subscription_models():
     from coworker.providers.matrix import models_for_provider
 
     assert models_for_provider("openai-codex") == [
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -471,8 +475,10 @@ def test_matrix_curates_subscription_models():
         "gpt-5.1-codex",
         "gpt-5.1-codex-mini",
     ]
-    caps = capabilities_for("openai-codex:gpt-5.6-sol")
+    caps = capabilities_for("openai-codex:gpt-6.1-sol")
     assert caps.tools and caps.vision and caps.streaming
+    caps_56 = capabilities_for("openai-codex:gpt-5.6-sol")
+    assert caps_56.tools and caps_56.vision and caps_56.streaming
 
 
 # -- verify probe --------------------------------------------------------------------

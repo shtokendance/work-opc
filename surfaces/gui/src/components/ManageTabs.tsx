@@ -140,6 +140,9 @@ export function ModelsTab() {
   useEffect(() => {
     setFetched([]);
     setFetchNote(null);
+    if (ps.sel && (ps.info?.configured || ps.info?.signed_in || ps.info?.kind === "subscription" || ps.info?.is_custom)) {
+      void fetchModels();
+    }
   }, [ps.sel]);
 
   const fetchModels = async () => {
@@ -265,7 +268,7 @@ export function ModelsTab() {
               {t("manage.azure_deployment_help")}
             </p>
           )}
-          {info?.is_custom && (
+          {(info?.is_custom || info?.configured || info?.signed_in || info?.kind === "subscription") && (
             <div className="flex items-center gap-3 mb-2.5" data-testid="custom-fetch-row">
               <button className={BTN_BORDERED} data-testid="custom-fetch-models" disabled={fetching} onClick={() => void fetchModels()}>
                 {fetching ? t("manage.custom_fetching") : t("manage.custom_fetch_models")}

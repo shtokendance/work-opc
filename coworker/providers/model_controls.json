@@ -25,7 +25,7 @@
       "source": "https://platform.claude.com/docs/en/build-with-claude/effort"
     },
     {
-      "match": ["gpt-5*"],
+      "match": ["gpt-6*", "gpt-5*"],
       "providers": ["openai", "openai-codex"],
       "thinking": {"support": "not_supported"},
       "reasoning": {"support": "supported", "levels": ["low", "medium", "high"], "default": "medium"},

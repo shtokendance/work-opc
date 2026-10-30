@@ -50,6 +50,11 @@ class ModelEntry:
 
 MATRIX: dict[str, ModelEntry] = {
     # -- first-party ------------------------------------------------------------
+    # GPT-6 (2026): Astra flagship / Sol balanced / Luna fast.
+    "gpt-6-astra": ModelEntry("GPT-6 Astra · OpenAI", _AGENTIC_VISION, 400_000),
+    "gpt-6.1-sol": ModelEntry("GPT-6.1 Sol · OpenAI", _AGENTIC_VISION, 400_000),
+    "gpt-6-sol": ModelEntry("GPT-6 Sol · OpenAI", _AGENTIC_VISION, 400_000),
+    "gpt-6-luna": ModelEntry("GPT-6 Luna · OpenAI", _AGENTIC_VISION, 400_000),
     # GPT-5.6 (2026-07-09): number = generation, Sol/Terra/Luna = capability tiers.
     # Bare "gpt-5.6" aliases to Sol server-side; we list the explicit tier ids only.
     # Rolling out — accounts without access get a friendly error (providers/errors.py).
@@ -60,6 +65,34 @@ MATRIX: dict[str, ModelEntry] = {
     # ChatGPT-subscription catalog (the `openai-codex` OAuth provider). Curated to the
     # ids the subscription backend actually serves; vision per the vendor's model docs,
     # PDF unverified over this backend → local fallback via pdf_support.py.
+    "openai-codex:gpt-6-astra": ModelEntry(
+        "GPT-6 Astra · ChatGPT plan",
+        ModelCapabilities(
+            tools=True, vision=True, parallel_tool_calls=True, streaming=True
+        ),
+        400_000,
+    ),
+    "openai-codex:gpt-6.1-sol": ModelEntry(
+        "GPT-6.1 Sol · ChatGPT plan",
+        ModelCapabilities(
+            tools=True, vision=True, parallel_tool_calls=True, streaming=True
+        ),
+        400_000,
+    ),
+    "openai-codex:gpt-6-sol": ModelEntry(
+        "GPT-6 Sol · ChatGPT plan",
+        ModelCapabilities(
+            tools=True, vision=True, parallel_tool_calls=True, streaming=True
+        ),
+        400_000,
+    ),
+    "openai-codex:gpt-6-luna": ModelEntry(
+        "GPT-6 Luna · ChatGPT plan",
+        ModelCapabilities(
+            tools=True, vision=True, parallel_tool_calls=True, streaming=True
+        ),
+        400_000,
+    ),
     # 5.6 tiers (Sol flagship / Terra balanced / Luna fast) serve over the subscription
     # backend by plan — Sol is rate-limited on Plus, full on Pro.
     "openai-codex:gpt-5.6-sol": ModelEntry(
@@ -184,9 +217,11 @@ MATRIX: dict[str, ModelEntry] = {
             tools=True, vision=True, parallel_tool_calls=True, streaming=True
         ),
     ),
-    # GLM-5.2 shipped with a 1M window (docs.z.ai, read 2026-09-08: "1M" context,
-    # 128K output); the 128,000 here was stale and compacted it at 102,400 (OPE-170).
+    # GLM-5.2 & GLM-5.3 shipped with a 1M window (docs.z.ai).
+    # GLM-5V Turbo is the flagship multimodal vision model.
+    "zai:glm-5.3": ModelEntry("GLM-5.3 · Z AI", _AGENTIC, 1_000_000),
     "zai:glm-5.2": ModelEntry("GLM-5.2 · Z AI", _AGENTIC, 1_000_000),
+    "zai:glm-5v-turbo": ModelEntry("GLM-5V Turbo · Z AI", _AGENTIC_VISION, 1_000_000),
     # DeepSeek's native API exposes the full 1M context for both V4 variants
     # (verified against the official model table 2026-08-10).
     "deepseek:deepseek-v4-flash": ModelEntry(
@@ -195,6 +230,7 @@ MATRIX: dict[str, ModelEntry] = {
     "deepseek:deepseek-v4-pro": ModelEntry(
         "DeepSeek V4 Pro · DeepSeek", _AGENTIC, 1_000_000
     ),
+    "kimi:kimi-k3": ModelEntry("Kimi K3 · Moonshot", _AGENTIC, 1_000_000),
     "kimi:kimi-k2.6": ModelEntry("Kimi K2.6 · Moonshot", _AGENTIC, 256_000),
     "minimax:MiniMax-M2.5": ModelEntry("MiniMax M2.5 · MiniMax"),
     "qwen:qwen3-max": ModelEntry("Qwen3 Max · Alibaba", _AGENTIC, 256_000),
@@ -492,6 +528,27 @@ MATRIX.update(
         "openrouter-account:" + mid.split(":", 1)[1]: entry
         for mid, entry in list(MATRIX.items())
         if mid.startswith("openrouter:")
+    }
+)
+MATRIX.update(
+    {
+        "kimi-account:" + mid.split(":", 1)[1]: entry
+        for mid, entry in list(MATRIX.items())
+        if mid.startswith("kimi:")
+    }
+)
+MATRIX.update(
+    {
+        "kimi-code:" + mid.split(":", 1)[1]: entry
+        for mid, entry in list(MATRIX.items())
+        if mid.startswith("kimi:")
+    }
+)
+MATRIX.update(
+    {
+        "zai-account:" + mid.split(":", 1)[1]: entry
+        for mid, entry in list(MATRIX.items())
+        if mid.startswith("zai:")
     }
 )
 

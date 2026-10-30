@@ -4385,9 +4385,31 @@ class SessionManager:
     # Suggestions for the OpenAI-compatible vendor providers (checked against vendor docs
     # 2026-07-04; refresh alongside `recommended_model` in providers/registry.py).
     COMPAT_MODELS = {
-        "zai": ["glm-5.2", "glm-4.6"],
+        "zai": ["glm-5.3", "glm-5.2", "glm-5v-turbo", "glm-4.6"],
+        "zai-account": ["glm-5.3", "glm-5.2", "glm-5v-turbo", "glm-4.6"],
         "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "kimi": ["kimi-k2.6", "kimi-k2.5"],
+        "kimi": ["kimi-k3", "kimi-k3-1", "kimi-k2.6", "kimi-k2.5"],
+        "kimi-account": ["kimi-k3", "kimi-k3-1", "kimi-k2.6"],
+        "kimi-code": ["kimi-k3", "kimi-k3-1", "kimi-k2.6"],
+        "openai": [
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+        ],
+        "openai-codex": [
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+        ],
         "minimax": ["MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M3"],
         "qwen": ["qwen3-max", "qwen3-coder-plus", "qwen-plus"],
         "xai": ["grok-4.3", "grok-4"],
@@ -4574,9 +4596,19 @@ class SessionManager:
             self._codex_authorizing = False
         self._refresh_provider("openai-codex")
         # Same convenience as set_provider: surface the recommended model right away,
-        # and win the default when the current default's provider isn't usable.
-        added = "openai-codex:gpt-5.6-sol"
+        # and populate all current GPT-6 and GPT-5 subscription models so the user
+        # never has to type model IDs manually.
+        added = "openai-codex:gpt-6.1-sol"
         self.add_model(added)
+        for m in (
+            "openai-codex:gpt-6-astra",
+            "openai-codex:gpt-6-sol",
+            "openai-codex:gpt-6-luna",
+            "openai-codex:gpt-5.6-sol",
+            "openai-codex:gpt-5.6-terra",
+            "openai-codex:gpt-5.6-luna",
+        ):
+            self.add_model(m)
         if not self._provider_configured(self._model_provider(self.model)):
             self.set_default_model(added)
         return result
@@ -4750,20 +4782,42 @@ class SessionManager:
             profile = self.secrets.get(f"provider:{name}") or {}
             rows = local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"), fresh=True)
             return {"provider": name, "models": rows, "alive": self._local_server_alive(name)}
-        if is_custom_provider(name, self.secrets):
-            return self._custom_provider_models(name)
+        if is_custom_provider(name, self.secrets) or self.secrets.get(f"provider:{name}") or name in (
+            "kimi", "kimi-code", "zai", "deepseek", "openai", "openai-codex", "kimi-account", "zai-account"
+        ):
+            res = self._custom_provider_models(name)
+            if res.get("models"):
+                return res
+            # Fall back to suggested catalog models so the user sees all available models
+            suggested = self._suggested_models(name)
+            if suggested:
+                rows = [
+                    {
+                        "model": mid if ":" in mid else f"{name}:{mid}",
+                        "name": mid.split(":", 1)[-1],
+                        "size_bytes": None, "tools": True, "thinking": None, "vision": None,
+                        "remote": True, "parameter_size": None, "quantization": None,
+                        "context_max": None, "context": None, "context_from": "catalog",
+                        "fit": "cloud", "recommendation": None,
+                    }
+                    for mid in suggested
+                ]
+                return {"provider": name, "models": rows, "alive": True}
         return {"provider": name, "models": [], "error": "no local model list for this provider"}
 
     def _custom_provider_models(self, name: str) -> dict[str, Any]:
-        """The ids a user-added OpenAI-compatible provider lists at GET /models, as rows the
-        settings page can tick ("Fetch from server"). A server without /models is not a
-        broken provider — Chat Completions does not require the listing — so that case
-        comes back as a note, and the user types the ids instead."""
+        """The ids a provider lists at GET /models, as rows the settings page can tick.
+        Works for custom providers as well as first-party/compat providers (OpenAI, Kimi,
+        DeepSeek, GLM, etc.)."""
         import httpx
 
         profile = self.secrets.get(f"provider:{name}") or {}
-        base = str(profile.get("base_url") or "").strip().rstrip("/")
+        d = get_descriptor(name, self.secrets)
+        base = str(profile.get("base_url") or (getattr(d, "base_url", None) or ("https://api.openai.com/v1" if name == "openai" else ""))).strip().rstrip("/")
         key = str(profile.get("api_key") or "").strip()
+        if not key and d is not None and getattr(d, "env_key", None):
+            import os
+            key = os.environ.get(d.env_key, "").strip()
         if not base:
             return {"provider": name, "models": [], "error": "No endpoint saved for this provider."}
         try:
