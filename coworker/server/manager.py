@@ -4434,8 +4434,12 @@ class SessionManager:
         Ollama → live `/api/tags` (best-effort); everyone else → the curated matrix,
         topped up with the compat-vendor extras the matrix doesn't vouch for."""
         if name == "ollama":
+            if not self._ollama_alive():
+                return []
             return [m.split(":", 1)[-1] for m in self._ollama_models()]
         if name in LOCAL_SERVERS:
+            if not self.secrets.get(f"provider:{name}") or not self._local_server_alive(name):
+                return []
             return [m.split(":", 1)[-1] for m in self._local_server_models(name)]
         from ..providers.matrix import models_for_provider
 

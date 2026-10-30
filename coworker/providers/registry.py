@@ -578,14 +578,14 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         name="kimi-account",
         kind="subscription",
         title="Kimi 账号订阅",
-        needs_key=False,
+        needs_key=True,
         fields=[
             ProviderField(
                 "api_key",
                 "Kimi 授权 Token / Key",
                 secret=True,
-                required=False,
-                placeholder="sk-… (可选，已登录账号自动生效)",
+                required=True,
+                placeholder="sk-…",
             )
         ],
         build=_build_kimi_account,
@@ -596,14 +596,14 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         name="zai-account",
         kind="subscription",
         title="GLM (智谱) 账号订阅",
-        needs_key=False,
+        needs_key=True,
         fields=[
             ProviderField(
                 "api_key",
                 "智谱 API / 订阅 Token",
                 secret=True,
-                required=False,
-                placeholder="智谱 Token 或 API Key (可选)",
+                required=True,
+                placeholder="智谱 Token 或 API Key",
             )
         ],
         build=_build_zai_account,

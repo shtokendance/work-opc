@@ -453,14 +453,21 @@ function ComposerPickerCard({
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const names = providers.map((p) => p.name);
   const provOf = (id: string) => {
     const i = id.indexOf(":");
-    return i > 0 && names.includes(id.slice(0, i)) ? id.slice(0, i) : "openai";
+    return i > 0 ? id.slice(0, i) : "openai";
   };
   const tag = (id: string) => {
-    const p = providers.find((x) => x.name === provOf(id));
-    return (p?.title || provOf(id)).split(" (")[0];
+    const prov = provOf(id);
+    const p = providers.find((x) => x.name === prov);
+    if (p?.title) return p.title.split(" (")[0];
+    if (prov === "openai-codex") return "ChatGPT subscription";
+    if (prov === "kimi-account") return "Kimi 账号订阅";
+    if (prov === "kimi" || prov === "kimi-code") return "Kimi";
+    if (prov === "zai" || prov === "zai-account") return "GLM";
+    if (prov === "deepseek") return "DeepSeek";
+    if (prov === "gemini") return "Gemini";
+    return prov;
   };
   // "ollama:qwen3-coder:30b" reads as "qwen3-coder:30b"; the provider sits beside it.
   const shortId = (id: string) => (id.startsWith(provOf(id) + ":") ? id.slice(provOf(id).length + 1) : id);
