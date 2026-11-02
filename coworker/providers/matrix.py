@@ -116,30 +116,6 @@ MATRIX: dict[str, ModelEntry] = {
         ),
         400_000,
     ),
-    "openai-codex:gpt-5.2-codex": ModelEntry(
-        "GPT-5.2 Codex · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.2": ModelEntry(
-        "GPT-5.2 · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.1-codex": ModelEntry(
-        "GPT-5.1 Codex · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.1-codex-mini": ModelEntry(
-        "GPT-5.1 Codex Mini · ChatGPT plan", _AGENTIC, 400_000
-    ),
     # Claude 5 generation (platform.claude.com/docs/en/models/overview, read 2026-09-08):
     # 1M context is the default and only size; 128K max output; adaptive thinking.
     # Fable 5.1 (2026-09-01) is GA; its Mythos 5.1 sibling is approved-orgs-only, so it
