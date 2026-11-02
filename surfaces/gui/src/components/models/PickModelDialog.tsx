@@ -21,7 +21,7 @@ import { fmtBytes, fmtContext } from "./LocalModels";
 import { providerConnected, providerKind } from "./ProviderGroups";
 
 type Kind = "local" | "subscription" | "api_key";
-const KINDS: Kind[] = ["local", "subscription", "api_key"];
+const KINDS: Kind[] = ["subscription", "api_key"];
 const CONTEXT_STEPS = [16384, 32768, 65536, 131072, 262144, 1048576];
 const REPLY_STEPS = [4096, 8192, 16384, 32768, 65536];
 const COMPACT_STEPS = [0.6, 0.7, 0.8, 0.9];
@@ -76,7 +76,7 @@ export function PickModelDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const connected = providers.filter((p) => providerConnected(p, keylessOk) && kinds.has(providerKind(p)));
+  const connected = providers.filter((p) => providerKind(p) !== "local" && providerConnected(p, keylessOk) && kinds.has(providerKind(p)));
   const isLocal = provider ? providerKind(provider) === "local" : false;
   const [loadFailed, setLoadFailed] = useState(false);
   const [reload, setReload] = useState(0);

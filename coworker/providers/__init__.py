@@ -10,6 +10,7 @@ from .base import (
 from .capabilities import capabilities_for
 from .codex_provider import CodexProvider
 from .gemini_provider import GeminiProvider
+from .kimi_provider import KimiAccountProvider
 from .openai_provider import OpenAIProvider, resolve_api_key
 from .openai_responses import OpenAIResponsesProvider
 from .registry import (
@@ -38,6 +39,7 @@ __all__ = [
     "BedrockProvider",
     "CodexProvider",
     "GeminiProvider",
+    "KimiAccountProvider",
     "OpenAIProvider",
     "OpenAIResponsesProvider",
     "VertexProvider",

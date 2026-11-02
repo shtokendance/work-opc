@@ -116,30 +116,6 @@ MATRIX: dict[str, ModelEntry] = {
         ),
         400_000,
     ),
-    "openai-codex:gpt-5.2-codex": ModelEntry(
-        "GPT-5.2 Codex · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.2": ModelEntry(
-        "GPT-5.2 · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.1-codex": ModelEntry(
-        "GPT-5.1 Codex · ChatGPT plan",
-        ModelCapabilities(
-            tools=True, vision=True, parallel_tool_calls=True, streaming=True
-        ),
-        400_000,
-    ),
-    "openai-codex:gpt-5.1-codex-mini": ModelEntry(
-        "GPT-5.1 Codex Mini · ChatGPT plan", _AGENTIC, 400_000
-    ),
     # Claude 5 generation (platform.claude.com/docs/en/models/overview, read 2026-09-08):
     # 1M context is the default and only size; 128K max output; adaptive thinking.
     # Fable 5.1 (2026-09-01) is GA; its Mythos 5.1 sibling is approved-orgs-only, so it
@@ -222,8 +198,17 @@ MATRIX: dict[str, ModelEntry] = {
     "zai:glm-5.3": ModelEntry("GLM-5.3 · Z AI", _AGENTIC, 1_000_000),
     "zai:glm-5.2": ModelEntry("GLM-5.2 · Z AI", _AGENTIC, 1_000_000),
     "zai:glm-5v-turbo": ModelEntry("GLM-5V Turbo · Z AI", _AGENTIC_VISION, 1_000_000),
-    # DeepSeek's native API exposes the full 1M context for both V4 variants
-    # (verified against the official model table 2026-08-10).
+    "zai:glm-4.6": ModelEntry("GLM-4.6 · Z AI", _AGENTIC, 1_000_000),
+    "zai:glm-4-plus": ModelEntry("GLM-4 Plus · Z AI", _AGENTIC_VISION, 1_000_000),
+    "zai:glm-4-air": ModelEntry("GLM-4 Air · Z AI", _AGENTIC, 1_000_000),
+    "zai:glm-4-flash": ModelEntry("GLM-4 Flash · Z AI", _AGENTIC, 1_000_000),
+    # DeepSeek native API models
+    "deepseek:deepseek-chat": ModelEntry(
+        "DeepSeek V4 (Chat) · DeepSeek", _AGENTIC, 1_000_000
+    ),
+    "deepseek:deepseek-reasoner": ModelEntry(
+        "DeepSeek Reasoner (R1) · DeepSeek", _AGENTIC, 1_000_000
+    ),
     "deepseek:deepseek-v4-flash": ModelEntry(
         "DeepSeek V4 Flash · DeepSeek", _AGENTIC, 1_000_000
     ),
@@ -231,7 +216,12 @@ MATRIX: dict[str, ModelEntry] = {
         "DeepSeek V4 Pro · DeepSeek", _AGENTIC, 1_000_000
     ),
     "kimi:kimi-k3": ModelEntry("Kimi K3 · Moonshot", _AGENTIC, 1_000_000),
+    "kimi:kimi-k3-1": ModelEntry("Kimi K3.1 · Moonshot", _AGENTIC, 1_000_000),
     "kimi:kimi-k2.6": ModelEntry("Kimi K2.6 · Moonshot", _AGENTIC, 256_000),
+    "kimi:kimi-k2.5": ModelEntry("Kimi K2.5 · Moonshot", _AGENTIC, 256_000),
+    "kimi:moonshot-v1-128k": ModelEntry("Moonshot v1 128K · Moonshot", _AGENTIC, 128_000),
+    "kimi:moonshot-v1-32k": ModelEntry("Moonshot v1 32K · Moonshot", _AGENTIC, 32_000),
+    "kimi:moonshot-v1-8k": ModelEntry("Moonshot v1 8K · Moonshot", _AGENTIC, 8_000),
     "minimax:MiniMax-M2.5": ModelEntry("MiniMax M2.5 · MiniMax"),
     "qwen:qwen3-max": ModelEntry("Qwen3 Max · Alibaba", _AGENTIC, 256_000),
     # Qwen3.8 Max: multimodal (text/image/video/document) per Alibaba's model card, unlike
@@ -532,16 +522,28 @@ MATRIX.update(
 )
 MATRIX.update(
     {
-        "kimi-account:" + mid.split(":", 1)[1]: entry
-        for mid, entry in list(MATRIX.items())
-        if mid.startswith("kimi:")
+        "kimi-code:k3.1-pro": ModelEntry(
+            "Kimi K3.1 Pro · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3.1-pro-highspeed": ModelEntry(
+            "Kimi K3.1 Pro Highspeed · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3": ModelEntry(
+            "Kimi K3 · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3-256k": ModelEntry(
+            "Kimi K3 256K · Kimi Code", _AGENTIC_VISION, 256_000
+        ),
+        "kimi-code:kimi-for-coding": ModelEntry(
+            "Kimi for Coding · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
     }
 )
 MATRIX.update(
     {
-        "kimi-code:" + mid.split(":", 1)[1]: entry
+        "kimi-account:" + mid.split(":", 1)[1]: entry
         for mid, entry in list(MATRIX.items())
-        if mid.startswith("kimi:")
+        if mid.startswith("kimi-code:")
     }
 )
 MATRIX.update(

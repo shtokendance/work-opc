@@ -99,6 +99,7 @@ class ProviderDescriptor:
     # How the GUI groups it: "local" (a server on the user's own hardware), "subscription"
     # (a plan signed into), or "api_key" (everything else).
     kind: str = "api_key"
+    base_url: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -307,13 +308,17 @@ def _build_openrouter_account(profile: dict[str, Any], secrets: Any) -> Provider
 
 
 def _build_kimi_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    from .kimi_auth import KimiTokenStore
+    from .kimi_provider import KimiAccountProvider
+
     api_key = ((profile or {}).get("api_key") or "").strip() or (
         os.environ.get("MOONSHOT_API_KEY", "").strip() or os.environ.get("KIMI_API_KEY", "").strip()
     )
-    if not api_key:
+    store = KimiTokenStore(secrets) if secrets is not None else None
+    if not api_key and (store is None or not store.signed_in()):
         raise RuntimeError("Kimi 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
-    base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.moonshot.cn/v1"
-    return OpenAIProvider(api_key=api_key, base_url=base_url)
+    base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.kimi.com/coding/v1"
+    return KimiAccountProvider(api_key=api_key or None, secrets=secrets, base_url=base_url)
 
 
 def _build_zai_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
@@ -581,9 +586,10 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         needs_key=False,
         fields=[],
         build=_build_kimi_account,
-        recommended_model="kimi-k3",
+        recommended_model="k3.1-pro",
         blurb="使用你的 Kimi 账号登录并运行订阅模型 —— 浏览器授权，无需手动填写 API Key。",
         auth="oauth",
+        base_url="https://api.kimi.com/coding/v1",
     ),
     ProviderDescriptor(
         name="zai-account",
@@ -603,6 +609,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         build=_build_zai_account,
         recommended_model="glm-5.3",
         blurb="连接你的 GLM (智谱) 账号订阅或 Coding Plan，自动同步最新官方大模型（如 GLM-5.3、GLM-5V）。",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
     ),
     ProviderDescriptor(
         name="anthropic",
@@ -842,10 +849,10 @@ DESCRIPTORS: list[ProviderDescriptor] = [
     _compat(
         "kimi-code",
         "Kimi Code",
-        base_url="https://api.moonshot.cn/v1",
-        recommended_model="kimi-k3",
+        base_url="https://api.kimi.com/coding/v1",
+        recommended_model="k3.1-pro",
         env_key="KIMI_CODE_API_KEY",
-        endpoint_help="Kimi Code 开发者 API 服务端点。默认: https://api.moonshot.cn/v1",
+        endpoint_help="Kimi Code 开发者 API 服务端点。默认: https://api.kimi.com/coding/v1 (海外: https://api.kimi.ai/coding/v1)",
     ),
     _compat(
         "minimax",
@@ -954,6 +961,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         blurb="Sign in with your OpenRouter account and use its credits — nothing to "
         "paste. The key OpenRouter issues stays on this machine.",
         auth="oauth",
+        base_url=OPENROUTER_BASE_URL,
     ),
     _compat(
         "nebius",
@@ -1685,7 +1693,7 @@ def verify_provider_key(
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=timeout,
                 )
-                if route.status_code == 404:
+                if route.status_code == 404 and name != "kimi-code" and "kimi." not in base:
                     return {
                         "ok": False,
                         "error": "Server reachable, but the completions route 404s — the "

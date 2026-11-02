@@ -61,7 +61,7 @@ FLOW_TIMEOUT_SECONDS = 300
 REFRESH_MARGIN_SECONDS = 300
 _ACCOUNT_CLAIM = "https://api.openai.com/auth"
 # Smallest curated model — the verify probe should cost as close to nothing as possible.
-_VERIFY_MODEL = "gpt-5.1-codex-mini"
+_VERIFY_MODEL = "gpt-5.6-luna"
 
 SIGNED_OUT_ERROR = (
     "Not signed in to ChatGPT — connect your account in Settings ▸ Models to use "

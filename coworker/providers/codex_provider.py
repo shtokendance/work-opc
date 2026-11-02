@@ -42,7 +42,7 @@ class CodexProvider(OpenAIResponsesProvider):
         client: Any = None,
         *,
         secrets: Any = None,
-        default_model: str = "gpt-5.2-codex",
+        default_model: str = "gpt-6.1-sol",
         reasoning_summary: bool = True,
     ):
         super().__init__(

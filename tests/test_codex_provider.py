@@ -363,7 +363,7 @@ def test_stream_request_headers_and_body(tmp_path, monkeypatch):
 
     out = list(
         provider.stream(
-            model="gpt-5.2-codex",
+            model="gpt-6.1-sol",
             messages=[
                 {"role": "system", "content": "sys"},
                 {"role": "user", "content": "hi"},
@@ -381,7 +381,7 @@ def test_stream_request_headers_and_body(tmp_path, monkeypatch):
     assert headers["originator"] == codex_auth.ORIGINATOR
     assert headers["OpenAI-Beta"] == "responses=experimental"
     assert headers["session-id"]  # per-conversation uuid
-    assert fake.kwargs["model"] == "gpt-5.2-codex"
+    assert fake.kwargs["model"] == "gpt-6.1-sol"
     assert fake.kwargs["stream"] is True
     assert fake.kwargs["store"] is False
     assert fake.kwargs["include"] == ["reasoning.encrypted_content"]
@@ -394,7 +394,7 @@ def test_complete_goes_through_stream_and_reasoning_effort_rides(tmp_path, monke
     fake = _FakeSDKClient(events=[_completed_event("done")])
     provider, _, _ = _provider(tmp_path, monkeypatch, [fake])
     turn = provider.complete(
-        model="gpt-5.2-codex",
+        model="gpt-6.1-sol",
         messages=[{"role": "user", "content": "hi"}],
         reasoning_effort="high",
     )
@@ -415,7 +415,7 @@ def test_401_refreshes_once_and_retries_with_new_bearer(tmp_path, monkeypatch):
         lambda *a, **k: _token_response(body={"access_token": fresh}),
     )
     turn = provider.complete(
-        model="gpt-5.2-codex", messages=[{"role": "user", "content": "hi"}]
+        model="gpt-6.1-sol", messages=[{"role": "user", "content": "hi"}]
     )
     assert turn.text == "after refresh"
     assert len(built) == 2 and built[1]["api_key"] == fresh
@@ -426,7 +426,7 @@ def test_429_surfaces_plan_limit_message(tmp_path, monkeypatch):
     provider, _, _ = _provider(tmp_path, monkeypatch, [fake])
     with pytest.raises(RuntimeError, match="plan limit"):
         provider.complete(
-            model="gpt-5.2-codex", messages=[{"role": "user", "content": "hi"}]
+            model="gpt-6.1-sol", messages=[{"role": "user", "content": "hi"}]
         )
 
 
@@ -434,7 +434,7 @@ def test_signed_out_provider_raises_typed_error(tmp_path):
     provider = CodexProvider(secrets=SecretStore(tmp_path / "s.json"))
     with pytest.raises(CodexSignInRequired, match="Not signed in"):
         provider.complete(
-            model="gpt-5.2-codex", messages=[{"role": "user", "content": "hi"}]
+            model="gpt-6.1-sol", messages=[{"role": "user", "content": "hi"}]
         )
 
 
@@ -470,10 +470,6 @@ def test_matrix_curates_subscription_models():
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.2-codex",
-        "gpt-5.2",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-mini",
     ]
     caps = capabilities_for("openai-codex:gpt-6.1-sol")
     assert caps.tools and caps.vision and caps.streaming

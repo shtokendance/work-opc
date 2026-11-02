@@ -886,9 +886,132 @@ def test_kimi_and_glm_subscription_descriptors():
     secrets = DummySecrets()
     store = KimiTokenStore(secrets)
     assert store.signed_in() is False
-    store.save({"access_token": "sk-test", "refresh_token": "rf-test"})
+    store.save({"access_token": "sk-test", "refresh_token": "rf-test", "expires_in": 3600})
     assert store.signed_in() is True
     assert secrets.get("provider:kimi-account")["api_key"] == "sk-test"
+    # Fresh token -> returns cached token without refresh
+    assert store.access_token() == "sk-test"
+
+    # Expired token -> auto refresh via mock httpx
+    secrets.store["provider:kimi-account"]["tokens_issued_at"] = 0  # expired long ago
+    from unittest.mock import patch, MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "access_token": "sk-renewed",
+        "refresh_token": "rf-renewed",
+        "expires_in": 3600,
+    }
+    with patch("httpx.Client.post", return_value=mock_resp):
+        new_token = store.access_token()
+        assert new_token == "sk-renewed"
+        assert secrets.get("provider:kimi-account")["api_key"] == "sk-renewed"
+
     store.clear()
     assert store.signed_in() is False
+
+
+def test_kimi_account_provider_retry_on_401():
+    from coworker.providers.kimi_provider import KimiAccountProvider
+    from unittest.mock import MagicMock, patch
+
+    class DummySecrets:
+        def __init__(self):
+            self.store = {
+                "provider:kimi-account": {
+                    "tokens": {"access_token": "sk-old", "refresh_token": "rf-old", "expires_in": 3600},
+                    "api_key": "sk-old",
+                    "tokens_issued_at": 1000000000,
+                }
+            }
+        def get(self, k):
+            return self.store.get(k)
+        def put(self, k, v):
+            self.store[k] = v
+        def delete(self, k):
+            self.store.pop(k, None)
+
+    secrets = DummySecrets()
+    provider = KimiAccountProvider(secrets=secrets)
+
+    # Mock client and 401 error
+    mock_client = MagicMock()
+    error_401 = Exception("401 Unauthorized")
+    error_401.status_code = 401
+
+    mock_turn = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Hello after retry"
+    mock_choice.message.tool_calls = None
+    mock_turn.choices = [mock_choice]
+
+    # First call throws 401, second call succeeds
+    mock_client.chat.completions.create.side_effect = [error_401, mock_turn]
+
+    provider._client = mock_client
+    provider._client_token = "sk-old"
+
+    with patch.object(provider._store, "refresh", return_value="sk-new"):
+        with patch.object(provider, "_ensure_client", return_value=mock_client):
+            turn = provider.complete(
+                model="k3.1-pro",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            assert turn.text == "Hello after retry"
+            assert mock_client.chat.completions.create.call_count == 2
+
+
+def test_kimi_account_provider_stream_retry_on_401():
+    from coworker.providers.kimi_provider import KimiAccountProvider
+    from unittest.mock import MagicMock, patch
+
+    class DummySecrets:
+        def __init__(self):
+            self.store = {
+                "provider:kimi-account": {
+                    "tokens": {"access_token": "sk-old", "refresh_token": "rf-old", "expires_in": 3600},
+                    "api_key": "sk-old",
+                    "tokens_issued_at": 1000000000,
+                }
+            }
+        def get(self, k):
+            return self.store.get(k)
+        def put(self, k, v):
+            self.store[k] = v
+        def delete(self, k):
+            self.store.pop(k, None)
+
+    secrets = DummySecrets()
+    provider = KimiAccountProvider(secrets=secrets)
+
+    mock_client = MagicMock()
+    error_401 = Exception("401 Unauthorized")
+    error_401.status_code = 401
+
+    mock_chunk = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.delta.content = "Streamed hello"
+    mock_choice.delta.tool_calls = None
+    mock_chunk.choices = [mock_choice]
+    mock_chunk.usage = None
+
+    # First call to create raises 401, second returns an iterable of chunks
+    mock_client.chat.completions.create.side_effect = [error_401, [mock_chunk]]
+
+    provider._client = mock_client
+    provider._client_token = "sk-old"
+
+    with patch.object(provider._store, "refresh", return_value="sk-new"):
+        with patch.object(provider, "_ensure_client", return_value=mock_client):
+            chunks = list(provider.stream(
+                model="k3.1-pro",
+                messages=[{"role": "user", "content": "hi"}],
+            ))
+            assert len(chunks) == 2
+            assert chunks[0].text_delta == "Streamed hello"
+            assert chunks[1].turn.text == "Streamed hello"
+            assert mock_client.chat.completions.create.call_count == 2
+
+
 

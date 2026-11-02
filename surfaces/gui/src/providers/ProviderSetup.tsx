@@ -56,7 +56,7 @@ export const KEY_HELP: Record<string, { url: string; label: string; labelKey?: s
   zai: { url: "https://z.ai/manage-apikey/apikey-list", label: "z.ai" },
   "zai-account": { url: "https://open.bigmodel.cn/usercenter/apikeys", label: "open.bigmodel.cn" },
   kimi: { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
-  "kimi-code": { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
+  "kimi-code": { url: "https://www.kimi.com/code", label: "kimi.com/code" },
   deepseek: { url: "https://platform.deepseek.com/api_keys", label: "platform.deepseek.com" },
   mistral: { url: "https://console.mistral.ai/api-keys", label: "console.mistral.ai" },
   novita: { url: "https://novita.ai/settings/key-management", label: "novita.ai" },
@@ -110,6 +110,7 @@ export interface ProviderSetupState {
   providers: ProviderInfo[];
   ordered: ProviderInfo[];
   refreshProviders: () => Promise<void>;
+  notifySaved?: () => void;
   sel: string | null;
   info: ProviderInfo | undefined;
   fields: Record<string, string>;
@@ -154,6 +155,10 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
   const [fieldSaved, setFieldSaved] = useState<string | null>(null);
   const fieldSavedTimer = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const notifySaved = () => {
+    opts?.onSaved?.();
+  };
 
   const refreshProviders = () =>
     getProviders()
@@ -331,6 +336,7 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
     ),
     openProvider,
     backToGallery,
+    notifySaved,
     runTestAndSave,
     removeKey,
     saveField,
@@ -602,9 +608,22 @@ export function ProviderForm({
 
       {info?.auth === "oauth" &&
         (info.name === "openrouter-account" ? (
-          <OpenRouterSignIn tp={tp} onChanged={ps.refreshProviders} />
+          <OpenRouterSignIn
+            tp={tp}
+            onChanged={async () => {
+              await ps.refreshProviders();
+              ps.notifySaved?.();
+            }}
+          />
         ) : (
-          <OAuthSignIn info={info} tp={tp} onChanged={ps.refreshProviders} />
+          <OAuthSignIn
+            info={info}
+            tp={tp}
+            onChanged={async () => {
+              await ps.refreshProviders();
+              ps.notifySaved?.();
+            }}
+          />
         ))}
 
       {!guided && fieldsAll

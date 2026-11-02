@@ -537,7 +537,7 @@ def test_outbound_replaces_images_for_non_vision_models(tmp_path):
     )
     parts = engine._outbound_messages()[-1]["content"]
     assert all(p["type"] != "image_url" for p in parts)
-    assert "not viewable" in parts[-1]["text"]
+    assert "不支持直接查看图片" in parts[-1]["text"]
     assert engine.messages[-1]["content"][1]["type"] == "image_url"  # history untouched
 
 
