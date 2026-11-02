@@ -99,6 +99,7 @@ class ProviderDescriptor:
     # How the GUI groups it: "local" (a server on the user's own hardware), "subscription"
     # (a plan signed into), or "api_key" (everything else).
     kind: str = "api_key"
+    base_url: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -312,7 +313,7 @@ def _build_kimi_account(profile: dict[str, Any], secrets: Any) -> ProviderClient
     )
     if not api_key:
         raise RuntimeError("Kimi 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
-    base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.moonshot.cn/v1"
+    base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.kimi.com/coding/v1"
     return OpenAIProvider(api_key=api_key, base_url=base_url)
 
 
@@ -581,9 +582,10 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         needs_key=False,
         fields=[],
         build=_build_kimi_account,
-        recommended_model="kimi-k3",
+        recommended_model="k3.1-pro",
         blurb="使用你的 Kimi 账号登录并运行订阅模型 —— 浏览器授权，无需手动填写 API Key。",
         auth="oauth",
+        base_url="https://api.kimi.com/coding/v1",
     ),
     ProviderDescriptor(
         name="zai-account",
@@ -603,6 +605,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         build=_build_zai_account,
         recommended_model="glm-5.3",
         blurb="连接你的 GLM (智谱) 账号订阅或 Coding Plan，自动同步最新官方大模型（如 GLM-5.3、GLM-5V）。",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
     ),
     ProviderDescriptor(
         name="anthropic",
@@ -954,6 +957,7 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         blurb="Sign in with your OpenRouter account and use its credits — nothing to "
         "paste. The key OpenRouter issues stays on this machine.",
         auth="oauth",
+        base_url=OPENROUTER_BASE_URL,
     ),
     _compat(
         "nebius",

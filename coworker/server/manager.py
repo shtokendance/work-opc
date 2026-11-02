@@ -4388,11 +4388,46 @@ class SessionManager:
     # Suggestions for the OpenAI-compatible vendor providers (checked against vendor docs
     # 2026-07-04; refresh alongside `recommended_model` in providers/registry.py).
     COMPAT_MODELS = {
-        "zai": ["glm-5.3", "glm-5.2", "glm-5v-turbo", "glm-4.6"],
-        "zai-account": ["glm-5.3", "glm-5.2", "glm-5v-turbo", "glm-4.6"],
-        "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "kimi": ["kimi-k3", "kimi-k3-1", "kimi-k2.6", "kimi-k2.5"],
-        "kimi-account": ["kimi-k3", "kimi-k3-1", "kimi-k2.6"],
+        "zai": [
+            "glm-5.3",
+            "glm-5.2",
+            "glm-5v-turbo",
+            "glm-4.6",
+            "glm-4-plus",
+            "glm-4-air",
+            "glm-4-flash",
+        ],
+        "zai-account": [
+            "glm-5.3",
+            "glm-5.2",
+            "glm-5v-turbo",
+            "glm-4.6",
+            "glm-4-plus",
+            "glm-4-air",
+            "glm-4-flash",
+        ],
+        "deepseek": [
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+        ],
+        "kimi": [
+            "kimi-k3",
+            "kimi-k3-1",
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "moonshot-v1-128k",
+            "moonshot-v1-32k",
+            "moonshot-v1-8k",
+        ],
+        "kimi-account": [
+            "k3.1-pro",
+            "k3.1-pro-highspeed",
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+        ],
         "kimi-code": [
             "k3.1-pro",
             "k3.1-pro-highspeed",
@@ -4688,9 +4723,14 @@ class SessionManager:
         finally:
             self._kimi_authorizing = False
         self._refresh_provider("kimi-account")
-        added = "kimi-account:kimi-k3"
+        added = "kimi-account:k3.1-pro"
         self.add_model(added)
-        for m in ("kimi-account:kimi-k2.6",):
+        for m in (
+            "kimi-account:k3.1-pro-highspeed",
+            "kimi-account:k3",
+            "kimi-account:k3-256k",
+            "kimi-account:kimi-for-coding",
+        ):
             self.add_model(m)
         if not self._provider_configured(self._model_provider(self.model)):
             self.set_default_model(added)
@@ -4915,9 +4955,44 @@ class SessionManager:
         profile = self.secrets.get(f"provider:{name}") or {}
         d = get_descriptor(name, self.secrets)
         key = str(profile.get("api_key") or "").strip()
+        if not key and isinstance(profile.get("tokens"), dict):
+            key = str(profile["tokens"].get("access_token") or "").strip()
         if not key and d is not None and getattr(d, "env_key", None):
             import os
             key = os.environ.get(d.env_key, "").strip()
+
+        if name == "openai-codex":
+            from ..providers import codex_auth
+            store = codex_auth.CodexTokenStore(self.secrets)
+            if not store.signed_in():
+                return {"provider": name, "models": [], "error": "Not signed in to ChatGPT subscription."}
+            try:
+                token, account = store.access_token()
+                resp = httpx.get(
+                    codex_auth.CODEX_BASE_URL + "/models",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        **codex_auth.backend_headers(account, "model-fetch"),
+                    },
+                    timeout=6.0,
+                )
+                if resp.status_code < 300:
+                    items = resp.json().get("data", [])
+                    ids = [str(it["id"]) for it in items if isinstance(it, dict) and it.get("id")]
+                    if ids:
+                        rows = [
+                            {
+                                "model": f"openai-codex:{mid}", "name": mid, "size_bytes": None, "tools": True,
+                                "thinking": True, "vision": True, "remote": True, "parameter_size": None,
+                                "quantization": None, "context_max": 400_000, "context": 400_000,
+                                "context_from": "server", "fit": "cloud", "recommendation": None,
+                            }
+                            for mid in ids
+                        ]
+                        return {"provider": name, "models": rows, "alive": True}
+            except Exception:
+                pass
+            return {"provider": name, "models": [], "error": "subscription_catalog"}
 
         if name == "anthropic":
             if not key:
@@ -4956,7 +5031,11 @@ class SessionManager:
                 )
                 if resp.status_code < 300:
                     items = resp.json().get("models", [])
-                    ids = [it["name"].replace("models/", "") for it in items if isinstance(it, dict) and it.get("name")]
+                    ids = [
+                        it["name"].replace("models/", "")
+                        for it in items
+                        if isinstance(it, dict) and it.get("name") and "generateContent" in it.get("supportedGenerationMethods", ["generateContent"])
+                    ]
                     rows = [
                         {
                             "model": f"gemini:{mid}", "name": mid, "size_bytes": None, "tools": True,
@@ -4971,7 +5050,16 @@ class SessionManager:
             except Exception as exc:
                 return {"provider": name, "models": [], "alive": False, "error": f"Could not reach Gemini: {exc.__class__.__name__}."}
 
-        base = str(profile.get("base_url") or (getattr(d, "base_url", None) or ("https://api.openai.com/v1" if name == "openai" else ""))).strip().rstrip("/")
+        base = str(
+            profile.get("base_url")
+            or (getattr(d, "base_url", None) or "")
+            or ("https://api.openai.com/v1" if name == "openai" else "")
+            or ("https://openrouter.ai/api/v1" if name in ("openrouter", "openrouter-account") else "")
+            or ("https://open.bigmodel.cn/api/paas/v4" if name in ("zai", "zai-account") else "")
+            or ("https://api.kimi.com/coding/v1" if name in ("kimi-code", "kimi-account") else "")
+            or ("https://api.moonshot.cn/v1" if name == "kimi" else "")
+            or ("https://api.deepseek.com" if name == "deepseek" else "")
+        ).strip().rstrip("/")
         if not base:
             return {"provider": name, "models": [], "error": "No endpoint saved for this provider."}
         try:
