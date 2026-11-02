@@ -53,6 +53,12 @@ export function ResourcesView({
 
   const signedIn = enterprise.kind === "signed_in";
   const tenant = enterprise.kind === "signed_in" ? enterprise.tenant : "";
+  const currentSpace = signedIn && enterprise.spaces ? enterprise.spaces.find((s) => s.id === tenant) : undefined;
+  const readyItems = page.kind === "ready" || page.kind === "empty" ? page.envelope.items : [];
+  const spaceDisplayName =
+    currentSpace?.name ||
+    readyItems.find((i) => i.tenant_name)?.tenant_name ||
+    (tenant ? `空间 ${tenant}` : "");
 
   const load = useCallback(
     async (opts: { q?: string; offset?: number } = {}) => {
@@ -156,9 +162,12 @@ export function ResourcesView({
               <h1 className="text-lg font-semibold text-ink leading-tight">
                 {t("resources.title", "知识库")}
               </h1>
-              {tenant && (
-                <span className="px-2 py-0.5 rounded-full text-2xs font-medium bg-accentSoft/60 text-accent border border-accent/20">
-                  {tenant}
+              {spaceDisplayName && (
+                <span
+                  className="px-2.5 py-0.5 rounded-full text-label font-medium bg-accentSoft/70 text-accent border border-accent/20 max-w-[200px] truncate"
+                  title={tenant ? `当前空间: ${spaceDisplayName}${tenant !== spaceDisplayName ? ` (编码: ${tenant})` : ""}` : undefined}
+                >
+                  {spaceDisplayName}
                 </span>
               )}
             </div>

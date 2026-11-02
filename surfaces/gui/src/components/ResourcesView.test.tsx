@@ -63,6 +63,7 @@ describe("ResourcesView", () => {
     const onUse = vi.fn();
     render(<ResourcesView enterprise={signedIn} onUseKnowledge={onUse} />);
     await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    expect(screen.getByTitle("当前空间: 交付中心 (编码: T1)")).toBeTruthy();
     fireEvent.click(screen.getAllByText("使用")[0]);
     expect(onUse).toHaveBeenCalledWith(
       expect.objectContaining({ tenant_id: "T1", knowledge_base_id: "kb-a", context_id: "cid" }),
