@@ -56,7 +56,7 @@ export const KEY_HELP: Record<string, { url: string; label: string; labelKey?: s
   zai: { url: "https://z.ai/manage-apikey/apikey-list", label: "z.ai" },
   "zai-account": { url: "https://open.bigmodel.cn/usercenter/apikeys", label: "open.bigmodel.cn" },
   kimi: { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
-  "kimi-code": { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
+  "kimi-code": { url: "https://www.kimi.com/code", label: "kimi.com/code" },
   deepseek: { url: "https://platform.deepseek.com/api_keys", label: "platform.deepseek.com" },
   mistral: { url: "https://console.mistral.ai/api-keys", label: "console.mistral.ai" },
   novita: { url: "https://novita.ai/settings/key-management", label: "novita.ai" },

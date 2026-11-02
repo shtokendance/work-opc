@@ -4393,7 +4393,13 @@ class SessionManager:
         "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
         "kimi": ["kimi-k3", "kimi-k3-1", "kimi-k2.6", "kimi-k2.5"],
         "kimi-account": ["kimi-k3", "kimi-k3-1", "kimi-k2.6"],
-        "kimi-code": ["kimi-k3", "kimi-k3-1", "kimi-k2.6"],
+        "kimi-code": [
+            "k3.1-pro",
+            "k3.1-pro-highspeed",
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+        ],
         "openai": [
             "gpt-6-astra",
             "gpt-6.1-sol",
@@ -4444,6 +4450,13 @@ class SessionManager:
             if not self.secrets.get(f"provider:{name}") or not self._local_server_alive(name):
                 return []
             return [m.split(":", 1)[-1] for m in self._local_server_models(name)]
+        if self.secrets.get(f"provider:{name}"):
+            try:
+                facts = self._custom_provider_models(name)
+                if facts.get("models"):
+                    return [m["name"] for m in facts["models"]]
+            except Exception:
+                pass
         from ..providers.matrix import models_for_provider
 
         return list(
@@ -4503,20 +4516,31 @@ class SessionManager:
         if d is None:
             return None
         self._refresh_provider(name)
-        # Convenience: if the provider recommends a model and it's actually available, add it to
-        # the curated list so it shows up in the composer right after configuring the provider.
+        # Query provider's live models using the newly configured API key
+        live_models: list[str] = []
+        try:
+            facts = self._custom_provider_models(name)
+            if facts.get("models"):
+                live_models = [m["name"] for m in facts["models"]]
+        except Exception:
+            pass
+
+        suggested = live_models or self._suggested_models(name)
         rec = d.recommended_model
         added: Optional[str] = None
-        suggested = self._suggested_models(name)
         if rec and rec in suggested:
             # OpenAI models stay bare (the router's default); others carry their prefix.
             added = rec if name == "openai" else f"{name}:{rec}"
-        elif (name == "ollama" or name in LOCAL_SERVERS) and suggested:
-            # A local server offers whatever the user loaded — the recommended model may
-            # not be one.
-            added = f"{name}:{suggested[0]}"
+        elif suggested:
+            # A local server or provider endpoint offers whatever models were returned
+            added = suggested[0] if name == "openai" else f"{name}:{suggested[0]}"
         if added:
             self.add_model(added)
+        # When live models were returned by the API key, make the top models readily available
+        if live_models:
+            for m in live_models[:8]:
+                mid = m if name == "openai" else f"{name}:{m}"
+                self.add_model(mid)
         if added and not self.model_selectable(self.model):
             self.set_default_model(added)
             return added
@@ -4858,9 +4882,8 @@ class SessionManager:
             profile = self.secrets.get(f"provider:{name}") or {}
             rows = local_server.model_facts(name, profile.get("base_url"), profile.get("api_key"), fresh=True)
             return {"provider": name, "models": rows, "alive": self._local_server_alive(name)}
-        if is_custom_provider(name, self.secrets) or self.secrets.get(f"provider:{name}") or name in (
-            "kimi", "kimi-code", "zai", "deepseek", "openai", "openai-codex", "kimi-account", "zai-account"
-        ):
+        d = get_descriptor(name, self.secrets)
+        if is_custom_provider(name, self.secrets) or self.secrets.get(f"provider:{name}") or d is not None:
             res = self._custom_provider_models(name)
             if res.get("models"):
                 return res
@@ -4886,16 +4909,69 @@ class SessionManager:
     def _custom_provider_models(self, name: str) -> dict[str, Any]:
         """The ids a provider lists at GET /models, as rows the settings page can tick.
         Works for custom providers as well as first-party/compat providers (OpenAI, Kimi,
-        DeepSeek, GLM, etc.)."""
+        DeepSeek, GLM, Anthropic, Gemini, etc.)."""
         import httpx
 
         profile = self.secrets.get(f"provider:{name}") or {}
         d = get_descriptor(name, self.secrets)
-        base = str(profile.get("base_url") or (getattr(d, "base_url", None) or ("https://api.openai.com/v1" if name == "openai" else ""))).strip().rstrip("/")
         key = str(profile.get("api_key") or "").strip()
         if not key and d is not None and getattr(d, "env_key", None):
             import os
             key = os.environ.get(d.env_key, "").strip()
+
+        if name == "anthropic":
+            if not key:
+                return {"provider": name, "models": [], "error": "No API key configured."}
+            try:
+                resp = httpx.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                    timeout=8.0,
+                )
+                if resp.status_code < 300:
+                    items = resp.json().get("data", [])
+                    ids = [it["id"] for it in items if isinstance(it, dict) and it.get("id")]
+                    rows = [
+                        {
+                            "model": f"anthropic:{mid}", "name": mid, "size_bytes": None, "tools": True,
+                            "thinking": True, "vision": True, "remote": True, "parameter_size": None,
+                            "quantization": None, "context_max": 1_000_000, "context": 1_000_000,
+                            "context_from": "server", "fit": "cloud", "recommendation": None,
+                        }
+                        for mid in ids
+                    ]
+                    return {"provider": name, "models": rows, "alive": True}
+                return {"provider": name, "models": [], "alive": True, "error": f"Anthropic returned HTTP {resp.status_code}."}
+            except Exception as exc:
+                return {"provider": name, "models": [], "alive": False, "error": f"Could not reach Anthropic: {exc.__class__.__name__}."}
+
+        if name == "gemini":
+            if not key:
+                return {"provider": name, "models": [], "error": "No API key configured."}
+            try:
+                resp = httpx.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": key},
+                    timeout=8.0,
+                )
+                if resp.status_code < 300:
+                    items = resp.json().get("models", [])
+                    ids = [it["name"].replace("models/", "") for it in items if isinstance(it, dict) and it.get("name")]
+                    rows = [
+                        {
+                            "model": f"gemini:{mid}", "name": mid, "size_bytes": None, "tools": True,
+                            "thinking": True, "vision": True, "remote": True, "parameter_size": None,
+                            "quantization": None, "context_max": 1_048_576, "context": 1_048_576,
+                            "context_from": "server", "fit": "cloud", "recommendation": None,
+                        }
+                        for mid in ids
+                    ]
+                    return {"provider": name, "models": rows, "alive": True}
+                return {"provider": name, "models": [], "alive": True, "error": f"Gemini returned HTTP {resp.status_code}."}
+            except Exception as exc:
+                return {"provider": name, "models": [], "alive": False, "error": f"Could not reach Gemini: {exc.__class__.__name__}."}
+
+        base = str(profile.get("base_url") or (getattr(d, "base_url", None) or ("https://api.openai.com/v1" if name == "openai" else ""))).strip().rstrip("/")
         if not base:
             return {"provider": name, "models": [], "error": "No endpoint saved for this provider."}
         try:

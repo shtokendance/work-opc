@@ -842,10 +842,10 @@ DESCRIPTORS: list[ProviderDescriptor] = [
     _compat(
         "kimi-code",
         "Kimi Code",
-        base_url="https://api.moonshot.cn/v1",
-        recommended_model="kimi-k3",
+        base_url="https://api.kimi.com/coding/v1",
+        recommended_model="k3.1-pro",
         env_key="KIMI_CODE_API_KEY",
-        endpoint_help="Kimi Code 开发者 API 服务端点。默认: https://api.moonshot.cn/v1",
+        endpoint_help="Kimi Code 开发者 API 服务端点。默认: https://api.kimi.com/coding/v1 (海外: https://api.kimi.ai/coding/v1)",
     ),
     _compat(
         "minimax",
@@ -1685,7 +1685,7 @@ def verify_provider_key(
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=timeout,
                 )
-                if route.status_code == 404:
+                if route.status_code == 404 and name != "kimi-code" and "kimi." not in base:
                     return {
                         "ok": False,
                         "error": "Server reachable, but the completions route 404s — the "

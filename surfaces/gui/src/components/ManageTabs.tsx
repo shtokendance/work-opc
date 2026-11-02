@@ -298,7 +298,7 @@ export function ModelsTab() {
           <ModelChecklist
             provider={ps.sel}
             knownProviders={knownNames}
-            suggested={[...(info?.suggested_models || []), ...fetched].filter((m, i, a) => a.indexOf(m) === i)}
+            suggested={fetched.length > 0 ? fetched : (info?.suggested_models || [])}
             curated={settings.models}
             defaultModel={settings.model}
             labels={settings.model_labels}

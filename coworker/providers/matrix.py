@@ -515,9 +515,21 @@ MATRIX.update(
 )
 MATRIX.update(
     {
-        "kimi-code:" + mid.split(":", 1)[1]: entry
-        for mid, entry in list(MATRIX.items())
-        if mid.startswith("kimi:")
+        "kimi-code:k3.1-pro": ModelEntry(
+            "Kimi K3.1 Pro · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3.1-pro-highspeed": ModelEntry(
+            "Kimi K3.1 Pro Highspeed · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3": ModelEntry(
+            "Kimi K3 · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
+        "kimi-code:k3-256k": ModelEntry(
+            "Kimi K3 256K · Kimi Code", _AGENTIC_VISION, 256_000
+        ),
+        "kimi-code:kimi-for-coding": ModelEntry(
+            "Kimi for Coding · Kimi Code", _AGENTIC_VISION, 1_000_000
+        ),
     }
 )
 MATRIX.update(
