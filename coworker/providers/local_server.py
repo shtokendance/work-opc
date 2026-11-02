@@ -70,9 +70,28 @@ def _headers(api_key: Optional[str]) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
-def alive(name: str, base_url: Optional[str], api_key: Optional[str] = None) -> bool:
+def _port_open(url: str) -> bool:
+    import socket
+    from urllib.parse import urlparse
+
     try:
-        return httpx.get(v1_base(name, base_url) + "/models", headers=_headers(api_key), timeout=0.8).status_code == 200
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        if host == "localhost":
+            host = "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=0.06):
+            return True
+    except OSError:
+        return False
+
+
+def alive(name: str, base_url: Optional[str], api_key: Optional[str] = None) -> bool:
+    base = v1_base(name, base_url)
+    if not _port_open(base):
+        return False
+    try:
+        return httpx.get(base + "/models", headers=_headers(api_key), timeout=0.8).status_code == 200
     except Exception:  # noqa: BLE001 - a probe never raises
         return False
 

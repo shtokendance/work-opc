@@ -4746,6 +4746,10 @@ class SessionManager:
         base = (profile.get("base_url") or "http://localhost:11434").strip().rstrip("/")
         if base.endswith("/v1"):
             base = base[: -len("/v1")]
+        from ..providers.local_server import _port_open
+        if not _port_open(base):
+            self._ollama_alive_cache = (now, False)
+            return False
         try:
             import httpx
 

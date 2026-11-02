@@ -101,6 +101,7 @@ export function relTime(epoch?: number | null, t?: TFunction): string | null {
 }
 
 export interface ProviderSetupState {
+  loading?: boolean;
   providers: ProviderInfo[];
   ordered: ProviderInfo[];
   refreshProviders: () => Promise<void>;
@@ -147,11 +148,17 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
   // Which non-secret field just blur-saved (flashes "✓ Saved" in the input).
   const [fieldSaved, setFieldSaved] = useState<string | null>(null);
   const fieldSavedTimer = useRef<number | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const refreshProviders = () =>
     getProviders()
-      .then(setProviders)
-      .catch(() => {});
+      .then((p) => {
+        setProviders(p);
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
   useEffect(() => {
     refreshProviders();
     return () => {
@@ -284,6 +291,7 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
   };
 
   return {
+    loading,
     providers,
     // Alphabetical by display title (owner ruling 2026-08-21: a curated order reads
     // as vendor bias). The old providerRank curation stays only as the tiebreaker

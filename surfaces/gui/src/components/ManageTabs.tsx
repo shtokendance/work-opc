@@ -173,7 +173,7 @@ export function ModelsTab() {
     );
   }
 
-  if (!settings) return <div className="text-ui text-muted">{t("manage.loading")}</div>;
+  if (!settings || (ps.loading && ps.providers.length === 0)) return <div className="text-ui text-muted">{t("manage.loading")}</div>;
 
   const info = ps.info;
   const knownNames = ps.providers.map((p) => p.name);
