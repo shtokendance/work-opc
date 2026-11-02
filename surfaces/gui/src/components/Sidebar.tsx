@@ -21,6 +21,7 @@ import {
 import { cloudMe } from "../cloudAuth";
 import {
   createEnterpriseSession,
+  getKnownSpaceNames,
   type EnterpriseState,
 } from "../enterprise";
 import {
@@ -458,10 +459,15 @@ export function Sidebar(props: Props) {
         ? ent.subject
         : "";
   const entLabelDetail = entSignedIn ? (entLabel || ent.subject) : "";
-  const currentSpaceName =
-    entSignedIn
-      ? (ent.spaces?.find((s) => s.id === ent.tenant)?.name || ent.tenant)
-      : "";
+  const knownSpaces = getKnownSpaceNames();
+  const rawSpaceName = entSignedIn
+    ? (ent.spaces?.find((s) => s.id === ent.tenant)?.name || knownSpaces[ent.tenant] || "")
+    : "";
+  const currentSpaceName = entSignedIn
+    ? (rawSpaceName && !/^\d+$/.test(rawSpaceName.trim())
+      ? rawSpaceName
+      : (knownSpaces[ent.tenant] || ent.tenant))
+    : "";
   const accountDisplayName = accountSignedIn
     ? accountName
     : entSignedIn

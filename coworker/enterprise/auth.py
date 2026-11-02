@@ -186,6 +186,9 @@ class EnterpriseAuthService:
         self._epoch = 0
         # Context keys invalidated by a switch (BND-120) — observable for tests/audit.
         self.orphaned_context_keys: list[str] = []
+        self._refresh_lock: Optional[Any] = None  # asyncio.Lock lazily initialized
+        self._refresh_in_flight: Optional[str] = None
+        self._refresh_in_flight_future: Optional[Any] = None
 
     @classmethod
     def from_config(cls, config: Any) -> "EnterpriseAuthService":
@@ -451,55 +454,88 @@ class EnterpriseAuthService:
         """Rotate via the platform. New refresh is one-time handed back (Keychain)."""
         if not refresh_token:
             return {"ok": False, **_err(AUTH_STATE_MISMATCH, "refresh_token required")}
-        status, body = await self._post(
-            "/integration/v1/auth/refresh",
-            {
-                "client_id": self.client_id,
-                "refresh_token": refresh_token,
-                "device": self._device_fingerprint(),
-            },
-        )
-        if status >= 400:
-            code = (body.get("error") or {}).get("code", "")
-            if code == REFRESH_REUSE_DETECTED:
-                # BND-102: the whole family is revoked — clear local context too.
-                self._clear_local_context(reason="refresh_reuse_detected")
-            logger.info("enterprise refresh failed: %s", code)
-            return {"ok": False, **body}
-        access = body.get("access_token")
-        if not access:
-            return {
-                "ok": False,
-                **_err(UPSTREAM_UNAVAILABLE, "refresh response missing access_token"),
-            }
-        if self._context is not None:
-            self._context.access_token = access
-            self._context.obtained_at = time.time()
-            self._context.expires_in = int(body.get("expires_in") or 900)
-            if "spaces" in body or "spaces_detail" in body:
-                ctx = self._context_from_token(body, access)
-                if not body.get("generation"):
-                    ctx.generation = self._context.generation
-                self._context.spaces = ctx.spaces
-                self._context.spaces_detail = ctx.spaces_detail
-            profile = self._context.meta().context_key()
-            self.store.set_access_token(profile, access)
-        else:
-            # Cold start: sidecar restarted, but client presented a valid refresh token from Keychain.
-            if body.get("subject") or body.get("spaces"):
-                ctx = self._context_from_token(body, access)
-                self._establish_context(ctx)
+
+        import asyncio
+
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+
+        # Coalesce concurrent in-flight refresh requests for the same token
+        async with self._refresh_lock:
+            if self._refresh_in_flight == refresh_token and self._refresh_in_flight_future is not None:
+                fut = self._refresh_in_flight_future
             else:
-                sess_status, sess_body = await self._get_session_from_platform(access)
-                if sess_status == 200 and isinstance(sess_body, dict):
-                    sess_body["expires_in"] = body.get("expires_in") or 900
-                    ctx = self._context_from_token(sess_body, access)
-                    self._establish_context(ctx)
-        return {
-            "ok": True,
-            "refresh_token": body.get("refresh_token") or "",
-            "context": self._context.public_view() if self._context else None,
-        }
+                fut = None
+                self._refresh_in_flight = refresh_token
+                loop = asyncio.get_running_loop()
+                self._refresh_in_flight_future = loop.create_future()
+
+        if fut is not None:
+            logger.info("enterprise refresh coalesced with in-flight rotation request")
+            return await fut
+
+        try:
+            status, body = await self._post(
+                "/integration/v1/auth/refresh",
+                {
+                    "client_id": self.client_id,
+                    "refresh_token": refresh_token,
+                    "device": self._device_fingerprint(),
+                },
+            )
+            if status >= 400:
+                code = (body.get("error") or {}).get("code", "")
+                if code == REFRESH_REUSE_DETECTED:
+                    # BND-102: the whole family is revoked — clear local context too.
+                    self._clear_local_context(reason="refresh_reuse_detected")
+                logger.info("enterprise refresh failed: %s", code)
+                res = {"ok": False, **body}
+            else:
+                access = body.get("access_token")
+                if not access:
+                    res = {
+                        "ok": False,
+                        **_err(UPSTREAM_UNAVAILABLE, "refresh response missing access_token"),
+                    }
+                else:
+                    if self._context is not None:
+                        self._context.access_token = access
+                        self._context.obtained_at = time.time()
+                        self._context.expires_in = int(body.get("expires_in") or 900)
+                        if "spaces" in body or "spaces_detail" in body:
+                            ctx = self._context_from_token(body, access)
+                            if not body.get("generation"):
+                                ctx.generation = self._context.generation
+                            self._context.spaces = ctx.spaces
+                            self._context.spaces_detail = ctx.spaces_detail
+                        profile = self._context.meta().context_key()
+                        self.store.set_access_token(profile, access)
+                    else:
+                        # Cold start: sidecar restarted, but client presented a valid refresh token from Keychain.
+                        if body.get("subject") or body.get("spaces"):
+                            ctx = self._context_from_token(body, access)
+                            self._establish_context(ctx)
+                        else:
+                            sess_status, sess_body = await self._get_session_from_platform(access)
+                            if sess_status == 200 and isinstance(sess_body, dict):
+                                sess_body["expires_in"] = body.get("expires_in") or 900
+                                ctx = self._context_from_token(sess_body, access)
+                                self._establish_context(ctx)
+                    res = {
+                        "ok": True,
+                        "refresh_token": body.get("refresh_token") or "",
+                        "context": self._context.public_view() if self._context else None,
+                    }
+            return res
+        finally:
+            active_fut = None
+            async with self._refresh_lock:
+                if self._refresh_in_flight == refresh_token:
+                    active_fut = self._refresh_in_flight_future
+                    self._refresh_in_flight = None
+                    self._refresh_in_flight_future = None
+            if active_fut is not None and not active_fut.done():
+                active_fut.set_result(res)
 
     # -- INT-101e: logout ----------------------------------------------------------
 
@@ -537,6 +573,8 @@ class EnterpriseAuthService:
             self.store.clear(profile)
             self.orphaned_context_keys.append(self._context.key)
         self._context = None
+        self._refresh_in_flight = None
+        self._refresh_in_flight_future = None
         logger.info("enterprise context cleared (%s)", reason)
 
     # -- INT-101f: session -----------------------------------------------------------

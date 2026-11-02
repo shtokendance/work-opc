@@ -75,20 +75,59 @@ export interface EnterpriseSession {
   dispose(): void;
 }
 
+export const KNOWN_SPACE_NAMES_KEY = "opc:known_space_names";
+
+export function getKnownSpaceNames(): Record<string, string> {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(KNOWN_SPACE_NAMES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function rememberSpaceName(tenantId: string, name: string): void {
+  if (!tenantId || !name) return;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === tenantId || /^\d+$/.test(trimmed)) return;
+  try {
+    if (typeof localStorage === "undefined") return;
+    const map = getKnownSpaceNames();
+    if (map[tenantId] !== trimmed) {
+      map[tenantId] = trimmed;
+      localStorage.setItem(KNOWN_SPACE_NAMES_KEY, JSON.stringify(map));
+      window.dispatchEvent(new Event("opc:enterprise-changed"));
+    }
+  } catch {}
+}
+
 export const normalizeSpaces = (context?: { spaces?: any[]; spaces_detail?: any[] } | null): SpaceItem[] => {
   if (!context) return [];
+  const known = getKnownSpaceNames();
   if (Array.isArray(context.spaces_detail) && context.spaces_detail.length > 0) {
-    return context.spaces_detail.map((s) => ({
-      id: String(s.id || ""),
-      name: String(s.name || s.id || ""),
-    }));
+    return context.spaces_detail.map((s) => {
+      const id = String(s.id || "");
+      const rawName = String(s.name || s.id || "").trim();
+      const isNumeric = !rawName || rawName === id || /^\d+$/.test(rawName);
+      const resolvedName = !isNumeric ? rawName : (known[id] || rawName);
+      return {
+        id,
+        name: resolvedName,
+      };
+    });
   }
   if (Array.isArray(context.spaces)) {
     return context.spaces.map((s) => {
       if (typeof s === "object" && s !== null && "id" in s) {
-        return { id: String(s.id), name: String(s.name || s.id) };
+        const id = String(s.id);
+        const rawName = String(s.name || s.id).trim();
+        const isNumeric = !rawName || rawName === id || /^\d+$/.test(rawName);
+        const resolvedName = !isNumeric ? rawName : (known[id] || rawName);
+        return { id, name: resolvedName };
       }
-      return { id: String(s), name: String(s) };
+      const id = String(s);
+      return { id, name: known[id] || id };
     });
   }
   return [];
@@ -210,112 +249,128 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
   };
 
   let syncRetries = 0;
+  let inFlightSync: Promise<void> | null = null;
   const syncFromServer = async (): Promise<void> => {
-    try {
-      const res = await fetch(`${httpBase()}/v1/enterprise/session`, {
-        headers: { "x-openworker-token": launchToken() },
-      });
-      syncRetries = 0;
-      if (res.status === 200) {
-        const body = (await res.json()) as {
-          subject?: string;
-          tenant?: string;
-          email?: string;
-          name?: string;
-          spaces?: any[];
-          spaces_detail?: any[];
-        } & EnterpriseExpiryHint;
-        const spaces = normalizeSpaces(body);
-        setState({
-          kind: "signed_in",
-          subject: body.subject || "",
-          tenant: body.tenant || "",
-          ...(spaces.length > 0 ? { spaces } : {}),
-          email: body.email || "",
-          name: body.name || "",
+    if (inFlightSync) return inFlightSync;
+    inFlightSync = (async () => {
+      try {
+        const res = await fetch(`${httpBase()}/v1/enterprise/session`, {
+          headers: { "x-openworker-token": launchToken() },
         });
-        scheduleRefresh(body);
-        return;
-      }
-      // If 404 / no active in-memory session in sidecar, check if we have a refresh token in Keychain
-      if (deps.isDesktop()) {
-        const restored = await refreshSession();
-        if (restored) return;
-      }
-      if (state.kind === "signed_in") {
-        stopRefreshTimer();
-        setState({ kind: "idle" });
-      }
-    } catch {
-      /* sidecar not up yet — retry on cold start */
-      if (syncRetries < 5 && !disposed) {
-        syncRetries += 1;
-        setTimeout(() => void syncFromServer(), 1000);
-      }
-    }
-  };
-
-  const refreshSession = async (): Promise<boolean> => {
-    let refresh = "";
-    try {
-      refresh = (await deps.secrets.get(ENTERPRISE_KEYCHAIN_PROFILE)) || "";
-    } catch {
-      refresh = "";
-    }
-    if (!refresh) {
-      // Nothing to present — the Keychain entry is gone.
-      stopRefreshTimer();
-      if (state.kind === "signed_in") {
-        setState({ kind: "idle" });
-      }
-      return false;
-    }
-    try {
-      const res = await post("/v1/enterprise/session/refresh", { refresh_token: refresh });
-      if (res.status === 200) {
-        const body = (await res.json()) as {
-          refresh_token?: string;
-          context?: ({
+        syncRetries = 0;
+        if (res.status === 200) {
+          const body = (await res.json()) as {
             subject?: string;
             tenant?: string;
-            spaces?: any[];
-            spaces_detail?: any[];
             email?: string;
             name?: string;
-          } & EnterpriseExpiryHint) | null;
-        };
-        if (body.refresh_token) {
-          await deps.secrets.put(ENTERPRISE_KEYCHAIN_PROFILE, body.refresh_token);
-        }
-        if (body.context) {
-          const spaces = normalizeSpaces(body.context);
+            spaces?: any[];
+            spaces_detail?: any[];
+          } & EnterpriseExpiryHint;
+          const spaces = normalizeSpaces(body);
           setState({
             kind: "signed_in",
-            subject: body.context.subject || "",
-            tenant: body.context.tenant || "",
+            subject: body.subject || "",
+            tenant: body.tenant || "",
             ...(spaces.length > 0 ? { spaces } : {}),
-            email: body.context.email || "",
-            name: body.context.name || "",
+            email: body.email || "",
+            name: body.name || "",
           });
-          scheduleRefresh(body.context);
+          scheduleRefresh(body);
+          return;
         }
-        return true;
+        // If 404 / no active in-memory session in sidecar, check if we have a refresh token in Keychain
+        if (deps.isDesktop()) {
+          const restored = await refreshSession();
+          if (restored) return;
+        }
+        if (state.kind === "signed_in") {
+          stopRefreshTimer();
+          setState({ kind: "idle" });
+        }
+      } catch {
+        /* sidecar not up yet — retry on cold start */
+        if (syncRetries < 5 && !disposed) {
+          syncRetries += 1;
+          setTimeout(() => void syncFromServer(), 1000);
+        }
+      } finally {
+        inFlightSync = null;
       }
-      stopRefreshTimer();
-      const code = await readError(res, "refresh failed");
-      if (code === "REFRESH_REUSE_DETECTED" || res.status === 401) {
-        // The family is revoked or token invalid: drop the local entry and context.
-        await deps.secrets.delete(ENTERPRISE_KEYCHAIN_PROFILE).catch(() => {});
-        setState({ kind: "idle" });
-        return false;
+    })();
+    return inFlightSync;
+  };
+
+  let inFlightRefresh: Promise<boolean> | null = null;
+  const refreshSession = async (): Promise<boolean> => {
+    if (inFlightRefresh) return inFlightRefresh;
+    inFlightRefresh = (async () => {
+      try {
+        let refresh = "";
+        try {
+          refresh = (await deps.secrets.get(ENTERPRISE_KEYCHAIN_PROFILE)) || "";
+        } catch {
+          refresh = "";
+        }
+        if (!refresh) {
+          // Nothing to present — the Keychain entry is gone.
+          stopRefreshTimer();
+          if (state.kind === "signed_in") {
+            setState({ kind: "idle" });
+          }
+          return false;
+        }
+        try {
+          const res = await post("/v1/enterprise/session/refresh", { refresh_token: refresh });
+          if (res.status === 200) {
+            const body = (await res.json()) as {
+              refresh_token?: string;
+              context?: ({
+                subject?: string;
+                tenant?: string;
+                spaces?: any[];
+                spaces_detail?: any[];
+                email?: string;
+                name?: string;
+              } & EnterpriseExpiryHint) | null;
+            };
+            if (body.refresh_token) {
+              await deps.secrets.put(ENTERPRISE_KEYCHAIN_PROFILE, body.refresh_token);
+            }
+            if (body.context) {
+              const spaces = normalizeSpaces(body.context);
+              setState({
+                kind: "signed_in",
+                subject: body.context.subject || "",
+                tenant: body.context.tenant || "",
+                ...(spaces.length > 0 ? { spaces } : {}),
+                email: body.context.email || "",
+                name: body.context.name || "",
+              });
+              scheduleRefresh(body.context);
+            }
+            return true;
+          }
+          stopRefreshTimer();
+          const code = await readError(res, "refresh failed");
+          if (code === "REFRESH_REUSE_DETECTED" || res.status === 401) {
+            // The family is revoked or token invalid: drop the local entry and context.
+            await deps.secrets.delete(ENTERPRISE_KEYCHAIN_PROFILE).catch(() => {});
+            setState({ kind: "idle" });
+            return false;
+          }
+          setState({ kind: "failed", error: code });
+          return false;
+        } catch {
+          stopRefreshTimer();
+          setState({ kind: "failed", error: "sidecar-unreachable" });
+          return false;
+        }
+      } finally {
+        inFlightRefresh = null;
       }
-      setState({ kind: "failed", error: code });
-      return false;
-    } catch {
-      stopRefreshTimer();
-      setState({ kind: "failed", error: "sidecar-unreachable" });
-      return false;
-    }
+    })();
+    return inFlightRefresh;
   };
 
   // The production refresh path (BND-102/160): while signed in, fire a refresh
@@ -323,9 +378,8 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
   // a successful rotation re-reads the session view and reschedules.
   const refreshAndReschedule = async (): Promise<void> => {
     refreshTimer = null;
-    await refreshSession();
-    if (disposed || state.kind !== "signed_in") return;
-    await syncFromServer();
+    const ok = await refreshSession();
+    if (disposed || state.kind !== "signed_in" || !ok) return;
   };
 
   function scheduleRefresh(hint?: EnterpriseExpiryHint | null): void {
@@ -443,6 +497,8 @@ export function createEnterpriseSession(deps: EnterpriseDeps): EnterpriseSession
       disposed = true;
       stopPolling();
       stopRefreshTimer();
+      inFlightSync = null;
+      inFlightRefresh = null;
       listeners.clear();
     },
   };

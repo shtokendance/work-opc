@@ -14,7 +14,7 @@ import {
   type ResourceRequestError,
 } from "../enterpriseResources";
 import { openExternal } from "../tauri";
-import type { EnterpriseState } from "../enterprise";
+import { getKnownSpaceNames, rememberSpaceName, type EnterpriseState } from "../enterprise";
 import { useEnterpriseState } from "../useEnterpriseState";
 import { Icon } from "./Icon";
 
@@ -55,10 +55,30 @@ export function ResourcesView({
   const tenant = enterprise.kind === "signed_in" ? enterprise.tenant : "";
   const currentSpace = signedIn && enterprise.spaces ? enterprise.spaces.find((s) => s.id === tenant) : undefined;
   const readyItems = page.kind === "ready" || page.kind === "empty" ? page.envelope.items : [];
-  const spaceDisplayName =
-    currentSpace?.name ||
-    readyItems.find((i) => i.tenant_name)?.tenant_name ||
-    (tenant ? `空间 ${tenant}` : "");
+
+  // 记录并解析可读空间名称（方案2：仅展示真实名称，隐藏生硬纯数字编码）
+  useEffect(() => {
+    readyItems.forEach((item) => {
+      if (item.tenant_id && item.tenant_name) {
+        rememberSpaceName(item.tenant_id, item.tenant_name);
+      }
+    });
+  }, [readyItems]);
+
+  const knownSpaces = getKnownSpaceNames();
+  const humanFromItems = readyItems.find(
+    (i) => i.tenant_name && i.tenant_name !== tenant && !/^\d+$/.test(i.tenant_name.trim())
+  )?.tenant_name;
+  const humanFromContext =
+    currentSpace?.name && currentSpace.name !== tenant && !/^\d+$/.test(currentSpace.name.trim())
+      ? currentSpace.name
+      : undefined;
+  const humanFromKnown =
+    tenant && knownSpaces[tenant] && knownSpaces[tenant] !== tenant && !/^\d+$/.test(knownSpaces[tenant].trim())
+      ? knownSpaces[tenant]
+      : undefined;
+
+  const spaceDisplayName = humanFromItems || humanFromContext || humanFromKnown;
 
   const load = useCallback(
     async (opts: { q?: string; offset?: number } = {}) => {
