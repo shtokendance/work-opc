@@ -2876,6 +2876,20 @@ def create_app(manager: SessionManager) -> FastAPI:
     def codex_signout() -> dict[str, Any]:
         return manager.codex_signout()
 
+    @app.post("/v1/providers/kimi-account/signin")
+    async def kimi_signin() -> dict[str, Any]:
+        manager.begin_kimi_signin()
+        asyncio.create_task(manager.kimi_signin())
+        return {"ok": True, "started": True}
+
+    @app.get("/v1/providers/kimi-account/status")
+    def kimi_status() -> dict[str, Any]:
+        return manager.kimi_status()
+
+    @app.post("/v1/providers/kimi-account/signout")
+    def kimi_signout() -> dict[str, Any]:
+        return manager.kimi_signout()
+
     # -- settings (model API key) -----------------------------------------------
     @app.get("/v1/settings")
     def settings_get() -> dict[str, Any]:

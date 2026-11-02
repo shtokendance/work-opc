@@ -578,19 +578,12 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         name="kimi-account",
         kind="subscription",
         title="Kimi 账号订阅",
-        needs_key=True,
-        fields=[
-            ProviderField(
-                "api_key",
-                "Kimi 授权 Token / Key",
-                secret=True,
-                required=True,
-                placeholder="sk-…",
-            )
-        ],
+        needs_key=False,
+        fields=[],
         build=_build_kimi_account,
         recommended_model="kimi-k3",
-        blurb="连接你的 Kimi 账号或订阅服务，自动同步账号权限下的最新模型（如 Kimi K3）。",
+        blurb="使用你的 Kimi 账号登录并运行订阅模型 —— 浏览器授权，无需手动填写 API Key。",
+        auth="oauth",
     ),
     ProviderDescriptor(
         name="zai-account",
@@ -604,11 +597,12 @@ DESCRIPTORS: list[ProviderDescriptor] = [
                 secret=True,
                 required=True,
                 placeholder="智谱 Token 或 API Key",
+                help="前往智谱开放平台 (open.bigmodel.cn) 开通 Coding Plan 或获取 API Key，填入即可使用 GLM 系列订阅模型。",
             )
         ],
         build=_build_zai_account,
         recommended_model="glm-5.3",
-        blurb="连接你的 GLM (智谱) 账号订阅，自动同步最新官方大模型（如 GLM-5.3、GLM-5V）。",
+        blurb="连接你的 GLM (智谱) 账号订阅或 Coding Plan，自动同步最新官方大模型（如 GLM-5.3、GLM-5V）。",
     ),
     ProviderDescriptor(
         name="anthropic",

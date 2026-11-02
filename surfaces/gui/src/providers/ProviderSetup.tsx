@@ -5,6 +5,9 @@ import {
   codexAuthStatus,
   codexSignin,
   codexSignout,
+  kimiAuthStatus,
+  kimiSignin,
+  kimiSignout,
   getProviders,
   removeProvider,
   setProvider,
@@ -51,7 +54,9 @@ export const KEY_HELP: Record<string, { url: string; label: string; labelKey?: s
   nebius: { url: "https://tokenfactory.nebius.com/project/api-keys", label: "tokenfactory.nebius.com" },
   nvidia: { url: "https://build.nvidia.com/settings/api-keys", label: "build.nvidia.com" },
   zai: { url: "https://z.ai/manage-apikey/apikey-list", label: "z.ai" },
-  kimi: { url: "https://platform.moonshot.ai/console/api-keys", label: "platform.moonshot.ai" },
+  "zai-account": { url: "https://open.bigmodel.cn/usercenter/apikeys", label: "open.bigmodel.cn" },
+  kimi: { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
+  "kimi-code": { url: "https://platform.moonshot.cn/console/api-keys", label: "platform.moonshot.cn" },
   deepseek: { url: "https://platform.deepseek.com/api_keys", label: "platform.deepseek.com" },
   mistral: { url: "https://console.mistral.ai/api-keys", label: "console.mistral.ai" },
   novita: { url: "https://novita.ai/settings/key-management", label: "novita.ai" },
@@ -346,6 +351,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   const [busy, setBusy] = useState(!!info.authorizing);
   const [error, setError] = useState<string | null>(info.last_error || null);
   const [reopenUrl, setReopenUrl] = useState<string | null>(null);
+  const isKimi = info.name === "kimi-account";
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true; // StrictMode double-mount: the cleanup below must not stick
@@ -355,7 +361,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   const poll = async () => {
     for (let i = 0; i < 150 && alive.current; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const s = await codexAuthStatus().catch(() => null);
+      const s = await (isKimi ? kimiAuthStatus() : codexAuthStatus()).catch(() => null);
       if (!s) continue;
       if (s.authorize_url) setReopenUrl(s.authorize_url);
       if (s.signed_in || (!s.authorizing && s.last_error)) {
@@ -373,7 +379,8 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   const start = async () => {
     setBusy(true);
     setError(null);
-    await codexSignin().catch(() => setError(t("provider.oauth_start_error")));
+    const signinFn = isKimi ? kimiSignin : codexSignin;
+    await signinFn().catch(() => setError(t("provider.oauth_start_error")));
     void poll();
   };
 
@@ -388,7 +395,8 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
             className="shrink-0 rounded-lg border border-line bg-panel px-3 py-1.5 text-ui text-ink hover:border-lineStrong"
             data-testid={`${tp}-oauth-signout`}
             onClick={async () => {
-              await codexSignout().catch(() => {});
+              const signoutFn = isKimi ? kimiSignout : codexSignout;
+              await signoutFn().catch(() => {});
               await onChanged();
             }}
           >
@@ -396,10 +404,12 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
           </button>
         </div>
         <p className="text-meta text-faint mt-2">
-          {t("provider.oauth_plan_note")}
+          {isKimi ? "已连接 Kimi 账号 —— 会话自动使用你的 Kimi 订阅配额。" : t("provider.oauth_plan_note")}
         </p>
       </div>
     );
+
+  const signinButtonText = isKimi ? t("provider.sign_in_kimi") : t("provider.sign_in_chatgpt");
 
   return (
     <div className="mt-4">
@@ -409,7 +419,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
         disabled={busy}
         data-testid={`${tp}-oauth-signin`}
       >
-        {busy ? t("provider.oauth_waiting") : t("provider.sign_in_chatgpt")}
+        {busy ? t("provider.oauth_waiting") : signinButtonText}
       </button>
       {busy && (
         <p className="text-meta text-faint mt-2">

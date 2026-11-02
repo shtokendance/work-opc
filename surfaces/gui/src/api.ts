@@ -2581,6 +2581,21 @@ export async function codexSignout(): Promise<{ ok: boolean }> {
   return res.json();
 }
 
+export async function kimiSignin(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${httpBase()}/v1/providers/kimi-account/signin`, { method: "POST" });
+  return res.json();
+}
+
+export async function kimiAuthStatus(): Promise<CodexAuthStatus> {
+  const res = await fetch(`${httpBase()}/v1/providers/kimi-account/status`);
+  return res.json();
+}
+
+export async function kimiSignout(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${httpBase()}/v1/providers/kimi-account/signout`, { method: "POST" });
+  return res.json();
+}
+
 // -- per-model settings, the machine, and what local servers hold ----------------------
 
 export interface ModelConfigRecord {

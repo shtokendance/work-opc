@@ -853,3 +853,42 @@ def test_gpt6_and_adaptive_vision_capabilities():
     custom_caps = ModelCapabilities(tools=True, vision=True, streaming=True)
     register_model_capabilities("my-custom-provider:brand-new-vision-model", custom_caps)
     assert capabilities_for("my-custom-provider:brand-new-vision-model").vision is True
+
+
+def test_kimi_and_glm_subscription_descriptors():
+    from coworker.providers.registry import get_descriptor
+    from coworker.providers.kimi_auth import KimiTokenStore
+
+    kimi_d = get_descriptor("kimi-account")
+    assert kimi_d is not None
+    assert kimi_d.kind == "subscription"
+    assert kimi_d.auth == "oauth"
+    assert kimi_d.needs_key is False
+    assert kimi_d.fields == []
+
+    zai_d = get_descriptor("zai-account")
+    assert zai_d is not None
+    assert zai_d.kind == "subscription"
+    assert zai_d.auth is None
+    assert zai_d.needs_key is True
+
+    # Test KimiTokenStore save and clear
+    class DummySecrets:
+        def __init__(self):
+            self.store = {}
+        def get(self, k):
+            return self.store.get(k)
+        def put(self, k, v):
+            self.store[k] = v
+        def delete(self, k):
+            self.store.pop(k, None)
+
+    secrets = DummySecrets()
+    store = KimiTokenStore(secrets)
+    assert store.signed_in() is False
+    store.save({"access_token": "sk-test", "refresh_token": "rf-test"})
+    assert store.signed_in() is True
+    assert secrets.get("provider:kimi-account")["api_key"] == "sk-test"
+    store.clear()
+    assert store.signed_in() is False
+

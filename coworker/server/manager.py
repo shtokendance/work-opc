@@ -4275,10 +4275,13 @@ class SessionManager:
                 row["signed_in"] = configured
                 row["account"] = profile.get("account_email") or profile.get(
                     "account_id"
-                )
+                ) or profile.get("account")
                 if d.name == "openai-codex":
                     row["authorizing"] = self._codex_authorizing
                     row["last_error"] = self._codex_error
+                elif d.name == "kimi-account":
+                    row["authorizing"] = getattr(self, "_kimi_authorizing", False)
+                    row["last_error"] = getattr(self, "_kimi_error", None)
             out.append(row)
         return out
 
@@ -4637,6 +4640,54 @@ class SessionManager:
         self._refresh_provider("openai-codex")
         return {"ok": True, "had_tokens": had_tokens}
 
+    # -- Kimi-subscription provider (OAuth Device Flow, no key) ------------------
+    def begin_kimi_signin(self) -> None:
+        self._kimi_authorizing = True
+        self._kimi_error = None
+
+    async def kimi_signin(self) -> dict[str, Any]:
+        from ..providers import kimi_auth
+
+        self._kimi_authorizing = True
+        self._kimi_error = None
+        try:
+            result = await kimi_auth.sign_in(self.secrets)
+        except Exception as exc:
+            self._kimi_error = str(exc)
+            return {"ok": False, "error": str(exc)}
+        finally:
+            self._kimi_authorizing = False
+        self._refresh_provider("kimi-account")
+        added = "kimi-account:kimi-k3"
+        self.add_model(added)
+        for m in ("kimi-account:kimi-k2.6",):
+            self.add_model(m)
+        if not self._provider_configured(self._model_provider(self.model)):
+            self.set_default_model(added)
+        return result
+
+    def kimi_status(self) -> dict[str, Any]:
+        from ..providers import kimi_auth
+
+        store = kimi_auth.KimiTokenStore(self.secrets)
+        return {
+            "signed_in": store.signed_in(),
+            "account": store.account_label(),
+            "authorizing": getattr(self, "_kimi_authorizing", False),
+            "last_error": getattr(self, "_kimi_error", None),
+            "authorize_url": kimi_auth.last_authorize_url,
+        }
+
+    def kimi_signout(self) -> dict[str, Any]:
+        from ..providers import kimi_auth
+
+        had_tokens = kimi_auth.KimiTokenStore(self.secrets).clear()
+        self._kimi_error = None
+        self._refresh_provider("kimi-account")
+        for m in ("kimi-account:kimi-k3", "kimi-account:kimi-k2.6"):
+            self.remove_model(m)
+        return {"ok": True, "had_tokens": had_tokens}
+
     def verify_provider(
         self, name: str, fields: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -4650,6 +4701,13 @@ class SessionManager:
             return {"ok": False, "error": f"unknown provider: {name}"}
         if d.auth == "oauth":
             # No key form — verify from the stored token set (signed-out / expired / OK).
+            if name == "kimi-account":
+                from ..providers import kimi_auth
+
+                store = kimi_auth.KimiTokenStore(self.secrets)
+                if not store.signed_in():
+                    return {"ok": False, "error": "Not signed in to Kimi."}
+                return {"ok": True}
             from ..providers import codex_auth
 
             return codex_auth.verify(self.secrets)

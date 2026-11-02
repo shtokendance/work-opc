@@ -1643,6 +1643,7 @@
     "oauth_plan_note": "Usage draws on the plan's rolling window, not per-token billing. Sign-in stays on this computer.",
     "oauth_waiting": "Waiting for the browser…",
     "sign_in_chatgpt": "Sign in with ChatGPT",
+    "sign_in_kimi": "Sign in with Kimi",
     "oauth_finish_browser": "Finish signing in in the browser window.",
     "oauth_reopen": "Reopen the sign-in page",
     "oauth_start_error": "Couldn't start the sign-in.",

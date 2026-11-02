@@ -1623,6 +1623,7 @@
     "oauth_plan_note": "用量计入套餐的滚动额度，而非按 token 计费。登录信息仅保存在本机。",
     "oauth_waiting": "等待浏览器…",
     "sign_in_chatgpt": "使用 ChatGPT 登录",
+    "sign_in_kimi": "使用 Kimi 登录",
     "oauth_finish_browser": "在浏览器窗口中完成登录。",
     "oauth_reopen": "重新打开登录页",
     "oauth_start_error": "无法启动登录。",
