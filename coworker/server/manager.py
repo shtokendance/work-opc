@@ -4961,6 +4961,16 @@ class SessionManager:
             import os
             key = os.environ.get(d.env_key, "").strip()
 
+        if name == "kimi-account":
+            from ..providers import kimi_auth
+            store = kimi_auth.KimiTokenStore(self.secrets)
+            if not store.signed_in():
+                return {"provider": name, "models": [], "error": "Kimi 账号未登录。"}
+            try:
+                key = store.access_token()
+            except Exception as exc:
+                return {"provider": name, "models": [], "error": f"Kimi 凭据失效: {exc}"}
+
         if name == "openai-codex":
             from ..providers import codex_auth
             store = codex_auth.CodexTokenStore(self.secrets)

@@ -9,6 +9,8 @@ profile `provider:kimi-account`.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import time
 import webbrowser
@@ -24,8 +26,20 @@ TOKEN_URL = "https://auth.kimi.com/api/oauth/token"
 CODING_BASE_URL = "https://api.kimi.com/coding/v1"
 PROFILE = "provider:kimi-account"
 FLOW_TIMEOUT_SECONDS = 300
+REFRESH_MARGIN_SECONDS = 300
 
 last_authorize_url: Optional[str] = None
+
+
+def _jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT payload without verification to read claims like `exp`."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        return {}
 
 
 class KimiTokenStore:
@@ -75,6 +89,87 @@ class KimiTokenStore:
         had = self.signed_in()
         self._secrets.delete(PROFILE)
         return had
+
+    def access_token(self) -> str:
+        """Return a valid, live access token — refreshing first if stale or near expiry."""
+        data = self._data()
+        tokens = data.get("tokens") or {}
+        access = tokens.get("access_token") or data.get("api_key") or ""
+        refresh_token = tokens.get("refresh_token") or ""
+        if not access and not refresh_token:
+            raise RuntimeError("Kimi 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
+
+        exp = _jwt_claims(access).get("exp")
+        if not isinstance(exp, (int, float)):
+            issued_at = data.get("tokens_issued_at")
+            expires_in = tokens.get("expires_in")
+            if isinstance(issued_at, (int, float)) and isinstance(expires_in, (int, float)):
+                exp = issued_at + expires_in
+
+        stale = not access or (
+            isinstance(exp, (int, float)) and exp - time.time() < REFRESH_MARGIN_SECONDS
+        )
+        if stale:
+            return self.refresh()
+        return access
+
+    def refresh(self) -> str:
+        """refresh_token grant -> fresh access token. Uses inter-process lock when available."""
+        seen = (self._data().get("tokens") or {}).get("access_token") or self._data().get("api_key") or ""
+        exclusive = getattr(self._secrets, "exclusive", None)
+        if exclusive is None:
+            return self._refresh_locked(seen)
+        with exclusive():
+            return self._refresh_locked(seen)
+
+    def _refresh_locked(self, seen: str) -> str:
+        data = self._data()
+        tokens = data.get("tokens") or {}
+        access = tokens.get("access_token") or data.get("api_key") or ""
+        exp = _jwt_claims(access).get("exp")
+        if not isinstance(exp, (int, float)):
+            issued_at = data.get("tokens_issued_at")
+            expires_in = tokens.get("expires_in")
+            if isinstance(issued_at, (int, float)) and isinstance(expires_in, (int, float)):
+                exp = issued_at + expires_in
+
+        # If another thread/process just refreshed it, return immediately
+        if access and access != seen and isinstance(exp, (int, float)) and exp - time.time() >= REFRESH_MARGIN_SECONDS:
+            return access
+
+        refresh_token = tokens.get("refresh_token") or ""
+        if not refresh_token:
+            raise RuntimeError("Kimi 账号缺少刷新凭据 —— 请在模型与密钥设置中重新登录。")
+
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(
+                    TOKEN_URL,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": CLIENT_ID,
+                        "refresh_token": refresh_token,
+                    },
+                    headers={"User-Agent": "Work-OPC/0.3.4", "Accept": "application/json"},
+                )
+        except Exception as exc:
+            logger.warning("Kimi token refresh network error: %s", exc)
+            if access:
+                return access  # fallback to existing access token if network glitch
+            raise RuntimeError(f"无法连接 Kimi 认证服务刷新凭据 ({exc.__class__.__name__})") from exc
+
+        if 400 <= resp.status_code < 500:
+            logger.warning("Kimi token refresh rejected (HTTP %d): %s", resp.status_code, resp.text)
+            self.clear()
+            raise RuntimeError("Kimi 账号授权已过期或失效，请在模型与密钥设置中重新登录。")
+
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Kimi 账号凭据刷新失败 (HTTP {resp.status_code})")
+
+        new_tokens = resp.json()
+        self.save(new_tokens)
+        new_data = self._data()
+        return (new_data.get("tokens") or {}).get("access_token") or new_data.get("api_key") or ""
 
 
 async def sign_in(

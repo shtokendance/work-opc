@@ -308,13 +308,17 @@ def _build_openrouter_account(profile: dict[str, Any], secrets: Any) -> Provider
 
 
 def _build_kimi_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    from .kimi_auth import KimiTokenStore
+    from .kimi_provider import KimiAccountProvider
+
     api_key = ((profile or {}).get("api_key") or "").strip() or (
         os.environ.get("MOONSHOT_API_KEY", "").strip() or os.environ.get("KIMI_API_KEY", "").strip()
     )
-    if not api_key:
+    store = KimiTokenStore(secrets) if secrets is not None else None
+    if not api_key and (store is None or not store.signed_in()):
         raise RuntimeError("Kimi 账号未登录或未设置 Token —— 请在模型与密钥设置中登录。")
     base_url = ((profile or {}).get("base_url") or "").strip() or "https://api.kimi.com/coding/v1"
-    return OpenAIProvider(api_key=api_key, base_url=base_url)
+    return KimiAccountProvider(api_key=api_key or None, secrets=secrets, base_url=base_url)
 
 
 def _build_zai_account(profile: dict[str, Any], secrets: Any) -> ProviderClient:
