@@ -262,22 +262,25 @@ export function ResourcesView({
               {[1, 2, 3, 4, 5, 6].map((i) => (
                 <div
                   key={i}
-                  className="rounded-2xl border border-line bg-panel p-4 animate-pulse flex flex-col justify-between h-40"
+                  className="rounded-xl2 border border-line bg-panel p-5 animate-pulse flex flex-col justify-between h-48"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-paper shrink-0" />
-                    <div className="flex-1 space-y-2">
+                  <div>
+                    <div className="flex items-center justify-between mb-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-paper shrink-0" />
+                      <div className="w-16 h-5 rounded-full bg-paper shrink-0" />
+                    </div>
+                    <div className="space-y-2 mb-3">
                       <div className="h-4 bg-paper rounded w-3/4" />
-                      <div className="h-3 bg-paper rounded w-1/2" />
+                      <div className="h-3 bg-paper rounded w-1/3" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="h-3 bg-paper rounded w-full" />
+                      <div className="h-3 bg-paper rounded w-4/5" />
                     </div>
                   </div>
-                  <div className="space-y-1.5 my-2">
-                    <div className="h-3 bg-paper rounded w-full" />
-                    <div className="h-3 bg-paper rounded w-4/5" />
-                  </div>
-                  <div className="pt-2 border-t border-line/40 flex justify-between gap-2">
-                    <div className="h-7 bg-paper rounded-lg flex-1" />
-                    <div className="h-7 bg-paper rounded-lg w-16" />
+                  <div className="pt-3 border-t border-line/40 flex justify-between gap-2">
+                    <div className="h-8 bg-paper rounded-lg flex-1" />
+                    <div className="h-8 bg-paper rounded-lg w-16" />
                   </div>
                 </div>
               ))}
@@ -309,59 +312,62 @@ export function ResourcesView({
                 return (
                   <article
                     key={`${item.tenant_id}:${item.knowledge_base_id}`}
-                    className="group rounded-2xl border border-line bg-panel p-4 hover:border-accent/40 hover:shadow-md transition-all duration-200 flex flex-col justify-between relative overflow-hidden"
+                    className="group rounded-xl2 border border-line bg-panel p-5 hover:border-accent/40 hover:shadow-md transition-all duration-200 flex flex-col justify-between relative overflow-hidden"
                   >
                     <div>
-                      {/* Top Header: Icon + Name/Tenant + Availability Pill */}
-                      <div className="flex items-start justify-between gap-2.5 mb-2.5">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-10 h-10 rounded-xl bg-accentSoft/80 border border-accent/20 flex items-center justify-center text-accent shrink-0 group-hover:scale-105 transition-transform">
-                            <Icon name="book" size={20} />
-                          </div>
-                          <div className="min-w-0">
-                            <h3
-                              className="font-semibold text-ui text-ink group-hover:text-accent transition-colors truncate"
-                              title={item.name}
-                            >
-                              {item.name}
-                            </h3>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs bg-paper border border-line text-muted truncate max-w-[130px]">
-                                {item.tenant_name || item.tenant_id}
-                              </span>
-                            </div>
-                          </div>
+                      {/* Top Header: Icon + Availability Pill */}
+                      <div className="flex items-center justify-between gap-2 mb-3.5">
+                        <div className="w-10 h-10 rounded-xl bg-accentSoft/80 border border-accent/20 flex items-center justify-center text-accent shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
+                          <Icon name="book" size={20} />
                         </div>
 
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-medium shrink-0 ${
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium shrink-0 shadow-2xs ${
                             isAvail
-                              ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/20"
-                              : "bg-warning/10 text-warning border border-warning/20"
+                              ? "bg-okSoft text-ok border border-okLine"
+                              : "bg-warnSoft text-warnInk border border-warnInk/25"
                           }`}
                         >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              isAvail ? "bg-emerald-500" : "bg-warning"
-                            }`}
-                          />
+                          {isAvail ? (
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ok opacity-60"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-ok"></span>
+                            </span>
+                          ) : (
+                            <span className="w-2 h-2 rounded-full bg-warnInk"></span>
+                          )}
                           {isAvail ? t("resources.available", "可用") : t("resources.not_ready", "未就绪")}
                         </span>
                       </div>
 
+                      {/* Title & Tenant Badge */}
+                      <div className="mb-2.5">
+                        <h3
+                          className="font-semibold text-ui text-ink group-hover:text-accent transition-colors line-clamp-1 leading-snug"
+                          title={item.name}
+                        >
+                          {item.name}
+                        </h3>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-label font-medium bg-paper border border-line/70 text-muted truncate max-w-[160px]">
+                            {item.tenant_name || item.tenant_id}
+                          </span>
+                        </div>
+                      </div>
+
                       {/* Description */}
                       <p
-                        className="text-xs text-muted line-clamp-2 min-h-[2.25rem] leading-relaxed mb-3"
+                        className="text-meta text-muted line-clamp-2 min-h-[2.5rem] leading-relaxed mb-4"
                         title={item.description || ""}
                       >
-                        {item.description || "企业知识库资产"}
+                        {item.description || t("resources.default_desc", "企业知识库资产，支持在对话中通过 @ 引用查询")}
                       </p>
                     </div>
 
                     {/* Footer Actions: 使用 + 详情 */}
                     <div className="pt-3 border-t border-line/60 flex items-center gap-2">
                       <button
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/10 hover:bg-accent hover:text-white text-accent font-medium text-xs transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white hover:bg-accent/90 text-ui font-medium transition-colors shadow-2xs disabled:opacity-40 disabled:pointer-events-none"
                         disabled={!isAvail}
                         onClick={() =>
                           onUseKnowledge?.({
@@ -377,7 +383,7 @@ export function ResourcesView({
                       </button>
 
                       <button
-                        className="px-3 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-xs font-medium flex items-center gap-1 transition-colors shrink-0"
+                        className="px-3 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover hover:border-lineStrong text-muted hover:text-ink text-ui font-medium flex items-center gap-1 transition-colors shrink-0"
                         onClick={() =>
                           openUrlSafely(
                             buildResourceWebUrl(
@@ -388,8 +394,8 @@ export function ResourcesView({
                           )
                         }
                       >
-                        <Icon name="arrowRight" size={12} />
                         <span>{t("resources.details", "详情")}</span>
+                        <Icon name="arrowRight" size={12} />
                       </button>
                     </div>
                   </article>
