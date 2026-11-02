@@ -110,6 +110,7 @@ export interface ProviderSetupState {
   providers: ProviderInfo[];
   ordered: ProviderInfo[];
   refreshProviders: () => Promise<void>;
+  notifySaved?: () => void;
   sel: string | null;
   info: ProviderInfo | undefined;
   fields: Record<string, string>;
@@ -154,6 +155,10 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
   const [fieldSaved, setFieldSaved] = useState<string | null>(null);
   const fieldSavedTimer = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const notifySaved = () => {
+    opts?.onSaved?.();
+  };
 
   const refreshProviders = () =>
     getProviders()
@@ -331,6 +336,7 @@ export function useProviderSetup(opts?: { onSaved?: () => void }): ProviderSetup
     ),
     openProvider,
     backToGallery,
+    notifySaved,
     runTestAndSave,
     removeKey,
     saveField,
@@ -602,9 +608,22 @@ export function ProviderForm({
 
       {info?.auth === "oauth" &&
         (info.name === "openrouter-account" ? (
-          <OpenRouterSignIn tp={tp} onChanged={ps.refreshProviders} />
+          <OpenRouterSignIn
+            tp={tp}
+            onChanged={async () => {
+              await ps.refreshProviders();
+              ps.notifySaved?.();
+            }}
+          />
         ) : (
-          <OAuthSignIn info={info} tp={tp} onChanged={ps.refreshProviders} />
+          <OAuthSignIn
+            info={info}
+            tp={tp}
+            onChanged={async () => {
+              await ps.refreshProviders();
+              ps.notifySaved?.();
+            }}
+          />
         ))}
 
       {!guided && fieldsAll

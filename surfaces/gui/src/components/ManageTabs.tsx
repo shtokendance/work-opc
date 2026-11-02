@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getI18n, useTranslation } from "react-i18next";
 import {
   addTelegramApprovalOwner,
@@ -129,6 +129,14 @@ export function ModelsTab() {
       }
     } catch { /* private window */ }
   }, []);
+
+  const prevSel = useRef(ps.sel);
+  useEffect(() => {
+    if (prevSel.current !== null && ps.sel === null) {
+      refreshSettings();
+    }
+    prevSel.current = ps.sel;
+  }, [ps.sel]);
 
   useEffect(() => {
     if (openCustom && ps.providers.some((p) => p.name === openCustom)) {

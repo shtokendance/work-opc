@@ -11,7 +11,7 @@ import { ProviderMark, type ProviderSetupState } from "../../providers/ProviderS
 import { Icon } from "../Icon";
 
 type Kind = "local" | "subscription" | "api_key";
-const KINDS: Kind[] = ["local", "subscription", "api_key"];
+const KINDS: Kind[] = ["subscription", "api_key"];
 const FOLD = 6; // cards shown before "Show N more" (two rows of three)
 const FEATURED_API_KEYS = ["kimi", "kimi-code", "deepseek", "gemini"];
 
@@ -52,7 +52,9 @@ export function ProviderGroups({
   const [expanded, setExpanded] = useState<Set<Kind>>(new Set());
   const known = ps.providers.map((p) => p.name);
   const q = query.trim().toLowerCase();
-  const shown = ps.ordered.filter((p) => !q || p.title.toLowerCase().includes(q) || p.name.includes(q));
+  const shown = ps.ordered
+    .filter((p) => providerKind(p) !== "local")
+    .filter((p) => !q || p.title.toLowerCase().includes(q) || p.name.includes(q));
   // Connected cards are filled; the rest sit on the page background with a quieter
   // title, so the eye lands on what is set up without a divider saying so.
   const card =

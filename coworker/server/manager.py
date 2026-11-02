@@ -4638,6 +4638,12 @@ class SessionManager:
         had_tokens = codex_auth.CodexTokenStore(self.secrets).clear()
         self._codex_error = None
         self._refresh_provider("openai-codex")
+        for m in [m for m in self.models if m.startswith("openai-codex:")]:
+            self.remove_model(m)
+        if self.model.startswith("openai-codex:"):
+            available = [m for m in self.models if self._provider_configured(self._model_provider(m))]
+            if available:
+                self.set_default_model(available[0])
         return {"ok": True, "had_tokens": had_tokens}
 
     # -- Kimi-subscription provider (OAuth Device Flow, no key) ------------------
@@ -4684,8 +4690,12 @@ class SessionManager:
         had_tokens = kimi_auth.KimiTokenStore(self.secrets).clear()
         self._kimi_error = None
         self._refresh_provider("kimi-account")
-        for m in ("kimi-account:kimi-k3", "kimi-account:kimi-k2.6"):
+        for m in [m for m in self.models if m.startswith("kimi-account:")]:
             self.remove_model(m)
+        if self.model.startswith("kimi-account:"):
+            available = [m for m in self.models if self._provider_configured(self._model_provider(m))]
+            if available:
+                self.set_default_model(available[0])
         return {"ok": True, "had_tokens": had_tokens}
 
     def verify_provider(
