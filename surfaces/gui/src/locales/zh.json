@@ -1360,7 +1360,7 @@
     "custom_cancel": "取消",
     "custom_add_failed": "无法添加该提供商。",
     "custom_models_help": "输入服务器接受的模型 ID，或获取其列表。勾选的模型会出现在编辑器的选择器中。",
-    "custom_fetch_models": "从服务器获取",
+    "custom_fetch_models": "从服务端获取模型列表",
     "custom_fetching": "获取中…",
     "custom_fetched_count": "列出了 {{count}} 个模型——勾选你需要的。",
     "custom_fetched_none": "服务器未列出任何模型。",

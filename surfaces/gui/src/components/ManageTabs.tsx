@@ -277,11 +277,22 @@ export function ModelsTab() {
             </p>
           )}
           {(info?.is_custom || info?.configured || info?.signed_in || info?.kind === "subscription") && (
-            <div className="flex items-center gap-3 mb-2.5" data-testid="custom-fetch-row">
-              <button className={BTN_BORDERED} data-testid="custom-fetch-models" disabled={fetching} onClick={() => void fetchModels()}>
-                {fetching ? t("manage.custom_fetching") : t("manage.custom_fetch_models")}
+            <div className="flex items-center gap-3 mb-3" data-testid="custom-fetch-row">
+              <button
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-ui font-medium bg-accentSoft text-accent border border-accent/30 hover:bg-accent hover:text-white shadow-2xs hover:shadow-xs active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:pointer-events-none shrink-0"
+                data-testid="custom-fetch-models"
+                disabled={fetching}
+                onClick={() => void fetchModels()}
+                title="向服务商接口查询并同步最新的可用模型"
+              >
+                <Icon name="refresh" size={14} className={fetching ? "animate-spin" : ""} />
+                <span>{fetching ? t("manage.custom_fetching") : t("manage.custom_fetch_models")}</span>
               </button>
-              {fetchNote && <span className="text-meta text-muted" data-testid="custom-fetch-note">{fetchNote}</span>}
+              {fetchNote && (
+                <span className="text-meta text-muted flex items-center gap-1.5 bg-paper px-2.5 py-1 rounded-md border border-line" data-testid="custom-fetch-note">
+                  {fetchNote}
+                </span>
+              )}
             </div>
           )}
           <ModelChecklist

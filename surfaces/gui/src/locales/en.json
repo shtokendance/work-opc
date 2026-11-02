@@ -1377,7 +1377,7 @@
     "custom_cancel": "Cancel",
     "custom_add_failed": "Couldn't add the provider.",
     "custom_models_help": "Type the model ids your server accepts, or fetch its list. Ticked models show in the composer's picker.",
-    "custom_fetch_models": "Fetch from server",
+    "custom_fetch_models": "Fetch model list from server",
     "custom_fetching": "Fetching…",
     "custom_fetched_count": "{{count}} models listed — tick the ones you want.",
     "custom_fetched_none": "The server listed no models.",
