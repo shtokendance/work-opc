@@ -4,17 +4,21 @@ import {
   appDeliveryRequest,
   type AppDeliveryJob,
   getAppRuntimeLogs,
+  getAppVersionArtifactUrl,
   getDeployedApp,
   getPlatformConfig,
   getSettings,
+  listAppVersions,
   listDeployedApps,
   listOnlineResources,
   platformBase,
   publishAppToPlatform,
+  rollbackAppVersion,
   transformApp,
   updateDeployedAppConfig,
   updatePlatformConfig,
   type AppConfigItem,
+  type AppVersionItem,
   type DeployedApp,
   type PlatformResourceApiConfig,
   type ResourceSummary,
@@ -85,17 +89,76 @@ export function AppsView({ onBack }: Props) {
   const [drawerConfigs, setDrawerConfigs] = useState<AppConfigItem[]>([]);
   const [drawerResourceIds, setDrawerResourceIds] = useState<string[]>([]);
   const [savingConfig, setSavingConfig] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "logs">("configs");
+  const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "logs" | "versions">("configs");
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<{ [key: string]: boolean }>({});
   const [runtimeLogs, setRuntimeLogs] = useState<string>("");
   const [loadingRuntimeLogs, setLoadingRuntimeLogs] = useState(false);
+  const [versionNote, setVersionNote] = useState<string>("");
+  const [appVersions, setAppVersions] = useState<AppVersionItem[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState<boolean>(false);
+  const [rollingBackVersion, setRollingBackVersion] = useState<number | null>(null);
 
   // Platform Resource API Configuration state
   const [showPlatformConfigModal, setShowPlatformConfigModal] = useState(false);
   const [, setPlatformConfig] = useState<PlatformResourceApiConfig | null>(null);
   const [platformUrlInput, setPlatformUrlInput] = useState(platformBase());
   const [savingPlatformConfig, setSavingPlatformConfig] = useState(false);
+
+  const loadAppVersions = async (appSlug: string) => {
+    if (!appSlug) return;
+    setLoadingVersions(true);
+    try {
+      const res = await listAppVersions(appSlug);
+      setAppVersions(res.versions || []);
+    } catch {
+      setAppVersions([]);
+    } finally {
+      setLoadingVersions(false);
+    }
+  };
+
+  const handleUpgradeApp = async (app: DeployedApp) => {
+    await closeWizard();
+    setSelectedApp(null);
+    setRedeploySlug(app.slug);
+    setName(app.name);
+    setSlug(app.slug);
+    setDescription(app.description || "");
+    setAppUrl(app.app_url);
+    setContainerPort(app.container_port || 8080);
+    setVersionNote(`升级到 v${(app.current_version || 1) + 1}`);
+    setStep(1);
+    setIsModalOpen(true);
+  };
+
+  const handleRollbackVersion = async (appSlug: string, targetVersion: number) => {
+    if (
+      !window.confirm(
+        `确认将应用 ${appSlug} 回退到历史版本 v${targetVersion} 吗？\n\n回退将同步还原：\n1. 容器镜像与环境变量配置\n2. 远端技能中心技能包\n3. 本地 ~/.openworker/skills/app-${appSlug} 技能文件`
+      )
+    ) {
+      return;
+    }
+    setRollingBackVersion(targetVersion);
+    try {
+      const res = await rollbackAppVersion(appSlug, targetVersion, `回退到 v${targetVersion}`);
+      alert(
+        `已成功将 ${appSlug} 回退到 v${res.active_version || targetVersion}！\n本地技能包已同步还原为 v${targetVersion}。`
+      );
+      await refreshApps();
+      await loadAppVersions(appSlug);
+      const updated = await getDeployedApp(appSlug).catch(() => null);
+      if (updated) {
+        setSelectedApp(updated);
+        setDrawerConfigs((updated.app_config || []).map(c => ({ ...c })));
+      }
+    } catch (e: any) {
+      alert(`回退失败: ${e?.message || String(e)}`);
+    } finally {
+      setRollingBackVersion(null);
+    }
+  };
 
   const loadRuntimeLogs = async (appSlug: string) => {
     if (!appSlug) return;
@@ -283,6 +346,7 @@ export function AppsView({ onBack }: Props) {
         slug: slug.trim(),
         app_config: configs,
         resource_ids: selectedResourceIds,
+        version_note: versionNote.trim(),
       });
 
       if (!pubRes.ok) {
@@ -370,18 +434,20 @@ export function AppsView({ onBack }: Props) {
     setConfigs([]);
     setSelectedResourceIds([]);
     setBuildLogs("");
+    setVersionNote("");
 
     refreshApps();
   };
 
   // Drawer handlers
-  const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "logs" = "configs") => {
+  const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "logs" | "versions" = "configs") => {
     setSelectedApp(app);
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
     setDrawerTab(app.status === "failed" && initialTab === "configs" ? "logs" : initialTab);
     setRuntimeLogs("");
     void loadRuntimeLogs(app.slug);
+    void loadAppVersions(app.slug);
   };
 
   const resumeDraft = (job: AppDeliveryJob) => {
@@ -520,9 +586,14 @@ export function AppsView({ onBack }: Props) {
                         <Icon name="workList" size={20} />
                       </div>
                       <div className="min-w-0">
-                        <h3 className="font-semibold text-ui text-ink group-hover:text-accent transition-colors truncate">
-                          {app.name}
-                        </h3>
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="font-semibold text-ui text-ink group-hover:text-accent transition-colors truncate">
+                            {app.name}
+                          </h3>
+                          <span className="px-1.5 py-0.2 rounded bg-accentSoft text-accent font-mono text-[11px] font-semibold shrink-0 border border-accent/20">
+                            v{app.current_version || 1}
+                          </span>
+                        </div>
                         <p className="text-label text-muted font-mono truncate">
                           {app.slug}
                         </p>
@@ -610,12 +681,28 @@ export function AppsView({ onBack }: Props) {
                         </button>
                       </div>
                     ) : (
-                      <>
-                        <span>产物路径、配置与日志</span>
-                        <span className="flex items-center gap-0.5 text-accent font-medium group-hover:translate-x-0.5 transition-transform">
+                      <div className="flex items-center justify-between w-full gap-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => openDrawer(app, "versions")}
+                            className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-label font-medium transition-colors"
+                          >
+                            版本与回退
+                          </button>
+                          <button
+                            onClick={() => void handleUpgradeApp(app)}
+                            className="px-2.5 py-1 rounded-lg bg-accentSoft hover:bg-accent/20 text-accent text-label font-medium transition-colors"
+                          >
+                            升级新版本
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => openDrawer(app)}
+                          className="flex items-center gap-0.5 text-accent font-medium group-hover:translate-x-0.5 transition-transform"
+                        >
                           详情 <Icon name="chevronRight" size={12} />
-                        </span>
-                      </>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -924,6 +1011,20 @@ export function AppsView({ onBack }: Props) {
                         部署后的业务验证仍待补充：当前没有实际业务查询探针。若需自动启用业务技能，请返回改造报告补充只读查询条件和预期结果；健康检查不能代替业务验证。
                       </p>
                     )}
+
+                    <div className="pt-1">
+                      <label className="block text-xs font-medium text-muted mb-1" htmlFor="app-version-note-input">
+                        版本变更说明（选填，用于版本历史与一键回退标识）
+                      </label>
+                      <input
+                        id="app-version-note-input"
+                        type="text"
+                        value={versionNote}
+                        onChange={(e) => setVersionNote(e.target.value)}
+                        placeholder={redeploySlug ? "例如：新增订单导出接口与数据报表页面" : "例如：初始发布 v1"}
+                        className="w-full px-3 py-1.5 rounded-xl border border-line bg-panel text-xs text-ink placeholder:text-muted/60 focus:outline-accent"
+                      />
+                    </div>
                   </section>
 
                   {/* Segmented Tab Bar */}
@@ -1317,6 +1418,9 @@ export function AppsView({ onBack }: Props) {
                     <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-paper text-muted border border-line">
                       {selectedApp.slug}
                     </span>
+                    <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-accentSoft text-accent border border-accent/20 font-semibold">
+                      v{selectedApp.current_version || 1}
+                    </span>
                   </div>
                   <p className="text-meta text-muted line-clamp-1 mt-0.5">
                     {selectedApp.description || "暂无应用描述"}
@@ -1455,6 +1559,24 @@ export function AppsView({ onBack }: Props) {
 
               <button
                 onClick={() => {
+                  setDrawerTab("versions");
+                  void loadAppVersions(selectedApp.slug);
+                }}
+                className={`py-3 px-3 text-ui font-medium border-b-2 transition-colors flex items-center gap-2 ${
+                  drawerTab === "versions"
+                    ? "border-accent text-accent"
+                    : "border-transparent text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="refresh" size={14} />
+                <span>版本与回退</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-accentSoft text-accent font-semibold">
+                  v{selectedApp.current_version || 1}
+                </span>
+              </button>
+
+              <button
+                onClick={() => {
                   setDrawerTab("logs");
                   void loadRuntimeLogs(selectedApp.slug);
                 }}
@@ -1473,6 +1595,135 @@ export function AppsView({ onBack }: Props) {
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {/* TAB 1: 产物与文件目录 */}
               {drawerTab === "artifacts" && <AppDeliveryArtifacts slug={selectedApp.slug} />}
+
+              {/* TAB 4: 版本与回退 */}
+              {drawerTab === "versions" && (
+                <div className="space-y-4">
+                  <div className="p-3.5 rounded-xl bg-paper/80 border border-line flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-ui text-ink">版本演进与一键回退 (MinIO 物理归档)</div>
+                      <p className="text-label text-muted mt-0.5">
+                        每次发布自动生成新版本并归档应用包与技能包。回退时将原子切换容器镜像、远端技能中心与本地技能目录。
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => void loadAppVersions(selectedApp.slug)}
+                        disabled={loadingVersions}
+                        className="px-2.5 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors"
+                      >
+                        刷新
+                      </button>
+                      <button
+                        onClick={() => void handleUpgradeApp(selectedApp)}
+                        className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-label font-medium transition-opacity"
+                      >
+                        + 升级新版本
+                      </button>
+                    </div>
+                  </div>
+
+                  {loadingVersions ? (
+                    <div className="text-center py-8 text-muted text-meta">正在加载版本历史与 MinIO 归档记录...</div>
+                  ) : appVersions.length === 0 ? (
+                    <div className="text-center py-8 border border-dashed border-line rounded-xl text-muted text-meta">
+                      暂无历史版本快照记录
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {appVersions.map((ver) => {
+                        const apiCount = ver.apis_summary?.length || 0;
+                        const pageCount = ver.pages_summary?.length || 0;
+                        return (
+                          <div
+                            key={ver.id || ver.version}
+                            className={`p-4 rounded-xl border space-y-2.5 transition-colors ${
+                              ver.is_active
+                                ? "border-accent/50 bg-accentSoft/20"
+                                : "border-line bg-paper/50 hover:border-lineStrong"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono font-bold text-ui text-ink">v{ver.version}</span>
+                                {ver.is_active ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-okSoft text-ok border border-okLine">
+                                    ✓ 当前生效版本
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[11px] bg-panel text-muted border border-line">
+                                    历史归档 ({ver.status})
+                                  </span>
+                                )}
+                                <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono">
+                                  API: {apiCount} · 页面: {pageCount}
+                                </span>
+                                {ver.caprover_image_name && (
+                                  <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono truncate max-w-[180px]" title={ver.caprover_image_name}>
+                                    {ver.caprover_image_name}
+                                  </span>
+                                )}
+                              </div>
+
+                              {!ver.is_active && (
+                                <button
+                                  disabled={rollingBackVersion !== null}
+                                  onClick={() => void handleRollbackVersion(selectedApp.slug, ver.version)}
+                                  className="px-3 py-1 rounded-lg bg-warnSoft hover:opacity-90 text-warnInk border border-warnInk/30 text-label font-semibold transition-opacity disabled:opacity-50 shrink-0 cursor-pointer"
+                                >
+                                  {rollingBackVersion === ver.version ? "正在回退..." : `⏪ 回退到 v${ver.version}`}
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="text-meta text-ink">
+                              {ver.version_note || `版本 v${ver.version} 部署快照`}
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-line/60 text-label text-muted">
+                              <span>
+                                发布时间: {ver.created_at ? new Date(ver.created_at).toLocaleString() : "-"}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                {ver.app_tar_key && (
+                                  <a
+                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "app.tar")}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-ink font-mono text-[11px]"
+                                  >
+                                    📦 下载 app.tar
+                                  </a>
+                                )}
+                                {ver.skill_zip_key && (
+                                  <a
+                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "skill.zip")}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-accent font-mono text-[11px]"
+                                  >
+                                    ⚡ 下载 skill.zip
+                                  </a>
+                                )}
+                                {ver.dockerfile_key && (
+                                  <a
+                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "Dockerfile")}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-muted font-mono text-[11px]"
+                                  >
+                                    🐳 Dockerfile
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* TAB 2: 环境变量配置 */}
               {drawerTab === "configs" && (

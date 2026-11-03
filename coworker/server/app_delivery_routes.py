@@ -9,7 +9,7 @@ import zipfile
 
 import httpx
 from fastapi import HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..app_delivery import AppDelivery
 from ..app_delivery_skill.scripts import delivery
@@ -260,6 +260,9 @@ def register_app_delivery_routes(app, manager):
             platform_url = str(body.get("platform_url") or data.get("platform_url") or default_platform_url()).rstrip("/")
             delivery.valid_url(platform_url)
             data["platform_url"] = platform_url
+            version_note = str(body.get("version_note") or data.get("version_note") or "").strip()
+            if version_note:
+                data["version_note"] = version_note
             service.install_pending_skill(data, folder)
             runtime = data["proposal"]["contract"].get("runtime", {})
             dockerfile_path = service.path(data["id"]) / "approved" / "source" / "Dockerfile"
@@ -272,6 +275,7 @@ def register_app_delivery_routes(app, manager):
                 "language": str(runtime.get("language", "")),
                 "runtime_version": str(runtime.get("version", "")),
                 "dockerfile_content": dockerfile_content,
+                "version_note": version_note,
                 "app_config": json.dumps(body.get("app_config", [])),
                 "resource_ids": json.dumps(body.get("resource_ids", [])),
             }
@@ -283,10 +287,126 @@ def register_app_delivery_routes(app, manager):
             result = response.json()
             if result.get("app_url") != data["app_url"]:
                 raise ValueError("平台返回的 URL 与用户确认地址不同，拒绝启用技能")
-            data["events"].append("已上传经过确认的同一交付包，等待部署及业务验证")
+            pub_ver = int(result.get("version") or 1)
+            data["published_version"] = pub_ver
+            service.archive_published_version(data["slug"], pub_ver, folder)
+            data["events"].append(f"已上传经过确认的同一交付包 (v{pub_ver})，物理文件已归档至服务端 MinIO，等待部署及业务验证")
             data["published"] = True
             service.save(data)
             return {"ok": True, "data": result}
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/versions/{slug}")
+    async def get_app_versions(slug: str, platform_url: str = ""):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions")
+            if resp.status_code != 200:
+                raise ValueError(f"查询应用版本历史失败 ({resp.status_code}): {delivery_error(resp.text)}")
+            return resp.json()
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/versions/{slug}/{version}/artifacts/{filename}")
+    async def download_app_version_artifact(slug: str, version: int, filename: str, platform_url: str = ""):
+        if filename not in {"app.tar", "skill.zip", "Dockerfile", "manifest.json"}:
+            raise HTTPException(status_code=404, detail="Unknown artifact")
+        try:
+            if not delivery.SLUG.fullmatch(slug) or version <= 0:
+                raise ValueError("应用标识或版本号无效")
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions/{version}/artifacts/{filename}")
+            if resp.status_code == 200:
+                media_type = resp.headers.get("content-type", "application/octet-stream")
+                return Response(
+                    content=resp.content,
+                    media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{slug}-v{version}-{filename}"'},
+                )
+            local_fallback = service.root / "versions" / slug / f"v{version}" / filename
+            if local_fallback.is_file():
+                return FileResponse(local_fallback, filename=f"{slug}-v{version}-{filename}")
+            raise ValueError(f"下载版本 v{version} 制品 {filename} 失败 ({resp.status_code}): {delivery_error(resp.text)}")
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.post("/v1/apps/rollback/{slug}")
+    async def rollback_app_version(slug: str, body: dict):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            target_version = int(body.get("target_version") or 0)
+            if target_version <= 0:
+                raise ValueError("请指定有效的目标回退版本号")
+            reason = str(body.get("reason") or f"回退至版本 v{target_version}").strip()
+            target_platform = str(body.get("platform_url") or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+
+            async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
+                rb_resp = await client.post(
+                    f"{target_platform}/api/v1/apps/{slug}/rollback",
+                    json={"target_version": target_version, "reason": reason},
+                )
+                if rb_resp.status_code != 200:
+                    raise ValueError(f"服务端版本回退失败 ({rb_resp.status_code}): {delivery_error(rb_resp.text)}")
+                rb_data = rb_resp.json()
+
+                # 从 platform-opc (MinIO) 拉取目标版本的 skill.zip 并同步覆盖本地应用技能
+                skill_zip_bytes = b""
+                zip_resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions/{target_version}/artifacts/skill.zip")
+                if zip_resp.status_code == 200 and zip_resp.content:
+                    skill_zip_bytes = zip_resp.content
+                else:
+                    local_zip = service.root / "versions" / slug / f"v{target_version}" / "skill.zip"
+                    if local_zip.is_file():
+                        skill_zip_bytes = local_zip.read_bytes()
+
+            local_skill_synced = False
+            verification = None
+            if skill_zip_bytes:
+                ver_info = rb_data.get("version") or {}
+                app_url = str(ver_info.get("app_url") or "")
+                contract = service.install_rolled_back_skill(slug, app_url, skill_zip_bytes, target_version)
+                local_skill_synced = True
+                health = contract.get("health") or {}
+                base_url = contract.get("base_url") or app_url
+                if base_url and health.get("path"):
+                    try:
+                        health_contract = {
+                            "base_url": base_url,
+                            "apis": [{"id": "health", "path": health["path"], "method": "GET", "effect": "read", "auth": {"type": "none"}}],
+                        }
+                        code, content_type, content = await read_only_probe(health_contract, "health", {})
+                        verification = {
+                            "status": "verified-rolled-back" if code == health.get("status", 200) else "health-mismatch",
+                            "http_status": code,
+                            "base_url": base_url,
+                        }
+                    except Exception as probe_exc:
+                        verification = {"status": "probe-warning", "detail": str(probe_exc)}
+
+            return {
+                "ok": True,
+                "slug": slug,
+                "previous_version": rb_data.get("previous_version"),
+                "current_version": rb_data.get("current_version", target_version),
+                "active_version": rb_data.get("current_version") or rb_data.get("active_version") or target_version,
+                "rollback_mode": rb_data.get("rollback_mode", "auto"),
+                "restore_mode": rb_data.get("rollback_mode") or rb_data.get("restore_mode") or "auto",
+                "local_skill_synced": local_skill_synced,
+                "local_skill_replaced": local_skill_synced,
+                "local_skill_verified": bool(verification and verification.get("status") == "verified-rolled-back"),
+                "verification": verification,
+                "version": rb_data.get("version"),
+                "message": rb_data.get("message") or f"已将应用 {slug} 及对应技能同步回退至 v{target_version}",
+            }
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 

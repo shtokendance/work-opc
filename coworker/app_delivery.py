@@ -81,7 +81,7 @@ class AppDelivery:
 
     def public(self, job_id):
         data = self.load(job_id)
-        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
+        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "published_version", "version_note", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
         proposal = data.get("proposal")
         if proposal:
             source = self.path(job_id) / "review/source"
@@ -956,3 +956,75 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
         (store.global_dir / name / ".work-delivery-pending").unlink(missing_ok=True)
         store.set_enabled(name, True)
         data["local_skill_files"] = delivery.inspect_source(store.global_dir / name)[0]
+
+    def archive_published_version(self, slug: str, version: int, folder: Path):
+        if not delivery.SLUG.fullmatch(slug) or version <= 0 or not folder.is_dir():
+            return
+        ver_dir = self.root / "versions" / slug / f"v{version}"
+        ver_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for name in ("app.tar", "skill.zip", "app-manifest.json", "summary.json"):
+            src = folder / name
+            if src.is_file():
+                dst = ver_dir / name
+                shutil.copy2(src, dst)
+                dst.chmod(0o600)
+
+    def install_rolled_back_skill(self, slug: str, app_url: str, skill_zip_bytes: bytes, version: int = 0) -> dict:
+        if not delivery.SLUG.fullmatch(slug):
+            raise ValueError("应用标识格式无效")
+        if not skill_zip_bytes:
+            raise ValueError("回退版本的技能包内容为空")
+        import io as _io
+        with zipfile.ZipFile(_io.BytesIO(skill_zip_bytes)) as zf:
+            ops_name = next(
+                (n for n in zf.namelist() if n == "references/operations.json" or n.endswith("/references/operations.json")),
+                None,
+            )
+            if not ops_name:
+                raise ValueError("回退技能包缺少有效的 references/operations.json")
+            try:
+                contract = json.loads(zf.read(ops_name).decode("utf-8"))
+            except Exception as exc:
+                raise ValueError("回退技能包缺少有效的 references/operations.json") from exc
+        if contract.get("slug") != slug:
+            raise ValueError("回退技能包的标识与当前应用不一致")
+        if app_url and contract.get("base_url") and contract["base_url"].rstrip("/") != app_url.rstrip("/"):
+            raise ValueError("回退技能包的访问地址与当前应用不一致")
+
+        if version > 0:
+            ver_dir = self.root / "versions" / slug / f"v{version}"
+            ver_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            zip_file = ver_dir / "skill.zip"
+            zip_file.write_bytes(skill_zip_bytes)
+            zip_file.chmod(0o600)
+
+        store = self.manager.skill_store
+        name = "app-" + slug
+        target = store.global_dir / name
+        backup = self.root / ("rollback-backup-" + slug + "-" + uuid.uuid4().hex[:8])
+        disabled = name in store.disabled_names()
+        if target.exists():
+            if target.is_symlink():
+                raise ValueError("本地同名技能为符号链接，不能自动替换")
+            shutil.copytree(target, backup)
+        staged = store.stage_upload(skill_zip_bytes, filename="skill.zip")
+        try:
+            if staged.get("name") != name:
+                raise ValueError("回退技能名称与应用不一致")
+            if target.exists():
+                store.delete(name)
+            store.confirm_upload(staged["token"], scope="global")
+            (target / ".work-delivery-pending").unlink(missing_ok=True)
+            store.set_enabled(name, True)
+        except Exception:
+            store.discard_upload(staged["token"])
+            if backup.exists():
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(backup, target)
+                store.set_enabled(name, not disabled)
+            raise
+        finally:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+        return contract

@@ -204,3 +204,92 @@ def test_platform_config_and_runtime_logs_routes(tmp_path, monkeypatch):
         assert logs_res.status_code == 200
         assert "Server listening on 0.0.0.0:8080" in logs_res.json()["runtime_logs"]
 
+
+def test_app_versions_and_rollback_replace_local_skill(tmp_path, monkeypatch):
+    import io
+    import json
+    import zipfile
+
+    monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
+    manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
+
+    # Build a valid v1 skill.zip with references/operations.json
+    skill_buf = io.BytesIO()
+    with zipfile.ZipFile(skill_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "app-demo-app/SKILL.md",
+            "---\nname: app-demo-app\ndescription: Demo App v1\n---\n# Demo App v1\n",
+        )
+        zf.writestr("app-demo-app/scripts/invoke_api.py", "print('v1 skill invoke')\n")
+        zf.writestr(
+            "app-demo-app/references/operations.json",
+            json.dumps(
+                {
+                    "slug": "demo-app",
+                    "base_url": "http://demo-app.apps.local",
+                    "health": {"path": "/healthz"},
+                    "apis": [{"id": "list_orders", "method": "GET", "path": "/api/orders", "effect": "read"}],
+                    "pages": [{"path": "/orders", "purpose": "Orders v1"}],
+                    "verification": {"cases": [{"operation": "list_orders"}]},
+                }
+            ),
+        )
+    skill_zip_v1 = skill_buf.getvalue()
+
+    with TestClient(create_app(manager)) as client:
+        mock_versions = httpx.Response(
+            200,
+            json={
+                "slug": "demo-app",
+                "current_version": 2,
+                "versions": [
+                    {"version": 2, "is_active": True, "version_note": "v2 upgrade"},
+                    {"version": 1, "is_active": False, "version_note": "v1 initial"},
+                ],
+            },
+        )
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_versions)):
+            ver_res = client.get("/v1/apps/versions/demo-app")
+        assert ver_res.status_code == 200
+        assert ver_res.json()["current_version"] == 2
+        assert len(ver_res.json()["versions"]) == 2
+
+        # Rollback from v2 -> v1
+        mock_rb_post = httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "slug": "demo-app",
+                "active_version": 1,
+                "restore_mode": "image_switch",
+                "app": {"slug": "demo-app", "app_url": "http://demo-app.apps.local", "current_version": 1},
+            },
+        )
+        mock_get_responses = [
+            httpx.Response(200, content=skill_zip_v1, headers={"content-type": "application/zip"}),
+        ]
+        with (
+            patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_rb_post)),
+            patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=mock_get_responses)),
+            patch(
+                "coworker.server.app_delivery_routes.delivery.execute",
+                return_value=(200, "application/json", '{"ok":true}'),
+            ),
+        ):
+            rb_res = client.post(
+                "/v1/apps/rollback/demo-app",
+                json={"target_version": 1, "reason": "v2 API broken"},
+            )
+        assert rb_res.status_code == 200, rb_res.text
+        rb_body = rb_res.json()
+        assert rb_body["ok"] is True
+        assert rb_body["active_version"] == 1
+        assert rb_body["local_skill_replaced"] is True
+        assert rb_body["local_skill_verified"] is True
+
+        # Verify local skill directory was overwritten with v1 skill
+        installed_skill_md = (manager.skill_store.global_dir / "app-demo-app/SKILL.md").read_text()
+        assert "Demo App v1" in installed_skill_md
+        assert "app-demo-app" not in manager.skill_store.disabled_names()
+
+

@@ -4508,6 +4508,7 @@ export interface DeployedApp {
   app_url: string;
   container_port: number;
   status: "building" | "running" | "failed";
+  current_version?: number;
   app_config: AppConfigItem[];
   resource_ids: string[];
   skill_name: string;
@@ -4518,6 +4519,84 @@ export interface DeployedApp {
   created_by?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface AppVersionItem {
+  id: string;
+  app_id: string;
+  slug: string;
+  version: number;
+  version_note?: string;
+  source_job_id?: string;
+  artifact_hash?: string;
+  caprover_version?: number;
+  caprover_image_name?: string;
+  container_port: number;
+  app_config?: AppConfigItem[];
+  resource_ids?: string[];
+  apis_summary?: { id: string; method: string; path: string; purpose?: string; effect?: string }[];
+  pages_summary?: { path: string; purpose?: string }[];
+  catalog_skill_id?: string;
+  artifact_bucket?: string;
+  artifact_prefix?: string;
+  app_tar_key?: string;
+  app_tar_size?: number;
+  skill_zip_key?: string;
+  skill_zip_size?: number;
+  dockerfile_key?: string;
+  manifest_key?: string;
+  status: string;
+  is_active: boolean;
+  deployed_by?: string;
+  created_at: string;
+}
+
+export async function listAppVersions(slug: string): Promise<{
+  ok?: boolean;
+  slug: string;
+  current_version: number;
+  versions: AppVersionItem[];
+}> {
+  const q = new URLSearchParams({ platform_url: platformBase() }).toString();
+  const res = await fetch(`${httpBase()}/v1/apps/versions/${encodeURIComponent(slug)}?${q}`);
+  if (res.ok) return res.json();
+  const fallback = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/versions`);
+  return fallback.json();
+}
+
+export function getAppVersionArtifactUrl(slug: string, version: number, filename: string): string {
+  const q = new URLSearchParams({ platform_url: platformBase() }).toString();
+  return `${httpBase()}/v1/apps/versions/${encodeURIComponent(slug)}/${version}/artifacts/${encodeURIComponent(filename)}?${q}`;
+}
+
+export async function rollbackAppVersion(
+  slug: string,
+  targetVersion: number,
+  reason = ""
+): Promise<{
+  ok: boolean;
+  slug: string;
+  active_version: number;
+  restore_mode?: string;
+  message?: string;
+  local_skill_replaced?: boolean;
+  local_skill_verified?: boolean;
+  error?: string;
+}> {
+  const res = await fetch(`${httpBase()}/v1/apps/rollback/${encodeURIComponent(slug)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target_version: targetVersion,
+      reason,
+      platform_url: platformBase(),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.error || data?.message || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 export async function checkAppSlug(slug: string): Promise<{
@@ -4595,6 +4674,7 @@ export async function publishAppToPlatform(params: {
   resource_ids: string[];
   job_id: string;
   confirmation_token: string;
+  version_note?: string;
 }): Promise<{ ok: boolean; data?: any; error?: string }> {
   const res = await fetch(`${httpBase()}/v1/apps/publish-to-platform`, {
     method: "POST",
