@@ -172,3 +172,35 @@ def test_enable_without_delivery_confirmation_is_rejected(tmp_path, monkeypatch)
     with TestClient(create_app(manager)) as client:
         response = client.post("/v1/apps/enable-skill", json={"slug": "test-app"})
         assert response.status_code == 422
+
+
+def test_platform_config_and_runtime_logs_routes(tmp_path, monkeypatch):
+    monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
+    manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
+    with TestClient(create_app(manager)) as client:
+        cfg = client.get("/v1/apps/platform-config").json()
+        assert cfg["ok"] is True
+        assert "/api/v1/apps/resources" in cfg["resource_api_url"]
+
+        updated = client.put(
+            "/v1/apps/platform-config",
+            json={"platform_url": "http://10.0.0.8:8090/"},
+        ).json()
+        assert updated["ok"] is True
+        assert updated["platform_url"] == "http://10.0.0.8:8090"
+        assert updated["dockerfile_template_api_url"] == "http://10.0.0.8:8090/api/v1/apps/dockerfile-templates"
+
+        mock_logs = httpx.Response(
+            200,
+            json={
+                "slug": "demo-app",
+                "container_name": "opc-app-demo-app",
+                "status": "running",
+                "runtime_logs": "2026-11-03T12:00:00Z Server listening on 0.0.0.0:8080",
+            },
+        )
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_logs)):
+            logs_res = client.get("/v1/apps/runtime-logs/demo-app?tail=100")
+        assert logs_res.status_code == 200
+        assert "Server listening on 0.0.0.0:8080" in logs_res.json()["runtime_logs"]
+

@@ -359,3 +359,85 @@ async def test_cancellation_preserves_original_source_and_prevents_approval(serv
     assert service.public(job["id"])["status"] == "cancelled"
     assert (service.path(job["id"]) / "review/source/main.py").read_text() == "print('original')\n"
     assert not (service.path(job["id"]) / "approved").exists()
+
+
+def test_step1_credential_extraction_and_decryption_and_sqlite_inspection(tmp_path):
+    import sqlite3
+    from coworker.app_delivery_migration import (
+        extract_sqlite_tables,
+        inspect_credentials_in_source,
+        inspect_local_sqlite_files,
+    )
+
+    # Create a sample source tree with Base64 & MD5 admin password and a local SQLite DB
+    (tmp_path / "config.py").write_text(
+        'ADMIN_USERNAME = "superadmin"\n'
+        'ADMIN_PASSWORD_B64 = "c2VjcmV0MTIz"\n'  # Base64 for "secret123"
+        'DEFAULT_MD5_PASS = "e10adc3949ba59abbe56e057f20f883e"\n',  # MD5 for "123456"
+        encoding="utf-8",
+    )
+    db_file = tmp_path / "data.sqlite3"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)")
+    conn.execute("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', '21232f297a57a5a743894a0e4a801fc3', 'admin')")
+    conn.commit()
+    conn.close()
+
+    creds = inspect_credentials_in_source(tmp_path)
+    decrypted_vals = [item["decrypted"] for item in creds["decrypted_candidates"] if item.get("decrypted")]
+    assert "secret123" in decrypted_vals
+    assert "123456" in decrypted_vals
+    assert "admin" in decrypted_vals
+    assert any(u["table"] == "users" for u in creds["sqlite_users"])
+
+    sqlite_info = inspect_local_sqlite_files(tmp_path)
+    assert len(sqlite_info["sqlite_databases"]) == 1
+    assert sqlite_info["sqlite_databases"][0]["path"] == "data.sqlite3"
+    tables = extract_sqlite_tables(db_file)
+    assert len(tables) == 1
+    assert tables[0]["name"] == "users"
+    assert len(tables[0]["rows"]) == 1
+    assert tables[0]["rows"][0]["username"] == "admin"
+
+
+def test_step3_auth_profile_embedded_in_skill_and_auto_resolved_by_invoker():
+    from coworker.app_delivery_skill.scripts import delivery, invoke_api
+
+    contract = {
+        "name": "Auth Demo",
+        "slug": "auth-demo",
+        "description": "Demo with auth",
+        "base_url": "http://auth-demo.apps.localhost",
+        "runtime": {"language": "python", "version": "3.11", "port": 8080},
+        "health": {"path": "/healthz", "status": 200},
+        "auth_profile": {
+            "type": "bearer",
+            "login_url": "/api/login",
+            "username": "admin",
+            "password": "secret-password-888",
+            "token": "pre-issued-admin-token-xyz",
+            "decrypted_from": "Seed config decrypted",
+        },
+        "apis": [
+            {
+                "id": "list-orders",
+                "purpose": "Query orders",
+                "method": "GET",
+                "path": "/api/orders",
+                "effect": "read",
+                "auth": {"type": "bearer", "env": "ORDER_API_TOKEN"},
+            }
+        ],
+        "pages": [{"path": "/dashboard", "purpose": "Admin order dashboard"}],
+    }
+    skill_md = delivery.render_skill_markdown(contract)
+    assert "admin" in skill_md
+    assert "secret-password-888" in skill_md
+    assert "登录与接口授权凭据（已内置）" in skill_md
+
+    # Verify invoke_api automatically uses contract.auth_profile when env is not explicitly passed
+    req = invoke_api.build_request(
+        contract, "list-orders", {}, None, "http://auth-demo.apps.localhost", credential_env=None
+    )
+    assert req.get_header("Authorization") == "Bearer pre-issued-admin-token-xyz"
+

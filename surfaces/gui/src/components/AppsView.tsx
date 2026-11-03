@@ -3,15 +3,20 @@ import {
   checkAppSlug,
   appDeliveryRequest,
   type AppDeliveryJob,
+  getAppRuntimeLogs,
   getDeployedApp,
+  getPlatformConfig,
   getSettings,
   listDeployedApps,
   listOnlineResources,
+  platformBase,
   publishAppToPlatform,
   transformApp,
   updateDeployedAppConfig,
+  updatePlatformConfig,
   type AppConfigItem,
   type DeployedApp,
+  type PlatformResourceApiConfig,
   type ResourceSummary,
 } from "../api";
 import { Icon } from "./Icon";
@@ -83,6 +88,45 @@ export function AppsView({ onBack }: Props) {
   const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "logs">("configs");
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<{ [key: string]: boolean }>({});
+  const [runtimeLogs, setRuntimeLogs] = useState<string>("");
+  const [loadingRuntimeLogs, setLoadingRuntimeLogs] = useState(false);
+
+  // Platform Resource API Configuration state
+  const [showPlatformConfigModal, setShowPlatformConfigModal] = useState(false);
+  const [, setPlatformConfig] = useState<PlatformResourceApiConfig | null>(null);
+  const [platformUrlInput, setPlatformUrlInput] = useState(platformBase());
+  const [savingPlatformConfig, setSavingPlatformConfig] = useState(false);
+
+  const loadRuntimeLogs = async (appSlug: string) => {
+    if (!appSlug) return;
+    setLoadingRuntimeLogs(true);
+    try {
+      const res = await getAppRuntimeLogs(appSlug, 250);
+      setRuntimeLogs(res.runtime_logs || "暂无容器实时运行日志输出");
+    } catch (e: any) {
+      setRuntimeLogs(`读取实时运行日志失败: ${e?.message || String(e)}`);
+    } finally {
+      setLoadingRuntimeLogs(false);
+    }
+  };
+
+  const handleSavePlatformConfig = async () => {
+    if (!platformUrlInput.trim()) return;
+    setSavingPlatformConfig(true);
+    try {
+      const cfg = await updatePlatformConfig(platformUrlInput.trim());
+      setPlatformConfig(cfg);
+      setPlatformUrlInput(cfg.platform_url);
+      const res = await listOnlineResources().catch(() => ({ resources: [] }));
+      setOnlineResources(res.resources || []);
+      await refreshApps();
+      setShowPlatformConfigModal(false);
+    } catch (e: any) {
+      alert(`保存平台资源配置失败: ${e?.message || String(e)}`);
+    } finally {
+      setSavingPlatformConfig(false);
+    }
+  };
 
   const toggleShowSecret = (key: string) => {
     setShowSecrets((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
@@ -117,10 +161,17 @@ export function AppsView({ onBack }: Props) {
   };
 
   useEffect(() => {
-    refreshApps();
-    listOnlineResources().then((res) => {
-      setOnlineResources(res.resources || []);
-    }).catch(() => {});
+    getPlatformConfig().then((cfg) => {
+      if (cfg?.platform_url) {
+        setPlatformConfig(cfg);
+        setPlatformUrlInput(cfg.platform_url);
+      }
+    }).catch(() => {}).finally(() => {
+      refreshApps();
+      listOnlineResources().then((res) => {
+        setOnlineResources(res.resources || []);
+      }).catch(() => {});
+    });
 
     getSettings().then((s) => {
       if (s?.models && s.models.length > 0) {
@@ -329,6 +380,8 @@ export function AppsView({ onBack }: Props) {
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
     setDrawerTab(app.status === "failed" && initialTab === "configs" ? "logs" : initialTab);
+    setRuntimeLogs("");
+    void loadRuntimeLogs(app.slug);
   };
 
   const resumeDraft = (job: AppDeliveryJob) => {
@@ -396,6 +449,17 @@ export function AppsView({ onBack }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setPlatformUrlInput(platformBase());
+              setShowPlatformConfigModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors"
+            title="配置 Platform-OPC 资源获取接口与管理后台"
+          >
+            <Icon name="sliders" size={13} />
+            平台资源配置
+          </button>
           <button
             onClick={refreshApps}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors"
@@ -954,6 +1018,22 @@ export function AppsView({ onBack }: Props) {
                   {/* Tab 2: 应用技能 */}
                   {reviewTab === "skills" && (
                     <section className="space-y-3" aria-label="生成的业务技能">
+                      {plan?.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
+                        <div className="rounded-xl border border-okLine bg-okSoft/30 p-3.5 text-xs space-y-1">
+                          <div className="font-semibold text-ok flex items-center gap-1.5">
+                            ✓ 已内置应用免登授权凭据 (Auth-Ready Skill)
+                          </div>
+                          <div className="text-ink">
+                            已自动写入技能凭据：
+                            {plan.auth_profile.username && <span className="font-mono ml-1">账号={plan.auth_profile.username}</span>}
+                            {plan.auth_profile.password && <span className="font-mono ml-2">密码={plan.auth_profile.password}</span>}
+                            {plan.auth_profile.login_url && <span className="font-mono ml-2">登录接口={plan.auth_profile.login_url}</span>}
+                          </div>
+                          <div className="text-muted">
+                            调用该应用技能访问页面或 API 时将自动携带或换取授权，不会因权限拦截受阻。
+                          </div>
+                        </div>
+                      )}
                       {deliveryJob && <AppSkillPreview job={deliveryJob} />}
                     </section>
                   )}
@@ -1374,7 +1454,10 @@ export function AppsView({ onBack }: Props) {
               </button>
 
               <button
-                onClick={() => setDrawerTab("logs")}
+                onClick={() => {
+                  setDrawerTab("logs");
+                  void loadRuntimeLogs(selectedApp.slug);
+                }}
                 className={`py-3 px-3 text-ui font-medium border-b-2 transition-colors flex items-center gap-2 ${
                   drawerTab === "logs"
                     ? "border-accent text-accent"
@@ -1382,7 +1465,7 @@ export function AppsView({ onBack }: Props) {
                 }`}
               >
                 <Icon name="code" size={14} />
-                <span>最近部署日志</span>
+                <span>运行与部署日志</span>
               </button>
             </div>
 
@@ -1492,22 +1575,61 @@ export function AppsView({ onBack }: Props) {
                 </div>
               )}
 
-              {/* TAB 3: 最近部署日志 */}
+              {/* TAB 3: 运行与部署日志 */}
               {drawerTab === "logs" && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-meta text-muted">
-                    <span>容器构建与上线运行日志</span>
-                    <button
-                      onClick={() => copyToClipboard(selectedApp.build_log || "", "部署日志")}
-                      className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
-                    >
-                      <Icon name="copy" size={12} />
-                      复制完整日志
-                    </button>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-meta text-muted">
+                      <span className="font-semibold text-ink">容器服务端实时运行日志 (Runtime Logs)</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => void loadRuntimeLogs(selectedApp.slug)}
+                          disabled={loadingRuntimeLogs}
+                          className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors disabled:opacity-50"
+                        >
+                          <Icon name="refresh" size={12} className={loadingRuntimeLogs ? "animate-spin" : ""} />
+                          刷新运行日志
+                        </button>
+                        <button
+                          onClick={() => copyToClipboard(runtimeLogs || "", "运行日志")}
+                          className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
+                        >
+                          <Icon name="copy" size={12} />
+                          复制运行日志
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[240px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white">
+                      {loadingRuntimeLogs ? "正在拉取服务端容器实时运行日志..." : (runtimeLogs || "暂无实时运行日志输出")}
+                    </pre>
                   </div>
-                  <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[420px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
-                    {selectedApp.build_log || "暂无日志输出"}
-                  </pre>
+
+                  <div className="space-y-2 pt-2 border-t border-line">
+                    <div className="flex items-center justify-between text-meta text-muted">
+                      <span className="font-semibold text-ink">最近构建与部署日志 (Build Logs)</span>
+                      <button
+                        onClick={() => copyToClipboard(selectedApp.build_log || "", "部署日志")}
+                        className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
+                      >
+                        <Icon name="copy" size={12} />
+                        复制构建日志
+                      </button>
+                    </div>
+                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[200px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
+                      {selectedApp.build_log || "暂无构建日志输出"}
+                    </pre>
+                  </div>
+
+                  {selectedApp.dockerfile_content && (
+                    <details className="text-xs text-muted pt-2 border-t border-line">
+                      <summary className="cursor-pointer font-medium text-ink">
+                        查看已归档的 Dockerfile {selectedApp.language ? `(${selectedApp.language} ${selectedApp.runtime_version || ""})` : ""}
+                      </summary>
+                      <pre className="mt-2 p-3 rounded-xl bg-neutral-950 text-amber-300 font-mono text-label max-h-48 overflow-y-auto whitespace-pre-wrap">
+                        {selectedApp.dockerfile_content}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
@@ -1550,6 +1672,91 @@ export function AppsView({ onBack }: Props) {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Platform-OPC Resource API Configuration */}
+      {showPlatformConfigModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-panel w-full max-w-lg rounded-2xl border border-line shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-accentSoft text-accent flex items-center justify-center">
+                  <Icon name="sliders" size={16} />
+                </div>
+                <div>
+                  <h2 className="text-ui font-semibold text-ink">Platform-OPC 资源获取 API 配置</h2>
+                  <p className="text-xs text-muted">统一网关服务地址、基础服务资源与 Dockerfile 模板库连接配置</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPlatformConfigModal(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-paper"
+              >
+                <Icon name="x" size={16} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-ui">
+              <div>
+                <label className="block text-xs font-medium text-ink mb-1.5" htmlFor="platform-opc-url-input">
+                  Platform-OPC 网关基础地址 (Base URL)
+                </label>
+                <input
+                  id="platform-opc-url-input"
+                  type="text"
+                  value={platformUrlInput}
+                  onChange={(e) => setPlatformUrlInput(e.target.value)}
+                  placeholder="https://shtokendance.benlai.com"
+                  className="w-full rounded-xl border border-line bg-paper px-3.5 py-2 font-mono text-xs text-ink focus:outline-accent"
+                />
+              </div>
+
+              <div className="rounded-xl border border-line bg-paper/60 p-3.5 space-y-2.5 text-xs">
+                <div>
+                  <span className="text-muted block">基础服务资源获取 API (MySQL / PG / Redis / MQ)</span>
+                  <code className="font-mono text-accent break-all">
+                    {platformUrlInput.replace(/\/+$/, "")}/api/v1/apps/resources
+                  </code>
+                </div>
+                <div>
+                  <span className="text-muted block">语言+版本 Dockerfile 模板获取 API</span>
+                  <code className="font-mono text-accent break-all">
+                    {platformUrlInput.replace(/\/+$/, "")}/api/v1/apps/dockerfile-templates
+                  </code>
+                </div>
+                <div className="pt-1 border-t border-line/60 flex items-center justify-between">
+                  <span className="text-muted">当前已加载平台基础资源：{onlineResources.length} 项</span>
+                  <a
+                    href={`${platformUrlInput.replace(/\/+$/, "")}/admin/deploy`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-accent hover:underline font-medium"
+                  >
+                    打开 Deploy-OPC 治理后台 ↗
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 px-6 py-4 border-t border-line bg-paper/50">
+              <button
+                type="button"
+                onClick={() => setShowPlatformConfigModal(false)}
+                className="px-4 py-2 rounded-xl border border-line text-xs font-medium text-muted hover:text-ink hover:bg-paper"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={savingPlatformConfig || !platformUrlInput.trim()}
+                onClick={handleSavePlatformConfig}
+                className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-xs font-medium shadow-xs disabled:opacity-50"
+              >
+                {savingPlatformConfig ? "正在保存并同步..." : "保存并同步资源"}
+              </button>
             </div>
           </div>
         </div>

@@ -17,6 +17,12 @@ import zipfile
 
 from .app_delivery_skill.scripts import delivery
 from .app_delivery_config import original_fields, original_value, runtime_configs, loopback_connection
+from .app_delivery_migration import (
+    fetch_platform_dockerfile_template,
+    inspect_credentials_in_source,
+    inspect_local_sqlite_files,
+    migrate_local_data_to_platform,
+)
 from .app_delivery_sources import dependency_path
 from .engine import TurnEngine
 from .events import EventType
@@ -75,7 +81,7 @@ class AppDelivery:
 
     def public(self, job_id):
         data = self.load(job_id)
-        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "resources", "revision", "conversation", "config_draft", "preparation_checks")}
+        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
         proposal = data.get("proposal")
         if proposal:
             source = self.path(job_id) / "review/source"
@@ -87,7 +93,7 @@ class AppDelivery:
                 new = redacted(applied.read_text() if data["status"] == "ready" and applied.is_file() else change["content"], change["path"])
                 changes.append({"id": change["id"], "path": change["path"], "reason": change["reason"], "group": change.get("group", ""), "diff": "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=change["path"] + " (原始)", tofile=change["path"] + " (建议)"))})
             configs = [{**c, "has_original_value": bool(original_value(source, c["source"])) if c.get("source") else False} for c in proposal["contract"].get("configs", [])]
-            result["proposal"] = {"summary": proposal["summary"], "issues": proposal["issues"], "unresolved": list(dict.fromkeys(proposal.get("unresolved", []) + proposal["contract"].get("unresolved", []))), "changes": changes, "configs": configs, "detected_resources": proposal["contract"].get("resources", []), "apis": proposal["contract"].get("apis", []), "pages": proposal["contract"].get("pages", []), "health_path": proposal["contract"].get("health", {}).get("path"), "verification_plan": proposal["contract"].get("verification", {})}
+            result["proposal"] = {"summary": proposal["summary"], "issues": proposal["issues"], "unresolved": list(dict.fromkeys(proposal.get("unresolved", []) + proposal["contract"].get("unresolved", []))), "changes": changes, "configs": configs, "detected_resources": proposal["contract"].get("resources", []), "apis": proposal["contract"].get("apis", []), "pages": proposal["contract"].get("pages", []), "health_path": proposal["contract"].get("health", {}).get("path"), "verification_plan": proposal["contract"].get("verification", {}), "four_step_report": proposal.get("four_step_report", {}), "auth_profile": proposal["contract"].get("auth_profile", {})}
             result["proposal"]["decisions"] = proposal.get("decisions", [])
             # This authenticated local UI response is separate from the exported manifest/skill.
             # Original credentials remain in the local source and are only sent as runtime inputs
@@ -358,13 +364,61 @@ class AppDelivery:
             draft_files[id] = change
             return "File proposal recorded: " + id + ". Source is unchanged. Submit metadata and contract when all files are proposed."
 
-        def submit_proposal(summary: str = "", issues: list = None, unresolved: list = None, changes: list = None, contract: dict = None, proposal_json: str = "", decisions: list = None) -> str:
+        def inspect_credentials_and_decrypt(path: str = "", cipher_text: str = "", algorithm_hint: str = "") -> str:
+            """Step 1 tool: Scan source config/seed/SQLite for admin/login credentials and decrypt encoded/encrypted passwords."""
+            info = inspect_credentials_in_source(source, path, cipher_text, algorithm_hint)
+            return json.dumps(info, ensure_ascii=False)
+
+        def fetch_dockerfile_template(language: str, version: str = "") -> str:
+            """Step 2 tool: Fetch Dockerfile base image and template for (language, version) from platform-opc deploy-opc DB."""
+            tpl = fetch_platform_dockerfile_template(data.get("platform_url", ""), language, version)
+            return json.dumps(tpl, ensure_ascii=False)
+
+        def inspect_local_storage(sqlite_path: str = "") -> str:
+            """Step 1 & 2 tool: Inspect local SQLite database files (tables, columns, sample rows) in the application source."""
+            res = inspect_local_sqlite_files(source, sqlite_path)
+            return json.dumps(res, ensure_ascii=False)
+
+        def migrate_storage_to_platform(source_type: str = "sqlite", sqlite_path: str = "", target_type: str = "postgres", target_resource_id: str = "") -> str:
+            """Step 2 tool: Automatically migrate local SQLite or local DB schema & rows to platform-opc server DB resource."""
+            mig = migrate_local_data_to_platform(
+                platform_url=data.get("platform_url", ""),
+                slug=data["slug"],
+                source_dir=source,
+                source_type=source_type,
+                sqlite_path=sqlite_path,
+                target_type=target_type,
+                target_resource_id=target_resource_id,
+            )
+            data.setdefault("migrations", []).append(mig)
+            res_id = mig.get("resource_id")
+            env_keys = sorted(list((mig.get("env_vars") or {}).keys()))
+            if res_id and env_keys:
+                existing_ids = {r.get("id") for r in data.get("resources", [])}
+                if res_id not in existing_ids:
+                    data.setdefault("resources", []).append({
+                        "id": res_id,
+                        "name": f"{data['slug']} 迁移数据库 ({mig.get('database_name', '')})",
+                        "type": mig.get("target_type", target_type),
+                        "description": mig.get("message", "自动迁移创建的服务端数据库"),
+                        "env_keys": env_keys,
+                        "env_preview": mig.get("env_preview", {}),
+                    })
+            data["events"].append(f"已完成数据库结构与数据迁移：{mig.get('message', res_id)}")
+            self.save(data)
+            safe_mig = {k: v for k, v in mig.items() if k != "env_vars"}
+            safe_mig["env_keys"] = env_keys
+            return json.dumps(safe_mig, ensure_ascii=False)
+
+        def submit_proposal(summary: str = "", issues: list = None, unresolved: list = None, changes: list = None, contract: dict = None, proposal_json: str = "", decisions: list = None, four_step_report: dict = None) -> str:
             """Submit native structured fields, not a serialized JSON string. Does NOT modify source."""
             try:
                 # Legacy argument remains accepted for older clients and stored test providers.
-                candidate = json.loads(proposal_json) if proposal_json else {"summary": summary, "issues": issues or [], "unresolved": unresolved or [], "changes": changes or [], "contract": contract or {}, "decisions": decisions or []}
+                candidate = json.loads(proposal_json) if proposal_json else {"summary": summary, "issues": issues or [], "unresolved": unresolved or [], "changes": changes or [], "contract": contract or {}, "decisions": decisions or [], "four_step_report": four_step_report or {}}
                 if not isinstance(candidate, dict):
                     raise ValueError("提案必须是结构化对象")
+                if four_step_report and isinstance(four_step_report, dict) and not candidate.get("four_step_report"):
+                    candidate["four_step_report"] = four_step_report
                 resolved = []
                 for change in candidate.get("changes", []):
                     if isinstance(change, dict) and "content" not in change and change.get("id") in draft_files:
@@ -390,12 +444,32 @@ class AppDelivery:
             self.save(data)
             return "Proposal received. Source remains unchanged. Finish. Work will prepare the isolated copy automatically if no blocking decisions remain."
 
-        for tool in (list_source, read_source, read_adapter_reference, read_go_dependency, propose_file_change):
+        for tool in (
+            list_source,
+            read_source,
+            read_adapter_reference,
+            read_go_dependency,
+            inspect_credentials_and_decrypt,
+            fetch_dockerfile_template,
+            inspect_local_storage,
+            migrate_storage_to_platform,
+            propose_file_change,
+        ):
             registry.register(tool)
         registry.register(submit_proposal, schema={"type": "function", "function": {
             "name": "submit_proposal", "description": "提交结构化修改提案。先用 propose_file_change 分项提出大文件；本工具只汇总，不执行修改。",
             "parameters": {"type": "object", "required": ["summary", "issues", "unresolved", "changes", "contract"], "properties": {
                 "summary": {"type": "string"},
+                "four_step_report": {
+                    "type": "object",
+                    "description": "四步标准化应用改造报告（第一步：应用全貌与账密剖析；第二步：Dockerfile与存储/基础服务改造；第三步：内置授权的应用技能；第四步：待用户确认项）",
+                    "properties": {
+                        "step1_discovery": {"type": "object"},
+                        "step2_transformation": {"type": "object"},
+                        "step3_skill_auth": {"type": "object"},
+                        "step4_confirmation": {"type": "object"}
+                    }
+                },
                 "issues": {"type": "array", "items": {"type": "object", "required": ["id", "evidence", "impact", "recommendation"], "properties": {"id": {"type": "string"}, "evidence": {"type": "string"}, "impact": {"type": "string"}, "recommendation": {"type": "string"}}}},
                 "unresolved": {"type": "array", "items": {"type": "string"}},
                 "decisions": {"type": "array", "description": "为 unresolved 问题提供简短影响说明和可选回答；不代表用户已经选择", "items": {"type": "object", "required": ["id", "question", "impact", "options"], "properties": {"id": {"type": "string"}, "question": {"type": "string"}, "impact": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}}},
@@ -406,6 +480,21 @@ class AppDelivery:
                     "runtime": {"type": "object", "required": ["language", "version", "port"], "properties": {"language": {"type": "string"}, "version": {"type": "string"}, "port": {"type": "integer", "enum": [data["port"]]}}},
                     "build_context": {"type": "array", "items": {"type": "string"}},
                     "health": {"type": "object", "required": ["path", "status", "json_contains"], "properties": {"path": {"type": "string"}, "status": {"type": "integer", "enum": [200]}, "json_contains": {"type": "object"}}},
+                    "auth_profile": {
+                        "type": "object",
+                        "description": "第三步生成应用技能内置的管理员/登录账密与接口授权信息，确保调用应用技能获取页面或 API 数据不因鉴权受阻",
+                        "properties": {
+                            "page_auth_required": {"type": "boolean"},
+                            "api_auth_required": {"type": "boolean"},
+                            "admin_username": {"type": "string"},
+                            "admin_password": {"type": "string"},
+                            "auth_token": {"type": "string"},
+                            "login_url": {"type": "string"},
+                            "login_method": {"type": "string"},
+                            "token_json_path": {"type": "string"},
+                            "notes": {"type": "string"}
+                        }
+                    },
                     "configs": {"type": "array", "items": {"type": "object", "required": ["key", "default", "secret", "required"], "properties": {"key": {"type": "string"}, "default": {"type": "string"}, "secret": {"type": "boolean"}, "required": {"type": "boolean"}, "description": {"type": "string"}, "source": {"type": "object", "description": "已有值的原文件路径与字段数组引用，例如 path=config.yaml, keys=[db,password]；禁止填写真实秘密值。"}}}},
                     "resources": {"type": "array", "items": {"type": "object"}},
                     "apis": {"type": "array", "items": {"type": "object", "required": ["id", "method", "path", "purpose", "evidence", "parameters", "request_body", "responses", "auth", "effect", "confirmation_required"], "properties": {

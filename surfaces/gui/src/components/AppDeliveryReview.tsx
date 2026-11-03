@@ -274,6 +274,47 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
           </article>
         )}
 
+        {(plan?.four_step_report || plan?.auth_profile) && (
+          <details className="rounded-2xl border border-line bg-paper/60 px-4 py-3 text-xs space-y-2">
+            <summary className="cursor-pointer font-medium text-ink select-none flex items-center justify-between">
+              <span>查看四步改造与免登技能全景摘要</span>
+              <span className="text-accent">展开详情</span>
+            </summary>
+            <div className="pt-2 border-t border-line/60 space-y-2 text-muted">
+              {plan.four_step_report?.step1_discovery && (
+                <div>
+                  <span className="font-semibold text-ink">第一步 · 源码与技术栈摸底：</span>
+                  <span className="ml-1 font-mono">
+                    {plan.four_step_report.step1_discovery.language || "-"} {plan.four_step_report.step1_discovery.runtime_version || ""}
+                  </span>
+                  {plan.four_step_report.step1_discovery.storage_type && (
+                    <span className="ml-2">存储类型: {plan.four_step_report.step1_discovery.storage_type}</span>
+                  )}
+                </div>
+              )}
+              {plan.four_step_report?.step2_transformation && (
+                <div>
+                  <span className="font-semibold text-ink">第二步 · 容器与存储改造：</span>
+                  <span className="ml-1">
+                    Dockerfile={plan.four_step_report.step2_transformation.dockerfile_action || "已就绪"}
+                    {plan.four_step_report.step2_transformation.storage_migration ? ` · 数据迁移=${plan.four_step_report.step2_transformation.storage_migration}` : ""}
+                  </span>
+                </div>
+              )}
+              {plan.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
+                <div>
+                  <span className="font-semibold text-ok">第三步 · 免登授权技能：</span>
+                  <span className="ml-1 font-mono text-ink">
+                    {plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
+                    {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
+                    {plan.auth_profile.decrypted_from ? ` (${plan.auth_profile.decrypted_from})` : ""}
+                  </span>
+                </div>
+              )}
+            </div>
+          </details>
+        )}
+
         {/* Unresolved Decision Questions Bubble */}
         {!!questions.length && (
           <div className="flex items-start gap-3">
