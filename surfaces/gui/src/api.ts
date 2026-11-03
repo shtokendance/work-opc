@@ -4399,10 +4399,81 @@ export async function forgetConnectorOnMachine(sourceMachineId: string, name: st
 // OPC V3.0 应用部署与转技能 API
 // ==============================================================================
 
-export const platformBase = (): string =>
-  (globalThis as any).__PLATFORM_HTTP__ ||
-  (import.meta as any).env?.VITE_PLATFORM_HTTP ||
-  "https://shtokendance.benlai.com";
+const PLATFORM_URL_STORAGE_KEY = "opc_platform_url";
+
+export const platformBase = (): string => {
+  try {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(PLATFORM_URL_STORAGE_KEY)?.trim() : "";
+    if (saved) return saved.replace(/\/+$/, "");
+  } catch {}
+  return (
+    (globalThis as any).__PLATFORM_HTTP__ ||
+    (import.meta as any).env?.VITE_PLATFORM_HTTP ||
+    "https://shtokendance.benlai.com"
+  );
+};
+
+export function setLocalPlatformBase(url: string): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const cleaned = url.trim().replace(/\/+$/, "");
+      if (cleaned) localStorage.setItem(PLATFORM_URL_STORAGE_KEY, cleaned);
+      else localStorage.removeItem(PLATFORM_URL_STORAGE_KEY);
+    }
+  } catch {}
+}
+
+export interface PlatformResourceApiConfig {
+  ok: boolean;
+  platform_url: string;
+  resource_api_url: string;
+  dockerfile_template_api_url: string;
+  admin_deploy_url: string;
+}
+
+export async function getPlatformConfig(): Promise<PlatformResourceApiConfig> {
+  const res = await fetch(`${httpBase()}/v1/apps/platform-config`);
+  const data = await res.json();
+  if (data?.platform_url) setLocalPlatformBase(data.platform_url);
+  return data;
+}
+
+export async function updatePlatformConfig(platformUrl: string): Promise<PlatformResourceApiConfig> {
+  const res = await fetch(`${httpBase()}/v1/apps/platform-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ platform_url: platformUrl }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  if (data?.platform_url) setLocalPlatformBase(data.platform_url);
+  return data;
+}
+
+export async function getAppRuntimeLogs(slug: string, tail = 200): Promise<{
+  ok: boolean;
+  slug: string;
+  container_name?: string;
+  status?: string;
+  runtime_logs: string;
+  build_log?: string;
+}> {
+  try {
+    const q = new URLSearchParams({ tail: String(tail), platform_url: platformBase() }).toString();
+    const res = await fetch(`${httpBase()}/v1/apps/runtime-logs/${encodeURIComponent(slug)}?${q}`);
+    if (res.ok) return await res.json();
+  } catch {}
+  const fallback = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/logs?tail=${tail}`);
+  const data = await fallback.json().catch(() => ({}));
+  return {
+    ok: fallback.ok,
+    slug,
+    container_name: data.container_name,
+    status: data.status,
+    runtime_logs: data.runtime_logs || data.error || "",
+    build_log: data.build_log || "",
+  };
+}
 
 export interface AppConfigItem {
   key: string;
@@ -4431,6 +4502,9 @@ export interface DeployedApp {
   name: string;
   slug: string;
   description: string;
+  language?: string;
+  runtime_version?: string;
+  dockerfile_content?: string;
   app_url: string;
   container_port: number;
   status: "building" | "running" | "failed";
@@ -4578,6 +4652,23 @@ export interface AppDeliveryJob {
     pages: { path: string; purpose: string }[];
     health_path?: string;
     verification_plan?: { cases?: { operation: string }[] };
+    four_step_report?: {
+      step1_discovery?: Record<string, any>;
+      step2_transformation?: Record<string, any>;
+      step3_skill_generation?: Record<string, any>;
+      step4_confirmations?: string[];
+    };
+    auth_profile?: {
+      type?: string;
+      login_url?: string;
+      username?: string;
+      password?: string;
+      token?: string;
+      header_name?: string;
+      cookie_name?: string;
+      decrypted_from?: string;
+      notes?: string;
+    };
   };
 }
 

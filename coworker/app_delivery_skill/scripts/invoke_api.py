@@ -65,6 +65,61 @@ def validate_basic(value, schema, label):
             validate_basic(item, schema["items"], label + "[]")
 
 
+def _resolve_contract_auth_credential(contract, auth):
+    """Fallback to contract.auth_profile (discovered/decrypted admin credentials or auto-login) when env var is not externally set."""
+    profile = contract.get("auth_profile")
+    if not isinstance(profile, dict):
+        return ""
+    for k in ("auth_token", "token", "api_key", "cookie", "default_credential"):
+        val = str(profile.get(k) or "").strip()
+        if val:
+            return val
+    login_url = str(profile.get("login_url") or "").strip()
+    username = str(profile.get("admin_username") or profile.get("username") or "").strip()
+    password = str(profile.get("admin_password") or profile.get("password") or "").strip()
+    if login_url and login_url.startswith("/") and (username or password):
+        try:
+            body_tpl = profile.get("login_body_template")
+            if not isinstance(body_tpl, dict) or not body_tpl:
+                body_tpl = {"username": username, "password": password}
+            req_url = contract["base_url"].rstrip("/") + login_url
+            req = urllib.request.Request(
+                req_url,
+                data=json.dumps(body_tpl).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                method=str(profile.get("login_method") or "POST").upper(),
+            )
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+            with opener.open(req, timeout=10) as resp:
+                if auth.get("type") == "header" and auth.get("header", "").lower() == "cookie":
+                    cookies = resp.headers.get_all("Set-Cookie") or []
+                    if cookies:
+                        return "; ".join(c.split(";", 1)[0] for c in cookies)
+                raw = json.loads(resp.read(65536).decode("utf-8"))
+                token_path = str(profile.get("token_json_path") or "token").strip()
+                cur = raw
+                for part in token_path.split("."):
+                    if isinstance(cur, dict) and part in cur:
+                        cur = cur[part]
+                    else:
+                        cur = None
+                        break
+                if isinstance(cur, str) and cur.strip():
+                    return cur.strip()
+                if isinstance(raw, dict):
+                    for candidate_key in ("token", "access_token", "jwt", "session_token"):
+                        if isinstance(raw.get(candidate_key), str) and raw[candidate_key].strip():
+                            return raw[candidate_key].strip()
+                        if isinstance(raw.get("data"), dict) and isinstance(raw["data"].get(candidate_key), str):
+                            return raw["data"][candidate_key].strip()
+        except Exception:
+            pass
+    if username and password and auth.get("type") == "header" and auth.get("header", "").lower() == "authorization":
+        import base64
+        return "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return ""
+
+
 def build_request(contract, operation, params, body, approve_write=False, credential_env=None):
     origin = valid_origin(contract["base_url"])
     matches = [a for a in contract["apis"] if a["id"] == operation]
@@ -112,6 +167,8 @@ def build_request(contract, operation, params, body, approve_write=False, creden
         raise ValueError("unsupported authentication; a dedicated client is required")
     if auth["type"] != "none":
         credential = (os.environ if credential_env is None else credential_env).get(auth["env"], "")
+        if not credential and credential_env is None:
+            credential = _resolve_contract_auth_credential(contract, auth)
         if not credential:
             raise ValueError("missing credential environment variable: " + auth["env"])
         if auth["type"] == "bearer":

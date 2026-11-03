@@ -30,6 +30,14 @@ def verification_credentials(contract, deployment_config, supplied):
 
 
 def default_platform_url() -> str:
+    try:
+        cfg_file = state_dir() / "app-delivery" / "platform_config.json"
+        if cfg_file.is_file():
+            saved = json.loads(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(saved, dict) and str(saved.get("platform_url") or "").strip():
+                return str(saved["platform_url"]).strip().rstrip("/")
+    except Exception:
+        pass
     env_url = (
         os.environ.get("OPC_PLATFORM_HTTP")
         or os.environ.get("OPC_PLATFORM_BASE")
@@ -192,6 +200,59 @@ def register_app_delivery_routes(app, manager):
         except (ValueError, OSError) as exc:
             raise fail(exc)
 
+    @app.get("/v1/apps/platform-config")
+    def get_platform_config():
+        url = default_platform_url()
+        return {
+            "ok": True,
+            "platform_url": url,
+            "resource_api_url": f"{url}/api/v1/apps/resources",
+            "resources_api_url": f"{url}/api/v1/apps/resources",
+            "dockerfile_template_api_url": f"{url}/api/v1/apps/dockerfile-templates",
+            "dockerfile_templates_api_url": f"{url}/api/v1/apps/dockerfile-templates",
+            "admin_deploy_url": f"{url}/admin/deploy",
+            "deploy_admin_url": f"{url}/admin/deploy",
+        }
+
+    @app.put("/v1/apps/platform-config")
+    def update_platform_config(body: dict):
+        try:
+            raw_url = str(body.get("platform_url") or "").strip().rstrip("/")
+            if not raw_url:
+                raw_url = DEFAULT_PLATFORM_URL
+            delivery.valid_url(raw_url)
+            cfg_dir = state_dir() / "app-delivery"
+            cfg_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cfg_file = cfg_dir / "platform_config.json"
+            cfg_file.write_text(json.dumps({"platform_url": raw_url}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return {
+                "ok": True,
+                "platform_url": raw_url,
+                "resource_api_url": f"{raw_url}/api/v1/apps/resources",
+                "resources_api_url": f"{raw_url}/api/v1/apps/resources",
+                "dockerfile_template_api_url": f"{raw_url}/api/v1/apps/dockerfile-templates",
+                "dockerfile_templates_api_url": f"{raw_url}/api/v1/apps/dockerfile-templates",
+                "admin_deploy_url": f"{raw_url}/admin/deploy",
+                "deploy_admin_url": f"{raw_url}/admin/deploy",
+            }
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/runtime-logs/{slug}")
+    async def get_app_runtime_logs(slug: str, platform_url: str = ""):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/logs")
+            if resp.status_code != 200:
+                raise ValueError(f"获取应用日志失败 ({resp.status_code}): {delivery_error(resp.text)}")
+            return resp.json()
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
     @app.post("/v1/apps/publish-to-platform")
     async def publish(body: dict):
         try:
@@ -200,7 +261,20 @@ def register_app_delivery_routes(app, manager):
             delivery.valid_url(platform_url)
             data["platform_url"] = platform_url
             service.install_pending_skill(data, folder)
-            fields = {"slug": data["slug"], "name": data["name"], "description": data["description"], "container_port": str(data["proposal"]["contract"]["runtime"]["port"]), "app_config": json.dumps(body.get("app_config", [])), "resource_ids": json.dumps(body.get("resource_ids", []))}
+            runtime = data["proposal"]["contract"].get("runtime", {})
+            dockerfile_path = service.path(data["id"]) / "approved" / "source" / "Dockerfile"
+            dockerfile_content = dockerfile_path.read_text(encoding="utf-8", errors="replace") if dockerfile_path.is_file() else ""
+            fields = {
+                "slug": data["slug"],
+                "name": data["name"],
+                "description": data["description"],
+                "container_port": str(runtime.get("port", 8080)),
+                "language": str(runtime.get("language", "")),
+                "runtime_version": str(runtime.get("version", "")),
+                "dockerfile_content": dockerfile_content,
+                "app_config": json.dumps(body.get("app_config", [])),
+                "resource_ids": json.dumps(body.get("resource_ids", [])),
+            }
             files = {"app_tar": ("app.tar", (folder / "app.tar").read_bytes(), "application/x-tar"), "skill_zip": ("skill.zip", (folder / "skill.zip").read_bytes(), "application/zip")}
             async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
                 response = await client.post(platform_url + "/api/v1/apps/publish", data=fields, files=files)
