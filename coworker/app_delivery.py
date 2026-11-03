@@ -51,6 +51,33 @@ def redacted(text: str, name="") -> str:
     return "\n".join(lines)
 
 
+def format_tool_step(name: str, args: dict | None) -> str:
+    args = args or {}
+    path = args.get("path") or args.get("file") or ""
+    if name == "list_source":
+        return f"🔍 正在扫描源码目录结构{f' ({path})' if path else ''}"
+    elif name == "read_source":
+        return f"📖 正在深入分析源码文件: {path}" if path else "📖 正在读取源码文件"
+    elif name == "read_adapter_reference":
+        return "🔍 参考标准适配契约与架构模式"
+    elif name == "read_go_dependency":
+        return "📦 分析 Go 模块依赖契约 (go.mod)"
+    elif name == "inspect_credentials_and_decrypt":
+        return "🔐 探测敏感凭证与环境变量契约"
+    elif name == "fetch_dockerfile_template":
+        lang = args.get("language") or ""
+        return f"🐳 匹配官方适配 Dockerfile 容器模板{f' ({lang})' if lang else ''}"
+    elif name == "inspect_local_storage":
+        return "💾 检测本地数据存储与持久化卷需求"
+    elif name == "migrate_storage_to_platform":
+        return "🗄️ 生成平台基础服务 (PG/Redis) 迁移配置"
+    elif name == "propose_file_change":
+        return f"✏️ 规划文件修改建议: {path}" if path else "✏️ 规划文件修改方案"
+    elif name == "submit_proposal":
+        return "📋 汇总技术改造方案与免登业务技能契约"
+    return f"⚡ 执行分析工具: {name}{f' ({path})' if path else ''}"
+
+
 class AppDelivery:
     def __init__(self, manager, root: Path):
         self.manager, self.root = manager, root
@@ -297,7 +324,10 @@ class AppDelivery:
             data.pop(key, None)
         previous = data.get("feedback", "")
         combined = (previous + "\n\n本次补充（有冲突时以本次为准）：\n" + feedback).strip() if previous and feedback.strip() else feedback or previous
-        data.update(status="analyzing", error="", events=[], feedback=combined)
+        initial_events = ["🚀 开始分析应用源码与技术栈架构…"]
+        if feedback.strip():
+            initial_events.append("💬 已收到你的回答，正在重新分析与优化方案…")
+        data.update(status="analyzing", error="", events=initial_events, feedback=combined)
         data.pop("proposal", None)
         self.save(data)
         task = asyncio.create_task(self.analyze(job_id))
@@ -649,7 +679,9 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
                 async with aclosing(engine.run(request)) as stream:
                     async for event in stream:
                         if event.type == EventType.TOOL_STARTED:
-                            data["events"].append("AI 工具：" + str(event.data.get("name", event.data.get("tool", "读取源码"))))
+                            name = str(event.data.get("name", event.data.get("tool", "读取源码")))
+                            args = event.data.get("arguments") or {}
+                            data["events"].append(format_tool_step(name, args))
                             self.save(data)
                         # A validated tool result is terminal; do not require another model call.
                         if proposal:
@@ -660,7 +692,7 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
                             raise ValueError(str(event.data.get("message", event.data.get("error", "AI 执行失败"))))
                 if attempt < 2:
                     reason = validation_errors[-1] if validation_errors else "尚未调用工具提交完整提案"
-                    data["events"].append(f"完整提案尚未通过，正在修正（{attempt + 1}/2）：" + reason)
+                    data["events"].append(f"🔄 完整提案尚未通过，正在修正（{attempt + 1}/2）：" + reason)
                     self.save(data)
                     request = "上次没有通过提案校验，不能声明完成。最后原因：" + reason + "。请在当前上下文中修正并调用 submit_proposal 提交原生结构化对象。已分项提出的文件仍保留，无需重新读取全部源码或重复文件内容；契约中的 APIs 必须是完整对象数组，不是 ID/字符串数组。不要执行修改或编造用户批准。"
 
@@ -822,6 +854,7 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
         if not technical_preparation and (set(body.get("approved_changes", [])) != expected or body.get("confirm_config_changes") is not True):
             raise ValueError("每项源码和配置变更都必须批准；不接受隐式审批")
         data.update(status="applying", approved_changes=sorted(expected), preparation_kind="ai-technical" if technical_preparation else "human", error="")
+        data.setdefault("events", []).append("🛠️ 正在创建隔离安全副本并应用技术修改建议…")
         self.save(data)
         self.tasks[job_id] = asyncio.current_task()
         staging = self.path(job_id) / "approved"
@@ -838,9 +871,13 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
             delivery.save(staging / "app-contract.json", effective_proposal["contract"])
             delivery.save(staging / "review.json", {"kind": "ai-technical" if technical_preparation else "human", "scope": "deployment-adaptation", "source": ("Work-OPC 自动技术准备；用户仅在连接替换及最终部署时确认；不是人工代码审查：" if technical_preparation else "Work-OPC 向导对本提案摘要和逐项文件/配置变更的明确确认：") + data["proposal_hash"], "approved_issue_ids": sorted(expected) or ["NO_SOURCE_CHANGES"], "unresolved": []})
             (staging / "analysis.md").write_text(proposal["summary"] + "\n" + json.dumps(proposal["issues"], ensure_ascii=False))
+            data["events"].append("📄 正在生成应用交付契约与免登业务技能定义…")
+            self.save(data)
             out = self.path(job_id) / "bundle"
             if out.exists():
                 shutil.rmtree(out)
+            data["events"].append("📦 正在打包应用源码归档 (app.tar) 与 AI 技能包 (skill.zip)…")
+            self.save(data)
             summary = await asyncio.to_thread(delivery.bundle_work, staging, out)
             data.update(status="ready", artifact_hash=fingerprint(summary), manifest=delivery.load(out / "app-manifest.json"))
             data["preparation_checks"] = [
@@ -848,7 +885,7 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
                 {"label": "交付文件与业务技能契约", "status": "passed", "detail": "已通过打包器的构建输入、配置和业务契约校验；不是编译或运行测试"},
                 {"label": "服务器构建、启动与业务访问", "status": "pending", "detail": "确认部署后在目标服务器验证"},
             ]
-            data["events"].append("AI 已完成隔离副本的技术准备和打包；连接替换及上传部署仍需用户确认" if technical_preparation else "已按批准提案修改隔离副本并校验、打包；尚未部署")
+            data["events"].append("✅ 隔离副本技术准备与本地打包完成，等待部署与环境核对")
         except Exception as exc:
             data.update(status="failed", error=redacted(str(exc))[:2000])
         finally:

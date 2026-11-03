@@ -168,13 +168,27 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
     : "正在读取应用";
 
   const conversation = job?.conversation || [];
-  const latestEvent = job?.events?.length ? job.events[job.events.length - 1] : "";
+  const events = job?.events || [];
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      if (typeof chatScrollRef.current.scrollTo === "function") {
+        chatScrollRef.current.scrollTo({
+          top: chatScrollRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+      } else {
+        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+      }
+    }
+  }, [events.length, conversation.length, running]);
 
   return (
-    <section className="max-w-3xl mx-auto flex flex-col min-h-[460px] text-ui">
+    <section className="w-full max-w-4xl mx-auto flex-1 flex flex-col min-h-0 text-ui rounded-2xl border border-line bg-paper/60 p-4 sm:p-5 shadow-2xs overflow-hidden">
       {/* Top Status Bar */}
       <header
-        className="flex flex-wrap items-center justify-between gap-3 pb-3 mb-4 border-b border-line"
+        className="flex items-center justify-between gap-3 pb-3 mb-3 border-b border-line shrink-0"
         aria-live="polite"
       >
         <div className="flex items-center gap-2.5">
@@ -207,30 +221,10 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
             </p>
           </div>
         </div>
-
-        {(job?.preparation_checks?.length || job?.events?.length) ? (
-          <details className="text-xs text-muted relative">
-            <summary className="cursor-pointer px-2.5 py-1 rounded-lg border border-line bg-paper hover:text-ink select-none">
-              查看检查与执行详情
-            </summary>
-            <div className="mt-2 p-3 rounded-xl border border-line bg-paper shadow-md space-y-2 max-w-xl">
-              {job?.preparation_checks?.map(c => (
-                <p key={c.label}>
-                  {c.status === "passed" ? "✅ 已通过" : "⏳ 待部署验证"} · {c.label}：{c.detail}
-                </p>
-              ))}
-              {!!job?.events?.length && (
-                <pre className="whitespace-pre-wrap max-h-40 overflow-auto bg-panel p-2.5 rounded-lg font-mono text-[11px]">
-                  {job.events.join("\n")}
-                </pre>
-              )}
-            </div>
-          </details>
-        ) : null}
       </header>
 
       {/* Chat Messages Stream */}
-      <div className="flex-1 space-y-4 pb-6" aria-label="讨论记录">
+      <div ref={chatScrollRef} className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-1 pb-4" aria-label="讨论记录">
         {conversation.map((m, i) => {
           const isUser = m.role === "user";
           if (isUser) {
@@ -429,20 +423,71 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
           </div>
         )}
 
-        {/* Running / Thinking Bubble */}
-        {running && (
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-lg bg-accent/10 border border-accent/20 text-accent flex items-center justify-center shrink-0 mt-0.5 animate-pulse">
-              <Icon name="sparkle" size={14} />
+        {/* Real-time AI Process Timeline Bubble */}
+        {(running || !!events.length) && (
+          <article className="flex items-start gap-3">
+            <div
+              className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${
+                running
+                  ? "bg-accent/10 border-accent/30 text-accent animate-pulse"
+                  : "bg-okSoft border-okLine text-ok"
+              }`}
+            >
+              <Icon name={running ? "sparkle" : "check"} size={14} />
             </div>
-            <div className="rounded-2xl rounded-tl-xs border border-line bg-paper/60 px-4 py-3 text-muted space-y-1">
-              <div className="flex items-center gap-2 text-ink font-medium text-xs">
-                <span className="inline-block w-2 h-2 rounded-full bg-accent animate-ping" />
-                AI 正在检查与改造应用…
+            <div className="flex-1 min-w-0 rounded-2xl rounded-tl-xs border border-line bg-paper/90 p-4 space-y-3 shadow-xs">
+              <div className="flex items-center justify-between border-b border-line/60 pb-2.5">
+                <div className="flex items-center gap-2">
+                  {running ? (
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-accent" />
+                    </span>
+                  ) : (
+                    <span className="inline-block w-2 h-2 rounded-full bg-ok" />
+                  )}
+                  <span className="font-semibold text-xs text-ink">
+                    {running ? "AI 正在检查与改造应用…" : "AI 改造处理过程记录"}
+                  </span>
+                </div>
+                <span className="text-[11px] text-muted font-mono">
+                  {running
+                    ? `正在执行第 ${events.length || 1} 步`
+                    : `共完成 ${events.length} 个处理步骤`}
+                </span>
               </div>
-              {latestEvent && <p className="text-xs text-muted">{latestEvent}</p>}
+
+              {/* Step Items List */}
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-xs">
+                {events.map((ev, idx) => {
+                  const isLatest = running && idx === events.length - 1;
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors ${
+                        isLatest
+                          ? "bg-accentSoft border border-accent/30 text-accent font-medium shadow-2xs"
+                          : "bg-panel/40 text-muted"
+                      }`}
+                    >
+                      <span className="shrink-0 text-[11px] mt-0.5">
+                        {isLatest ? "▶" : "✓"}
+                      </span>
+                      <span className="break-all flex-1 leading-relaxed">
+                        {ev}
+                      </span>
+                    </div>
+                  );
+                })}
+                {!events.length && running && (
+                  <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-accent">
+                    <span className="animate-spin">⏳</span>
+                    <span>正在连接 AI 改造引擎与代码沙箱…</span>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          </article>
         )}
 
         {/* Ready Status Bubble */}
@@ -451,30 +496,43 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
             <div className="w-7 h-7 rounded-lg bg-okSoft border border-okLine text-ok flex items-center justify-center shrink-0 mt-0.5">
               <Icon name="check" size={14} />
             </div>
-            <div className="flex-1 rounded-2xl rounded-tl-xs border border-okLine bg-okSoft/30 px-4 py-3 text-ink flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="font-medium text-sm text-ok">改造与交付检查已完成</div>
-                <div className="text-xs text-muted mt-0.5">
-                  {feedback.trim()
-                    ? "请先发送输入框中的补充要求，或清空输入后继续。"
-                    : "可以点击右侧按钮进入部署核对，或在下方对话框继续提要求。"}
+            <div className="flex-1 rounded-2xl rounded-tl-xs border border-okLine bg-okSoft/30 px-4 py-3 text-ink space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-sm text-ok">改造与交付检查已完成</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    {feedback.trim()
+                      ? "请先发送输入框中的补充要求，或清空输入后继续。"
+                      : "可以点击右侧按钮进入部署核对，或在下方对话框继续提要求。"}
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  className={button + " bg-accent text-white border-accent font-medium shadow-xs"}
+                  disabled={!canContinue}
+                  onClick={next}
+                >
+                  下一步：核对部署内容
+                </button>
               </div>
-              <button
-                type="button"
-                className={button + " bg-accent text-white border-accent font-medium shadow-xs"}
-                disabled={!canContinue}
-                onClick={next}
-              >
-                下一步：核对部署内容
-              </button>
+              {!!job?.preparation_checks?.length && (
+                <div className="pt-2 border-t border-okLine/40 space-y-1 text-xs">
+                  {job.preparation_checks.map(c => (
+                    <div key={c.label} className="text-muted flex items-center gap-1.5">
+                      <span>{c.status === "passed" ? "✅" : "⏳"}</span>
+                      <span className="text-ink font-medium">{c.label}</span>
+                      <span>· {c.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
       {/* Unified Bottom Chat Composer Dock */}
-      <div className="sticky bottom-0 bg-panel pt-3 pb-1 border-t border-line space-y-2.5">
+      <div className="shrink-0 pt-3 border-t border-line space-y-2.5 bg-paper/95">
         {/* Handoff Result Banner (if triggered) */}
         {handoff && (
           <div className="rounded-xl border border-line bg-paper p-3 text-xs space-y-1.5">

@@ -110,3 +110,20 @@ it("displays multi-round conversation as chat messages and sends AI fix request 
     })
   );
 });
+
+it("renders AI progress steps in conversation timeline and omits redundant details dropdown", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({
+    ...plan,
+    status: "analyzing",
+    events: [
+      "🚀 开始分析应用源码与技术栈架构…",
+      "📖 正在深入分析源码文件: package.json",
+      "🐳 匹配官方适配 Dockerfile 容器模板 (nodejs)",
+    ],
+  });
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  expect(screen.queryByText("查看检查与执行详情")).toBeNull();
+  expect(await screen.findByText("AI 正在检查与改造应用…")).toBeTruthy();
+  expect(screen.getByText(/正在深入分析源码文件: package.json/)).toBeTruthy();
+  expect(screen.getByText(/匹配官方适配 Dockerfile 容器模板/)).toBeTruthy();
+});

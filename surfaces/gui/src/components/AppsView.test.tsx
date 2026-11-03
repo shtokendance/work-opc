@@ -6,6 +6,21 @@ import { appDeliveryRequest, checkAppSlug, getAppDeliveryJob, listDeployedApps, 
 vi.mock("../tauri", () => ({ chooseFolder: vi.fn().mockResolvedValue("/tmp/source-folder") }));
 
 vi.mock("../api", () => ({
+  platformBase: vi.fn().mockReturnValue("http://10.101.102.116:3002"),
+  getPlatformConfig: vi.fn().mockResolvedValue({
+    base_url: "http://10.101.102.116:3002",
+    configured: true,
+    source: "default",
+  }),
+  updatePlatformConfig: vi.fn().mockResolvedValue({
+    base_url: "http://10.101.102.116:3002",
+    configured: true,
+    source: "runtime_override",
+  }),
+  listAppVersions: vi.fn().mockResolvedValue({ versions: [] }),
+  rollbackAppVersion: vi.fn().mockResolvedValue({ message: "ok" }),
+  getAppVersionArtifactUrl: vi.fn().mockReturnValue("http://10.101.102.116:3002/api/v1/apps/app-1/versions/1/artifacts/app.tar"),
+  getAppRuntimeLogs: vi.fn().mockResolvedValue({ logs: "" }),
   listDeployedApps: vi.fn().mockResolvedValue({
     apps: [
       {

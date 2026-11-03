@@ -765,7 +765,14 @@ export function AppsView({ onBack }: Props) {
             </div>
 
             {/* Modal Body */}
-            <div ref={wizardBody} className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div
+              ref={wizardBody}
+              className={`flex-1 min-h-0 ${
+                step === 2
+                  ? "flex flex-col p-4 sm:p-6 overflow-hidden"
+                  : "overflow-y-auto p-6 space-y-4"
+              }`}
+            >
               {redeploySlug && redeploySlug === slug.trim() && <p className="border-l-2 border-warning pl-3 text-ui">正在重新发布现有应用 {redeploySlug}。重新分析、核对和上传后会替换它的部署；配置与资源仍需再次核对。</p>}
               {/* STEP 1 */}
               {step === 1 && (
