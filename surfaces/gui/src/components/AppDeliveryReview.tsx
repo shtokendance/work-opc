@@ -170,19 +170,45 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
   const conversation = job?.conversation || [];
   const events = job?.events || [];
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const eventsScrollRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll chat container to bottom when messages or steps update
   useEffect(() => {
-    if (chatScrollRef.current) {
-      if (typeof chatScrollRef.current.scrollTo === "function") {
-        chatScrollRef.current.scrollTo({
-          top: chatScrollRef.current.scrollHeight,
-          behavior: "smooth",
-        });
-      } else {
-        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    const scrollChat = () => {
+      if (chatScrollRef.current) {
+        if (typeof chatScrollRef.current.scrollTo === "function") {
+          chatScrollRef.current.scrollTo({
+            top: chatScrollRef.current.scrollHeight,
+            behavior: "smooth",
+          });
+        } else {
+          chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+        }
       }
-    }
+    };
+    scrollChat();
+    const timer = setTimeout(scrollChat, 40);
+    return () => clearTimeout(timer);
   }, [events.length, conversation.length, running]);
+
+  // Auto-scroll internal AI progress timeline to latest step
+  useEffect(() => {
+    const scrollEvents = () => {
+      if (eventsScrollRef.current) {
+        if (typeof eventsScrollRef.current.scrollTo === "function") {
+          eventsScrollRef.current.scrollTo({
+            top: eventsScrollRef.current.scrollHeight,
+            behavior: "smooth",
+          });
+        } else {
+          eventsScrollRef.current.scrollTop = eventsScrollRef.current.scrollHeight;
+        }
+      }
+    };
+    scrollEvents();
+    const timer = setTimeout(scrollEvents, 40);
+    return () => clearTimeout(timer);
+  }, [events.length, events[events.length - 1], running]);
 
   return (
     <section className="w-full max-w-4xl mx-auto flex-1 flex flex-col min-h-0 text-ui rounded-2xl border border-line bg-paper/60 p-4 sm:p-5 shadow-2xs overflow-hidden">
@@ -458,7 +484,10 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               </div>
 
               {/* Step Items List */}
-              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-xs">
+              <div
+                ref={eventsScrollRef}
+                className="space-y-1.5 max-h-60 overflow-y-auto pr-1 pb-1 text-xs scroll-smooth"
+              >
                 {events.map((ev, idx) => {
                   const isLatest = running && idx === events.length - 1;
                   return (
