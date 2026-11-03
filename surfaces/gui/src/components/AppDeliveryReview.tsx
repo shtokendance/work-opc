@@ -335,6 +335,89 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
           </details>
         )}
 
+        {/* Real-time AI Process Timeline Bubble */}
+        {(running || !!events.length) && (
+          <article className="flex items-start gap-3">
+            <div
+              className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${
+                running
+                  ? "bg-accent/10 border-accent/30 text-accent animate-pulse"
+                  : activeError
+                  ? "bg-danger/10 border-danger/30 text-danger"
+                  : "bg-okSoft border-okLine text-ok"
+              }`}
+            >
+              <Icon name={running ? "sparkle" : activeError ? "warning" : "check"} size={14} />
+            </div>
+            <div className="flex-1 min-w-0 rounded-2xl rounded-tl-xs border border-line bg-paper/90 p-4 space-y-3 shadow-xs">
+              <div className="flex items-center justify-between border-b border-line/60 pb-2.5">
+                <div className="flex items-center gap-2">
+                  {running ? (
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-accent" />
+                    </span>
+                  ) : activeError ? (
+                    <span className="inline-block w-2 h-2 rounded-full bg-danger" />
+                  ) : (
+                    <span className="inline-block w-2 h-2 rounded-full bg-ok" />
+                  )}
+                  <span className="font-semibold text-xs text-ink">
+                    {running
+                      ? "AI 正在检查与改造应用…"
+                      : activeError
+                      ? "AI 改造处理过程（执行中断）"
+                      : "AI 改造处理过程记录"}
+                  </span>
+                </div>
+                <span className="text-[11px] text-muted font-mono">
+                  {running
+                    ? `正在执行第 ${events.length || 1} 步`
+                    : activeError
+                    ? `执行到第 ${events.length} 步`
+                    : `共完成 ${events.length} 个处理步骤`}
+                </span>
+              </div>
+
+              {/* Step Items List */}
+              <div
+                ref={eventsScrollRef}
+                className="space-y-1.5 max-h-60 overflow-y-auto pr-1 pb-1 text-xs scroll-smooth"
+              >
+                {events.map((ev, idx) => {
+                  const isLatest = idx === events.length - 1;
+                  const isFailedStep = !running && activeError && isLatest;
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors ${
+                        running && isLatest
+                          ? "bg-accentSoft border border-accent/30 text-accent font-medium shadow-2xs"
+                          : isFailedStep
+                          ? "bg-danger/10 border border-danger/25 text-danger font-medium"
+                          : "bg-panel/40 text-muted"
+                      }`}
+                    >
+                      <span className="shrink-0 text-[11px] mt-0.5">
+                        {running && isLatest ? "▶" : isFailedStep ? "✕" : "✓"}
+                      </span>
+                      <span className="break-all flex-1 leading-relaxed">
+                        {ev}
+                      </span>
+                    </div>
+                  );
+                })}
+                {!events.length && running && (
+                  <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-accent">
+                    <span className="animate-spin">⏳</span>
+                    <span>正在连接 AI 改造引擎与代码沙箱…</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </article>
+        )}
+
         {/* Unresolved Decision Questions Bubble */}
         {!!questions.length && (
           <div className="flex items-start gap-3">
@@ -447,76 +530,6 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               )}
             </div>
           </div>
-        )}
-
-        {/* Real-time AI Process Timeline Bubble */}
-        {(running || !!events.length) && (
-          <article className="flex items-start gap-3">
-            <div
-              className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${
-                running
-                  ? "bg-accent/10 border-accent/30 text-accent animate-pulse"
-                  : "bg-okSoft border-okLine text-ok"
-              }`}
-            >
-              <Icon name={running ? "sparkle" : "check"} size={14} />
-            </div>
-            <div className="flex-1 min-w-0 rounded-2xl rounded-tl-xs border border-line bg-paper/90 p-4 space-y-3 shadow-xs">
-              <div className="flex items-center justify-between border-b border-line/60 pb-2.5">
-                <div className="flex items-center gap-2">
-                  {running ? (
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-accent" />
-                    </span>
-                  ) : (
-                    <span className="inline-block w-2 h-2 rounded-full bg-ok" />
-                  )}
-                  <span className="font-semibold text-xs text-ink">
-                    {running ? "AI 正在检查与改造应用…" : "AI 改造处理过程记录"}
-                  </span>
-                </div>
-                <span className="text-[11px] text-muted font-mono">
-                  {running
-                    ? `正在执行第 ${events.length || 1} 步`
-                    : `共完成 ${events.length} 个处理步骤`}
-                </span>
-              </div>
-
-              {/* Step Items List */}
-              <div
-                ref={eventsScrollRef}
-                className="space-y-1.5 max-h-60 overflow-y-auto pr-1 pb-1 text-xs scroll-smooth"
-              >
-                {events.map((ev, idx) => {
-                  const isLatest = running && idx === events.length - 1;
-                  return (
-                    <div
-                      key={idx}
-                      className={`flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors ${
-                        isLatest
-                          ? "bg-accentSoft border border-accent/30 text-accent font-medium shadow-2xs"
-                          : "bg-panel/40 text-muted"
-                      }`}
-                    >
-                      <span className="shrink-0 text-[11px] mt-0.5">
-                        {isLatest ? "▶" : "✓"}
-                      </span>
-                      <span className="break-all flex-1 leading-relaxed">
-                        {ev}
-                      </span>
-                    </div>
-                  );
-                })}
-                {!events.length && running && (
-                  <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-accent">
-                    <span className="animate-spin">⏳</span>
-                    <span>正在连接 AI 改造引擎与代码沙箱…</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </article>
         )}
 
         {/* Ready Status Bubble */}
