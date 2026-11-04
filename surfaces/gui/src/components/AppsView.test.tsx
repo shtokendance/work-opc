@@ -17,6 +17,10 @@ vi.mock("../api", () => ({
     configured: true,
     source: "runtime_override",
   }),
+  getModelControls: vi.fn().mockResolvedValue({
+    thinking: { support: "supported", default: true },
+    reasoning: { support: "supported", levels: ["low", "medium", "high"], default: "medium" },
+  }),
   listAppVersions: vi.fn().mockResolvedValue({ versions: [] }),
   rollbackAppVersion: vi.fn().mockResolvedValue({ message: "ok" }),
   getAppVersionArtifactUrl: vi.fn().mockReturnValue("http://10.101.102.116:3002/api/v1/apps/app-1/versions/1/artifacts/app.tar"),

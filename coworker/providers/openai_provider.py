@@ -161,6 +161,13 @@ def _param_fix_retry(kwargs: dict[str, Any], exc: Exception) -> dict[str, Any]:
         fixed = dict(kwargs)
         fixed.pop("max_tokens")
         return fixed
+    if "unexpected keyword argument" in msg:
+        # Drop unrecognized parameters that leaked through settings
+        for key in ("thinking", "think"):
+            if key in kwargs:
+                fixed = dict(kwargs)
+                fixed.pop(key, None)
+                return fixed
     raise exc
 
 
@@ -274,6 +281,7 @@ class OpenAIProvider(ProviderClient):
             "messages": _strip_foreign_sidecars(replay_reasoning(messages)),
             **settings,
         }
+        kwargs.pop("thinking", None)
         if tools:
             kwargs["tools"] = tools
         kwargs.setdefault("max_tokens", DEFAULT_MAX_TOKENS)
@@ -361,6 +369,7 @@ class OpenAIProvider(ProviderClient):
             "stream_options": {"include_usage": True},
             **settings,
         }
+        kwargs.pop("thinking", None)
         if tools:
             kwargs["tools"] = tools
         kwargs.setdefault("max_tokens", DEFAULT_MAX_TOKENS)
