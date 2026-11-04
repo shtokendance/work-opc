@@ -293,3 +293,39 @@ def test_app_versions_and_rollback_replace_local_skill(tmp_path, monkeypatch):
         assert "app-demo-app" not in manager.skill_store.disabled_names()
 
 
+def test_export_artifact_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
+    manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
+    monkeypatch.setattr(manager, "_provider_configured", lambda _: True)
+    app = create_app(manager)
+
+    fake_downloads = tmp_path / "Downloads"
+    fake_downloads.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    job_id = "a" * 32
+    job_dir = tmp_path / "state/app-delivery" / job_id
+    bundle_dir = job_dir / "bundle"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "skill.zip").write_bytes(b"PK0304-fake-skill-zip")
+    (job_dir / "job.json").write_text(
+        '{"id": "test-job-export", "slug": "demo-exp", "artifact_hash": "hash123", "status": "approved"}'
+    )
+
+    with patch("subprocess.Popen") as mock_popen:
+        with TestClient(app) as client:
+            res_bad = client.post(f"/v1/apps/jobs/{job_id}/artifacts/bad.exe/export")
+            assert res_bad.status_code == 404
+
+            res = client.post(f"/v1/apps/jobs/{job_id}/artifacts/skill.zip/export")
+            assert res.status_code == 200, res.text
+            data = res.json()
+            assert data["ok"] is True
+            assert data["filename"] == "demo-exp-skill.zip"
+            exported_file = fake_downloads / "demo-exp-skill.zip"
+            assert exported_file.is_file()
+            assert exported_file.read_bytes() == b"PK0304-fake-skill-zip"
+            assert mock_popen.called
+
+
+

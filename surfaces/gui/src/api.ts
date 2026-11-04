@@ -4772,7 +4772,20 @@ export async function appDeliveryRequest<T>(path: string, body?: unknown): Promi
 
 export const getAppDeliveryJob = (id: string) => appDeliveryRequest<AppDeliveryJob>(`jobs/${id}`);
 
-export async function downloadAppArtifact(job: AppDeliveryJob, filename: string) {
+export async function downloadAppArtifact(
+  job: AppDeliveryJob,
+  filename: string
+): Promise<{ ok: boolean; path?: string; filename?: string }> {
+  try {
+    const res = await fetch(`${httpBase()}/v1/apps/jobs/${job.id}/artifacts/${filename}/export`, {
+      method: "POST",
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok) return data;
+    }
+  } catch {}
+
   const response = await fetch(`${httpBase()}/v1/apps/jobs/${job.id}/artifacts/${filename}`);
   if (!response.ok) throw new Error("产物下载失败");
   const blob = await response.blob();
@@ -4784,4 +4797,5 @@ export async function downloadAppArtifact(job: AppDeliveryJob, filename: string)
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return { ok: true, filename: `${job.slug}-${filename}` };
 }

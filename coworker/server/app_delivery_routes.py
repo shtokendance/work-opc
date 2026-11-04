@@ -148,6 +148,35 @@ def register_app_delivery_routes(app, manager):
         except (ValueError, OSError) as exc:
             raise fail(exc)
 
+    @app.post("/v1/apps/jobs/{job_id}/artifacts/{filename}/export")
+    def export_artifact(job_id: str, filename: str):
+        if filename not in {"app.tar", "skill.zip", "app-manifest.json", "summary.json"}:
+            raise HTTPException(status_code=404, detail="Unknown artifact")
+        try:
+            import shutil
+            import subprocess
+            import sys
+
+            data = service.load(job_id)
+            src_path = service.path(job_id) / "bundle" / filename
+            if not data.get("artifact_hash") or not src_path.is_file():
+                raise ValueError("交付包尚未生成")
+            downloads_dir = Path.home() / "Downloads"
+            if not downloads_dir.exists():
+                downloads_dir = Path.home()
+            target_name = f"{data.get('slug', 'app')}-{filename}"
+            dest = downloads_dir / target_name
+            shutil.copy2(src_path, dest)
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(dest)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{dest}"])
+            else:
+                subprocess.Popen(["xdg-open", str(dest.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {"ok": True, "path": str(dest), "filename": dest.name}
+        except (ValueError, OSError) as exc:
+            raise fail(exc)
+
     @app.get("/v1/apps/jobs/{job_id}/skill-preview")
     def skill_preview(job_id: str):
         try:

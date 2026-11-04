@@ -105,8 +105,9 @@ export function AppSkillsPanel({
 
   const handleExport = async (job: AppDeliveryJob) => {
     try {
-      await downloadAppArtifact(job, "skill.zip");
-      setNotice({ id: job.id, text: "应用技能包已开始下载", tone: "ok" });
+      const res = await downloadAppArtifact(job, "skill.zip");
+      const name = res?.filename || `${job.slug}-skill.zip`;
+      setNotice({ id: job.id, text: `应用技能包已导出至下载目录：${name}，已在访达 (Finder) 中标出`, tone: "ok" });
     } catch (err) {
       setNotice({ id: job.id, text: `导出失败：${String(err)}`, tone: "error" });
     }

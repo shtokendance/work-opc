@@ -1510,12 +1510,21 @@ export function AppsView({ onBack }: Props) {
         </div>
       )}
 
-      {/* Drawer: App Details and Config Edit */}
+      {/* App Details and Config Edit (Full-width View) */}
       {selectedApp && (
-        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs flex justify-end">
-          <div className="bg-panel w-full max-w-xl h-full shadow-2xl border-l border-line flex flex-col animate-in slide-in-from-right duration-200">
-            {/* Drawer Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-panel shrink-0">
+        <div className="absolute inset-0 z-30 bg-canvas flex flex-col h-full overflow-hidden select-none animate-in fade-in duration-150">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-panel shrink-0">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setSelectedApp(null)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-ui font-medium transition-colors"
+                title="返回应用列表"
+              >
+                <Icon name="arrowLeft" size={16} />
+                <span>返回列表</span>
+              </button>
+              <div className="h-5 w-px bg-line" />
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-accentSoft text-accent flex items-center justify-center font-bold">
                   <Icon name="sliders" size={16} />
@@ -1535,40 +1544,41 @@ export function AppsView({ onBack }: Props) {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium ${
-                    selectedApp.status === "running"
-                      ? "bg-okSoft text-ok"
-                      : selectedApp.status === "failed"
-                      ? "bg-danger/10 text-danger border border-danger/25"
-                      : "bg-warnSoft text-warnInk"
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      selectedApp.status === "running"
-                        ? "bg-ok animate-pulse"
-                        : selectedApp.status === "failed"
-                        ? "bg-danger"
-                        : "bg-warnInk"
-                    }`}
-                  />
-                  {selectedApp.status === "running"
-                    ? "运行正常"
-                    : selectedApp.status === "failed"
-                    ? "部署失败"
-                    : selectedApp.status}
-                </span>
-                <button
-                  onClick={() => setSelectedApp(null)}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-paper transition-colors"
-                  title="关闭"
-                >
-                  <Icon name="x" size={16} />
-                </button>
-              </div>
             </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium ${
+                  selectedApp.status === "running"
+                    ? "bg-okSoft text-ok"
+                    : selectedApp.status === "failed"
+                    ? "bg-danger/10 text-danger border border-danger/25"
+                    : "bg-warnSoft text-warnInk"
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    selectedApp.status === "running"
+                      ? "bg-ok animate-pulse"
+                      : selectedApp.status === "failed"
+                      ? "bg-danger"
+                      : "bg-warnInk"
+                  }`}
+                />
+                {selectedApp.status === "running"
+                  ? "运行正常"
+                  : selectedApp.status === "failed"
+                  ? "部署失败"
+                  : selectedApp.status}
+              </span>
+              <button
+                onClick={() => setSelectedApp(null)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-paper transition-colors"
+                title="返回列表"
+              >
+                <Icon name="x" size={16} />
+              </button>
+            </div>
+          </div>
 
             {/* Failure Alert Banner if failed */}
             {selectedApp.status === "failed" && (
@@ -1958,7 +1968,7 @@ export function AppsView({ onBack }: Props) {
                         </button>
                       </div>
                     </div>
-                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[240px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white">
+                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[300px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white">
                       {loadingRuntimeLogs ? "正在拉取服务端容器实时运行日志..." : (runtimeLogs || "暂无实时运行日志输出")}
                     </pre>
                   </div>
@@ -1974,7 +1984,7 @@ export function AppsView({ onBack }: Props) {
                         复制构建日志
                       </button>
                     </div>
-                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[200px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
+                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[240px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
                       {selectedApp.build_log || "暂无构建日志输出"}
                     </pre>
                   </div>
@@ -1993,14 +2003,15 @@ export function AppsView({ onBack }: Props) {
               )}
             </div>
 
-            {/* Drawer Footer */}
+            {/* Footer */}
             <div className="flex items-center justify-between px-6 py-4 border-t border-line bg-panel shrink-0">
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setSelectedApp(null)}
-                  className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper transition-colors"
+                  className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper transition-colors flex items-center gap-1.5"
                 >
-                  关闭
+                  <Icon name="arrowLeft" size={14} />
+                  <span>返回列表</span>
                 </button>
                 {copyFeedback && (
                   <span className="text-label text-ok flex items-center gap-1 font-medium">
@@ -2033,8 +2044,7 @@ export function AppsView({ onBack }: Props) {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* Modal: Platform-OPC Resource API Configuration */}
       {showPlatformConfigModal && (
