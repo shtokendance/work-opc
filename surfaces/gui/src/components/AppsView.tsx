@@ -902,7 +902,7 @@ export function AppsView({ onBack }: Props) {
                           {modelControls?.reasoning?.support === "supported" && (modelControls.reasoning.levels || []).length > 0 ? (
                             <>
                               <option value="default">默认强度 ({modelControls.reasoning.default || "自动"})</option>
-                              {modelControls.reasoning.levels.map((lvl) => (
+                              {(modelControls.reasoning.levels || []).map((lvl) => (
                                 <option key={lvl} value={lvl}>
                                   {lvl === "low" ? "低强度 · 快速生成 (Faster)" :
                                    lvl === "medium" ? "中等强度 · 均衡分析" :
