@@ -215,6 +215,17 @@ def test_openai_compat_kimi_models_map_to_low_high_max():
         assert plan_max.params == {"reasoning_effort": "max"}
 
 
+def test_openai_compat_deepseek_models_map_to_low_medium_high():
+    for model in ("deepseek-chat", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-reasoner"):
+        plan = openai_compat_effort(model, "high")
+        assert plan.effective == "high"
+        assert plan.params == {"reasoning_effort": "high"}
+
+        plan_med = openai_compat_effort(model, "medium")
+        assert plan_med.effective == "medium"
+        assert plan_med.params == {"reasoning_effort": "medium"}
+
+
 @pytest.mark.parametrize(
     "model, budget",
     [("claude-sonnet-5", False), ("claude-opus-4-5", False), ("claude-unknown-9", False), ("claude-3-7-sonnet", True)],

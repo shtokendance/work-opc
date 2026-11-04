@@ -2877,6 +2877,7 @@
     "high": "High",
     "max": "Max",
     "effort_note": "For models with effort levels. Each session can change it.",
+    "thinking_note": "Enable deep thinking or switch to fast speed mode. Each session can change it.",
     "sampling": "Sampling",
     "makers_settings": "The maker's settings",
     "custom": "Custom…",

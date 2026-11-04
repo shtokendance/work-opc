@@ -55,7 +55,6 @@ def test_local_thinking_models_get_a_switch_from_the_server_or_the_table():
 
 
 def test_unknown_or_unverified_models_have_neither_control():
-    assert mc.controls_for("deepseek", "deepseek-chat") == mc.NONE
     assert mc.controls_for("bedrock", "anthropic.claude-fable-5-1") == mc.NONE  # not verified there
     assert mc.controls_for("llamacpp", "gpt-oss-20b.gguf", local=True) == mc.NONE
 
@@ -86,13 +85,15 @@ def test_dynamic_reasoning_and_thinking_controls():
     assert gemini["reasoning"]["support"] == "supported"
     assert "max" in gemini["reasoning"]["levels"]
 
-    # DeepSeek Reasoner
+    # DeepSeek Reasoner & Chat (both support thinking toggle and reasoning controls)
     ds_r1 = mc.controls_for("deepseek", "deepseek-reasoner").as_dict()
     assert ds_r1["thinking"]["support"] == "supported"
     assert ds_r1["reasoning"]["support"] == "supported"
 
-    # DeepSeek Chat (fast mode, no reasoning effort)
-    assert mc.controls_for("deepseek", "deepseek-chat") == mc.NONE
+    ds_chat = mc.controls_for("deepseek", "deepseek-chat").as_dict()
+    assert ds_chat["thinking"]["support"] == "supported"
+    assert ds_chat["reasoning"]["support"] == "supported"
+    assert ds_chat["reasoning"]["levels"] == ["low", "medium", "high"]
 
     # Zhipu GLM reasoning model
     glm = mc.controls_for("zai-account", "glm-5.3").as_dict()

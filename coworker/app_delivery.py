@@ -108,7 +108,7 @@ class AppDelivery:
 
     def public(self, job_id):
         data = self.load(job_id)
-        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "published_version", "version_note", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
+        result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "reasoning_effort", "thinking", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "published_version", "version_note", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
         proposal = data.get("proposal")
         if proposal:
             source = self.path(job_id) / "review/source"
@@ -186,7 +186,20 @@ class AppDelivery:
         except Exception:
             shutil.rmtree(folder)
             raise
-        data = {"id": job_id, "slug": payload["slug"], "name": payload["name"], "description": payload.get("description", ""), "app_url": payload["app_url"], "port": port, "model": model, "status": "created", "events": [], "resources": payload.get("resources", [])}
+        data = {
+            "id": job_id,
+            "slug": payload["slug"],
+            "name": payload["name"],
+            "description": payload.get("description", ""),
+            "app_url": payload["app_url"],
+            "port": port,
+            "model": model,
+            "reasoning_effort": payload.get("reasoning_effort"),
+            "thinking": payload.get("thinking"),
+            "status": "created",
+            "events": [],
+            "resources": payload.get("resources", []),
+        }
         if previous:
             data["previous_job_id"] = previous["id"]
             # Carry only the user's actual words, never previous verification or model-generated approval.
@@ -671,7 +684,15 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
   proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.0.0.0 and PORT=container_port)
   Optional suggestions belong in issues, not unresolved. Only genuine blockers pause preparation.
 """
-        engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=60, model_settings={"max_tokens": 16000})
+        model_settings: dict[str, Any] = {"max_tokens": 16000}
+        effort = data.get("reasoning_effort")
+        if effort:
+            model_settings["reasoning_effort"] = effort
+        thinking = data.get("thinking")
+        if thinking is not None:
+            model_settings["thinking"] = bool(thinking)
+            model_settings["extra_body"] = {"think": bool(thinking)}
+        engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=60, model_settings=model_settings)
         prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": data["resources"], "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先用工具读取源码。目标为 Linux 容器部署，业务技能必须包含确定的完整 URL。"}, ensure_ascii=False)
         async def run_analysis():
             request = prompt

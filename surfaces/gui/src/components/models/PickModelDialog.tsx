@@ -130,7 +130,7 @@ export function PickModelDialog({
   const rec = view?.recommendation;
   const contextMax = row?.context_max || rec?.context_max || null;
   const machineContext = row?.context_from === "machine" ? row.context : null;
-  const thinkingAvailable = row?.thinking || rec?.thinking.available || false;
+  const thinkingAvailable = !isLocal || row?.thinking || rec?.thinking.available || false;
 
   const save = async () => {
     if (!model) return;
@@ -337,7 +337,7 @@ export function PickModelDialog({
                     {thinkingAvailable &&
                       setting("thinking", t("pick.thinking"),
                         select("thinking", draft.thinking === false ? "off" : "on", [{ v: "on", label: t("pick.on") }, { v: "off", label: t("pick.off") }], (v) => setDraft((d) => ({ ...d, thinking: v === "on" }))),
-                        rec ? t("pick.makers_default", { value: rec.thinking.default ? t("pick.on") : t("pick.off") }) : "")}
+                        rec ? t("pick.makers_default", { value: rec.thinking.default ? t("pick.on") : t("pick.off") }) : t("pick.thinking_note", { defaultValue: "开启深度思考或进入极速响应模式" }))}
                     {!isLocal &&
                       setting("effort", t("pick.effort"),
                         select("effort", draft.reasoning_effort || "", [

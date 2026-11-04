@@ -161,31 +161,27 @@ def infer_controls(provider: str, bare_model: str) -> Optional[ModelControls]:
             ),
         )
 
-    # 3. DeepSeek reasoning models
+    # 3. DeepSeek models (all models in the DeepSeek family)
     if p == "deepseek" or "deepseek" in name:
-        if "reasoner" in name or "r1" in name:
-            return ModelControls(
-                ThinkingControl(Support.SUPPORTED, default=True),
-                ReasoningControl(
-                    Support.SUPPORTED,
-                    levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
-                    default=EffortLevel.MEDIUM,
-                ),
-            )
-        return None
+        return ModelControls(
+            ThinkingControl(Support.SUPPORTED, default=True),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                default=EffortLevel.MEDIUM,
+            ),
+        )
 
     # 4. GLM (Zhipu) family (glm-5, glm-4.6, etc.)
     if p in ("zai", "zai-account") or "glm" in name:
-        if any(x in name for x in ("5", "4.6", "plus")):
-            return ModelControls(
-                ThinkingControl(Support.SUPPORTED, default=True),
-                ReasoningControl(
-                    Support.SUPPORTED,
-                    levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
-                    default=EffortLevel.MEDIUM,
-                ),
-            )
-        return None
+        return ModelControls(
+            ThinkingControl(Support.SUPPORTED, default=True),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                default=EffortLevel.MEDIUM,
+            ),
+        )
 
     # 5. OpenAI / ChatGPT subscription reasoning models
     if p in ("openai", "openai-codex") or any(name.startswith(x) for x in ("gpt-5", "gpt-6", "o1", "o3", "o4")):

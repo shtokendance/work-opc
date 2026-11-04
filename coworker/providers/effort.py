@@ -184,9 +184,17 @@ def _is_kimi_model(model: str) -> bool:
     return "kimi" in m or m.startswith("k3") or m == "k3"
 
 
+def _is_deepseek_model(model: str) -> bool:
+    m = model.lower()
+    return "deepseek" in m
+
+
 def openai_compat_effort(model: str, level: str) -> EffortPlan:
     if _is_kimi_model(model):
         supported = ("low", "high", "max")
+        verified = True
+    elif _is_deepseek_model(model):
+        supported = ("low", "medium", "high")
         verified = True
     else:
         supported = _OPENAI_COMPAT.get(model) or _OPENAI_COMPAT.get(model.lower()) or _OPENAI_DEFAULT

@@ -49,11 +49,11 @@
       "source": "https://ai.google.dev/gemini-api/docs/thinking"
     },
     {
-      "match": ["deepseek-reasoner*", "*deepseek-r1*"],
+      "match": ["deepseek*"],
       "providers": ["deepseek", "openrouter", "openrouter-account"],
       "thinking": {"support": "supported", "default": true},
       "reasoning": {"support": "supported", "levels": ["low", "medium", "high"], "default": "medium"},
-      "notes": "DeepSeek R1 reasoning model with thinking trace and reasoning controls.",
+      "notes": "DeepSeek models with thinking switch and reasoning controls.",
       "source": "https://api-docs.deepseek.com/guides/reasoning_model"
     },
     {

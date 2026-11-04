@@ -2837,6 +2837,7 @@
     "high": "高",
     "max": "最高",
     "effort_note": "适用于有推理强度等级的模型。每个会话可单独更改。",
+    "thinking_note": "开启深度思考或进入极速响应模式。每个会话可单独调整。",
     "sampling": "采样",
     "makers_settings": "厂商设置",
     "custom": "自定义…",
