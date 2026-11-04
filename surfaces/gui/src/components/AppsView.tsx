@@ -815,7 +815,7 @@ export function AppsView({ onBack }: Props) {
             <div
               ref={wizardBody}
               className={`flex-1 min-h-0 ${
-                step === 2
+                step === 2 || step === 4
                   ? "flex flex-col p-4 sm:p-6 overflow-hidden"
                   : "overflow-y-auto p-6 space-y-4"
               }`}
@@ -1328,8 +1328,8 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 4 */}
               {step === 4 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 p-3.5 rounded-xl border bg-paper/70 border-line">
+                <div className="flex flex-col flex-1 min-h-0 space-y-4">
+                  <div className="flex items-center gap-3 p-3.5 rounded-xl border bg-paper/70 border-line shrink-0">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium ${
                         deployStatus === "running"
@@ -1352,7 +1352,7 @@ export function AppsView({ onBack }: Props) {
                   </div>
 
                   {deployStatus === "verification_failed" && deliveryJob?.proposal?.apis?.some(api => api.auth?.env) && (
-                    <section className="p-4 rounded-xl border border-line bg-panel space-y-3">
+                    <section className="p-4 rounded-xl border border-line bg-panel space-y-3 shrink-0">
                       <h3 className="font-semibold">登录后验证应用业务</h3>
                       <p className="text-meta text-muted">应用已运行。需要登录的查询，请提供本应用有效的会话凭据，再点“仅重试业务验证”。仅用于本次验证，不上传为部署配置；关闭或切换应用后清空。</p>
                       {[...new Set(deliveryJob.proposal.apis.map(api => api.auth?.env).filter((key): key is string => !!key))].map(key => (
@@ -1364,7 +1364,7 @@ export function AppsView({ onBack }: Props) {
                   )}
 
                   {["failed", "verification_failed"].includes(deployStatus) && (
-                    <div className="p-4 rounded-xl bg-danger/10 border border-danger/25 text-danger space-y-2.5">
+                    <div className="p-4 rounded-xl bg-danger/10 border border-danger/25 text-danger space-y-2.5 shrink-0">
                       <div className="font-semibold text-ui flex items-center gap-1.5">
                         <Icon name="warning" size={16} />
                         {deploymentReachedRunning ? "应用已启动，业务验证未通过，技能仍未启用" : "应用交付未通过：请查看构建、健康与业务验证结果"}
@@ -1399,24 +1399,8 @@ export function AppsView({ onBack }: Props) {
                     </div>
                   )}
 
-                  <details className="text-xs text-muted">
-                    <summary className="cursor-pointer mb-3">查看服务器构建与部署日志</summary>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-meta font-medium text-ink">构建与部署日志</label>
-                      <span className="text-label text-muted font-mono">
-                        {deploying ? "每 2 秒更新" : "日志已归档"}
-                      </span>
-                    </div>
-                    <pre
-                      ref={logContainerRef}
-                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label h-56 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
-                    >
-                      {buildLogs || "等待输出..."}
-                    </pre>
-                  </details>
-
                   {deployStatus === "running" && (
-                    <div className="p-4 rounded-xl bg-okSoft/40 border border-okLine text-ink space-y-2">
+                    <div className="p-4 rounded-xl bg-okSoft/40 border border-okLine text-ink space-y-2 shrink-0">
                       <div className="font-semibold text-ui text-ok flex items-center gap-1.5">
                         🎉 应用已成功上线！
                       </div>
@@ -1431,6 +1415,21 @@ export function AppsView({ onBack }: Props) {
                       </div>
                     </div>
                   )}
+
+                  <div className="flex flex-col flex-1 min-h-0 text-xs text-muted">
+                    <div className="flex items-center justify-between mb-1.5 shrink-0">
+                      <label className="text-meta font-medium text-ink">服务器构建与部署日志</label>
+                      <span className="text-label text-muted font-mono">
+                        {deploying ? "每 2 秒更新" : "日志已归档"}
+                      </span>
+                    </div>
+                    <pre
+                      ref={logContainerRef}
+                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label flex-1 min-h-0 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
+                    >
+                      {buildLogs || "等待输出..."}
+                    </pre>
+                  </div>
                 </div>
               )}
             </div>
