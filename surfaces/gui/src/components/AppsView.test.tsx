@@ -179,8 +179,7 @@ describe("AppsView Component", () => {
     });
     render(<AppsView />);
     fireEvent.click(await screen.findByRole("button", { name: /修复.*部署|重新部署/ }));
-    fireEvent.click(await screen.findByLabelText("我已核对应用和连接配置，同意上传并部署"));
-    fireEvent.click(screen.getByRole("button", { name: "确认并上传部署" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认并上传部署" }));
     fireEvent.change(await screen.findByLabelText("业务验证凭据 APP_SESSION_COOKIE", {}, {timeout:5000}), {target:{value:"sid=test-session"}});
     fireEvent.click(await screen.findByRole("button", { name: "仅重试业务验证" }, { timeout: 5000 }));
     await waitFor(() => expect(screen.getByText("应用健康与只读业务验证通过，本地技能已启用")).toBeTruthy());

@@ -69,7 +69,6 @@ export function AppsView({ onBack }: Props) {
   const [reimportJobId, setReimportJobId] = useState("");
   const [repairFeedback, setRepairFeedback] = useState("");
   const [deliveryJob, setDeliveryJob] = useState<AppDeliveryJob | null>(null);
-  const [finalConfirmed, setFinalConfirmed] = useState(false);
   const [probeCredentials, setProbeCredentials] = useState<Record<string, string>>({});
   useEffect(() => { setProbeCredentials({}); }, [jobId, isModalOpen]);
   const readyArtifact = useRef("");
@@ -311,7 +310,7 @@ export function AppsView({ onBack }: Props) {
   const startTransform = async (targetAppUrl: string) => {
     if (!selectedFile && !sourcePath.trim()) return;
     setRepairFeedback(""); setTransforming(true); setDeliveryJob(null); setJobId("");
-    readyArtifact.current = ""; setConfigs([]); setSelectedResourceIds([]); setFinalConfirmed(false);
+    readyArtifact.current = ""; setConfigs([]); setSelectedResourceIds([]);
     try {
       const data_b64 = selectedFile ? await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -349,8 +348,6 @@ export function AppsView({ onBack }: Props) {
     if (job.manifest?.container_port) setContainerPort(job.manifest.container_port);
   };
 
-  useEffect(() => { setFinalConfirmed(false); }, [configs, selectedResourceIds, jobId]);
-
   const verifyDeployedSkill = async (logs: string) => {
     setDeploying(true);
     setDeployStatus("verifying");
@@ -370,8 +367,8 @@ export function AppsView({ onBack }: Props) {
 
   // Step 3: Confirm and Upload
   const handlePublish = async () => {
-    if (!jobId || !deliveryJob?.artifact_hash || !finalConfirmed) {
-      setError("请核对最终修改、配置与资源，并勾选部署确认");
+    if (!jobId || !deliveryJob?.artifact_hash) {
+      setError("请先完成前置改造与技术准备");
       return;
     }
     setDeploying(true);
@@ -437,7 +434,7 @@ export function AppsView({ onBack }: Props) {
     if (!candidate) {
       await closeWizard(); setRedeploySlug(app.slug); setName(app.name); setSlug(app.slug); setError("本机缺少此应用的交付记录，请选择原始源码重新分析"); setIsModalOpen(true); return;
     }
-    readyArtifact.current = candidate.artifact_hash || ""; setJobId(candidate.id); setDeliveryJob(candidate); setFinalConfirmed(false);
+    readyArtifact.current = candidate.artifact_hash || ""; setJobId(candidate.id); setDeliveryJob(candidate);
     setName(app.name);
     setRedeploySlug(app.slug);
     setSlug(app.slug);
@@ -474,7 +471,7 @@ export function AppsView({ onBack }: Props) {
     setDescription("");
     setSelectedFile(null);
     setSourcePath("");
-    setJobId(""); setReimportJobId(""); setDeliveryJob(null); setFinalConfirmed(false);
+    setJobId(""); setReimportJobId(""); setDeliveryJob(null);
     readyArtifact.current = "";
     setConfigs([]);
     setSelectedResourceIds([]);
@@ -501,7 +498,7 @@ export function AppsView({ onBack }: Props) {
     if (job.reasoning_effort) setSelectedEffort(job.reasoning_effort);
     if (job.thinking !== undefined) setSelectedSpeed(job.thinking ? "thinking" : "speed");
     setJobId(job.id); setDeliveryJob(null); readyArtifact.current = "";
-    setFinalConfirmed(false); setConfigs([]); setSelectedResourceIds([]);
+    setConfigs([]); setSelectedResourceIds([]);
     setStep(2); setIsModalOpen(true);
   };
 
@@ -815,7 +812,7 @@ export function AppsView({ onBack }: Props) {
             <div
               ref={wizardBody}
               className={`flex-1 min-h-0 ${
-                step === 2
+                step === 2 || step === 4
                   ? "flex flex-col p-4 sm:p-6 overflow-hidden"
                   : "overflow-y-auto p-6 space-y-4"
               }`}
@@ -1087,7 +1084,7 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 2 */}
               {step === 2 && (jobId
-                ? <AppDeliveryReview jobId={jobId} initialFeedback={repairFeedback} onReady={deliveryReady} onInvalidate={() => { setDeliveryJob(null); setFinalConfirmed(false); readyArtifact.current = ""; }} onReplaceSource={() => { setReimportJobId(jobId); setSelectedFile(null); setSourcePath(""); setStep(1); }} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
+                ? <AppDeliveryReview jobId={jobId} initialFeedback={repairFeedback} onReady={deliveryReady} onInvalidate={() => { setDeliveryJob(null); readyArtifact.current = ""; }} onReplaceSource={() => { setReimportJobId(jobId); setSelectedFile(null); setSourcePath(""); setStep(1); }} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
@@ -1328,8 +1325,8 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 4 */}
               {step === 4 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 p-3.5 rounded-xl border bg-paper/70 border-line">
+                <div className="flex flex-col flex-1 min-h-0 space-y-4">
+                  <div className="flex items-center gap-3 p-3.5 rounded-xl border bg-paper/70 border-line shrink-0">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium ${
                         deployStatus === "running"
@@ -1352,7 +1349,7 @@ export function AppsView({ onBack }: Props) {
                   </div>
 
                   {deployStatus === "verification_failed" && deliveryJob?.proposal?.apis?.some(api => api.auth?.env) && (
-                    <section className="p-4 rounded-xl border border-line bg-panel space-y-3">
+                    <section className="p-4 rounded-xl border border-line bg-panel space-y-3 shrink-0">
                       <h3 className="font-semibold">登录后验证应用业务</h3>
                       <p className="text-meta text-muted">应用已运行。需要登录的查询，请提供本应用有效的会话凭据，再点“仅重试业务验证”。仅用于本次验证，不上传为部署配置；关闭或切换应用后清空。</p>
                       {[...new Set(deliveryJob.proposal.apis.map(api => api.auth?.env).filter((key): key is string => !!key))].map(key => (
@@ -1364,7 +1361,7 @@ export function AppsView({ onBack }: Props) {
                   )}
 
                   {["failed", "verification_failed"].includes(deployStatus) && (
-                    <div className="p-4 rounded-xl bg-danger/10 border border-danger/25 text-danger space-y-2.5">
+                    <div className="p-4 rounded-xl bg-danger/10 border border-danger/25 text-danger space-y-2.5 shrink-0">
                       <div className="font-semibold text-ui flex items-center gap-1.5">
                         <Icon name="warning" size={16} />
                         {deploymentReachedRunning ? "应用已启动，业务验证未通过，技能仍未启用" : "应用交付未通过：请查看构建、健康与业务验证结果"}
@@ -1399,24 +1396,8 @@ export function AppsView({ onBack }: Props) {
                     </div>
                   )}
 
-                  <details className="text-xs text-muted">
-                    <summary className="cursor-pointer mb-3">查看服务器构建与部署日志</summary>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-meta font-medium text-ink">构建与部署日志</label>
-                      <span className="text-label text-muted font-mono">
-                        {deploying ? "每 2 秒更新" : "日志已归档"}
-                      </span>
-                    </div>
-                    <pre
-                      ref={logContainerRef}
-                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label h-56 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
-                    >
-                      {buildLogs || "等待输出..."}
-                    </pre>
-                  </details>
-
                   {deployStatus === "running" && (
-                    <div className="p-4 rounded-xl bg-okSoft/40 border border-okLine text-ink space-y-2">
+                    <div className="p-4 rounded-xl bg-okSoft/40 border border-okLine text-ink space-y-2 shrink-0">
                       <div className="font-semibold text-ui text-ok flex items-center gap-1.5">
                         🎉 应用已成功上线！
                       </div>
@@ -1431,6 +1412,21 @@ export function AppsView({ onBack }: Props) {
                       </div>
                     </div>
                   )}
+
+                  <div className="flex flex-col flex-1 min-h-0 text-xs text-muted">
+                    <div className="flex items-center justify-between mb-1.5 shrink-0">
+                      <label className="text-meta font-medium text-ink">服务器构建与部署日志</label>
+                      <span className="text-label text-muted font-mono">
+                        {deploying ? "每 2 秒更新" : "日志已归档"}
+                      </span>
+                    </div>
+                    <pre
+                      ref={logContainerRef}
+                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label flex-1 min-h-0 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
+                    >
+                      {buildLogs || "等待输出..."}
+                    </pre>
+                  </div>
                 </div>
               )}
             </div>
@@ -1468,7 +1464,6 @@ export function AppsView({ onBack }: Props) {
                 )}
                 {step === 3 && (
                   <>
-                    <label className="flex items-start gap-2 max-w-xs text-xs"><input type="checkbox" checked={finalConfirmed} onChange={e => setFinalConfirmed(e.target.checked)} /><span>我已核对应用和连接配置，同意上传并部署</span></label>
                     <button
                       onClick={() => setStep(2)}
                       className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper transition-colors"
@@ -1477,7 +1472,7 @@ export function AppsView({ onBack }: Props) {
                     </button>
                     <button
                       onClick={handlePublish}
-                      disabled={!finalConfirmed || !deliveryJob || missingConfigs.length > 0}
+                      disabled={!deliveryJob || missingConfigs.length > 0}
                       className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs transition-all"
                     >
                       确认并上传部署
