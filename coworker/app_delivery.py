@@ -695,7 +695,6 @@ When available_resource_metadata lists server foundation services (e.g. PostgreS
             model_settings["reasoning_effort"] = effort
         thinking = data.get("thinking")
         if thinking is not None:
-            model_settings["thinking"] = bool(thinking)
             model_settings["extra_body"] = {"think": bool(thinking)}
         engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=60, model_settings=model_settings)
         prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": data["resources"], "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先用工具读取源码。目标为 Linux 容器部署，业务技能必须包含确定的完整 URL。"}, ensure_ascii=False)

@@ -502,6 +502,10 @@ def create_app(manager: SessionManager) -> FastAPI:
         value = body["attendance"] if "attendance" in body else bool(body.get("unattended"))
         return manager.set_unattended(session_id, value)
 
+    @app.get("/v1/models/{model:path}/controls")
+    def model_controls_endpoint(model: str) -> dict[str, Any]:
+        return manager.model_controls(model)
+
     @app.get("/v1/sessions/{session_id}/model-settings")
     def session_model_settings(session_id: str, model: str = "") -> dict[str, Any]:
         return manager.session_model_settings(session_id, model)

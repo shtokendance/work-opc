@@ -6,6 +6,7 @@ import {
   getAppRuntimeLogs,
   getAppVersionArtifactUrl,
   getDeployedApp,
+  getModelControls,
   getPlatformConfig,
   getSettings,
   listAppVersions,
@@ -20,6 +21,7 @@ import {
   type AppConfigItem,
   type AppVersionItem,
   type DeployedApp,
+  type ModelControls,
   type PlatformResourceApiConfig,
   type ResourceSummary,
 } from "../api";
@@ -54,6 +56,7 @@ export function AppsView({ onBack }: Props) {
   const [selectedModel, setSelectedModel] = useState("default");
   const [selectedEffort, setSelectedEffort] = useState<string>("default");
   const [selectedSpeed, setSelectedSpeed] = useState<string>("thinking");
+  const [modelControls, setModelControls] = useState<ModelControls | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [appUrl, setAppUrl] = useState("");
   const [containerPort, setContainerPort] = useState(8080);
@@ -249,6 +252,33 @@ export function AppsView({ onBack }: Props) {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!selectedModel || selectedModel === "default") {
+      setModelControls(null);
+      return;
+    }
+    let live = true;
+    getModelControls(selectedModel)
+      .then((c) => {
+        if (!live) return;
+        setModelControls(c);
+        if (c.reasoning?.support === "supported") {
+          setSelectedEffort(c.reasoning.default || (c.reasoning.levels?.[0] ?? "default"));
+        } else {
+          setSelectedEffort("default");
+        }
+        if (c.thinking?.support === "supported") {
+          setSelectedSpeed(c.thinking.default ? "thinking" : "speed");
+        }
+      })
+      .catch(() => {
+        if (live) setModelControls(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [selectedModel]);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -858,35 +888,57 @@ export function AppsView({ onBack }: Props) {
                     </div>
 
                     <div>
-                      <label htmlFor="app-adapter-effort" className="block text-meta font-medium text-ink mb-1.5">推理强度</label>
+                      <label htmlFor="app-adapter-effort" className="block text-meta font-medium text-ink mb-1.5">
+                        推理强度 {modelControls?.reasoning?.support !== "supported" && <span className="text-muted text-xs font-normal">（当前模型不支持）</span>}
+                      </label>
                       <div className="relative">
                         <select
                           id="app-adapter-effort"
                           value={selectedEffort}
+                          disabled={modelControls ? modelControls.reasoning?.support !== "supported" : false}
                           onChange={(e) => setSelectedEffort(e.target.value)}
-                          className="block appearance-none w-full min-w-0 min-h-[40px] pl-3.5 pr-9 py-2 rounded-xl border border-line bg-paper text-ink text-ui focus:outline-accent focus:border-accent cursor-pointer"
+                          className="block appearance-none w-full min-w-0 min-h-[40px] pl-3.5 pr-9 py-2 rounded-xl border border-line bg-paper text-ink text-ui focus:outline-accent focus:border-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <option value="default">默认强度</option>
-                          <option value="low">低强度 · 快速生成 (Faster)</option>
-                          <option value="medium">中等强度 · 均衡分析</option>
-                          <option value="high">高强度 · 深入推理 (Smarter)</option>
-                          <option value="max">最高强度 · 极致架构分析</option>
+                          {modelControls?.reasoning?.support === "supported" && (modelControls.reasoning.levels || []).length > 0 ? (
+                            <>
+                              <option value="default">默认强度 ({modelControls.reasoning.default || "自动"})</option>
+                              {modelControls.reasoning.levels.map((lvl) => (
+                                <option key={lvl} value={lvl}>
+                                  {lvl === "low" ? "低强度 · 快速生成 (Faster)" :
+                                   lvl === "medium" ? "中等强度 · 均衡分析" :
+                                   lvl === "high" ? "高强度 · 深入推理 (Smarter)" :
+                                   lvl === "max" ? "最高强度 · 极致架构分析" : lvl}
+                                </option>
+                              ))}
+                            </>
+                          ) : (
+                            <option value="default">当前模型由云端自适应调整</option>
+                          )}
                         </select>
                         <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted" />
                       </div>
                     </div>
 
                     <div>
-                      <label htmlFor="app-adapter-speed" className="block text-meta font-medium text-ink mb-1.5">思考与速度</label>
+                      <label htmlFor="app-adapter-speed" className="block text-meta font-medium text-ink mb-1.5">
+                        思考与速度 {modelControls?.thinking?.support !== "supported" && <span className="text-muted text-xs font-normal">（当前模型无开关）</span>}
+                      </label>
                       <div className="relative">
                         <select
                           id="app-adapter-speed"
                           value={selectedSpeed}
+                          disabled={modelControls ? modelControls.thinking?.support !== "supported" : false}
                           onChange={(e) => setSelectedSpeed(e.target.value)}
-                          className="block appearance-none w-full min-w-0 min-h-[40px] pl-3.5 pr-9 py-2 rounded-xl border border-line bg-paper text-ink text-ui focus:outline-accent focus:border-accent cursor-pointer"
+                          className="block appearance-none w-full min-w-0 min-h-[40px] pl-3.5 pr-9 py-2 rounded-xl border border-line bg-paper text-ink text-ui focus:outline-accent focus:border-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          <option value="thinking">深度思考模式 (充分推演)</option>
-                          <option value="speed">极速模式 (跳过思考，最快响应)</option>
+                          {modelControls?.thinking?.support === "supported" ? (
+                            <>
+                              <option value="thinking">深度思考模式 (充分推演)</option>
+                              <option value="speed">极速模式 (跳过思考，最快响应)</option>
+                            </>
+                          ) : (
+                            <option value="thinking">该模型自适应深度思考</option>
+                          )}
                         </select>
                         <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted" />
                       </div>

@@ -2679,6 +2679,11 @@ export interface SessionModelControls {
   controls: ModelControls;
 }
 
+export async function getModelControls(model: string): Promise<ModelControls> {
+  const res = await fetch(`${httpBase()}/v1/models/${encodeURIComponent(model)}/controls`);
+  return res.json();
+}
+
 export async function getSessionModelSettings(sessionId: string, model = ""): Promise<SessionModelControls> {
   const q = model ? `?model=${encodeURIComponent(model)}` : "";
   const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(sessionId)}/model-settings${q}`);
