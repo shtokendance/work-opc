@@ -4653,6 +4653,8 @@ export async function transformApp(params: {
   app_url: string;
   container_port?: number;
   model?: string;
+  reasoning_effort?: string;
+  thinking?: boolean;
   data_b64?: string;
   resources?: ResourceSummary[];
   source_path?: string;
@@ -4710,6 +4712,8 @@ export interface AppDeliveryJob {
   port?: number;
   status: string;
   model: string;
+  reasoning_effort?: string;
+  thinking?: boolean;
   app_url: string;
   error?: string;
   events: string[];

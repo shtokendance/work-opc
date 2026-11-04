@@ -25,7 +25,7 @@
       "source": "https://platform.claude.com/docs/en/build-with-claude/effort"
     },
     {
-      "match": ["gpt-6*", "gpt-5*"],
+      "match": ["gpt-6*", "gpt-5*", "o1*", "o3*", "o4*"],
       "providers": ["openai", "openai-codex"],
       "thinking": {"support": "not_supported"},
       "reasoning": {"support": "supported", "levels": ["low", "medium", "high"], "default": "medium"},
@@ -33,11 +33,36 @@
       "source": "https://platform.openai.com/docs/guides/reasoning"
     },
     {
-      "match": ["moonshotai/kimi-k3*", "kimi-k3*"],
+      "match": ["moonshotai/kimi-k3*", "kimi-k3*", "k3*", "kimi-for-coding*"],
+      "providers": ["kimi", "kimi-code", "kimi-account", "openrouter", "openrouter-account", "together"],
       "thinking": {"support": "not_supported"},
       "reasoning": {"support": "supported", "levels": ["low", "high", "max"], "default": "max"},
       "notes": "Moonshot and Together document low, high and max; the default is max.",
       "source": "https://platform.moonshot.ai/docs"
+    },
+    {
+      "match": ["gemini-2.5*", "gemini-3*", "gemini-2.0-flash-thinking*"],
+      "providers": ["gemini"],
+      "thinking": {"support": "supported", "default": true},
+      "reasoning": {"support": "supported", "levels": ["low", "medium", "high", "max"], "default": "medium"},
+      "notes": "Google Gemini 2.5/3.x models support thinking switch (0 budget for instant speed) and reasoning budget levels.",
+      "source": "https://ai.google.dev/gemini-api/docs/thinking"
+    },
+    {
+      "match": ["deepseek*"],
+      "providers": ["deepseek", "openrouter", "openrouter-account"],
+      "thinking": {"support": "supported", "default": true},
+      "reasoning": {"support": "supported", "levels": ["low", "medium", "high"], "default": "medium"},
+      "notes": "DeepSeek models with thinking switch and reasoning controls.",
+      "source": "https://api-docs.deepseek.com/guides/reasoning_model"
+    },
+    {
+      "match": ["glm-5*", "glm-4.6*", "glm-4-plus*"],
+      "providers": ["zai", "zai-account"],
+      "thinking": {"support": "supported", "default": true},
+      "reasoning": {"support": "supported", "levels": ["low", "medium", "high"], "default": "medium"},
+      "notes": "GLM reasoning models with thinking switch and reasoning levels.",
+      "source": "https://open.bigmodel.cn/dev/howuse/glm-5"
     },
     {
       "match": ["gpt-oss*", "openai/gpt-oss*"],

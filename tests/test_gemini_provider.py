@@ -622,6 +622,14 @@ def test_thought_summaries_requested_and_surfaced_as_reasoning():
     # …and thought parts land as reasoning, never as answer text.
     assert turn.text == "the answer" and turn.reasoning == "plotting a plan"
 
+    # Turning thinking off sets thinking_budget=0 for instant speed
+    provider.complete(model="gemini-3.6-flash", messages=[{"role": "user", "content": "x"}], thinking=False)
+    assert client.kwargs["config"]["thinking_config"] == {"include_thoughts": False, "thinking_budget": 0}
+
+    # Setting reasoning_effort sets the corresponding token budget
+    provider.complete(model="gemini-3.6-flash", messages=[{"role": "user", "content": "x"}], reasoning_effort="high")
+    assert client.kwargs["config"]["thinking_config"] == {"include_thoughts": True, "thinking_budget": 24576}
+
 
 def test_stream_yields_reasoning_deltas_for_thought_parts():
     chunks = [

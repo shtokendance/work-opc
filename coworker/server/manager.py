@@ -7017,12 +7017,17 @@ class SessionManager:
             extra = dict(settings.get("extra_body") or {})
             if think is None:
                 default_think = (defaults.get("extra_body") or {}).get("think")
+                if default_think is None:
+                    default_think = defaults.get("thinking")
                 if isinstance(default_think, bool):
                     extra["think"] = default_think
+                    settings["thinking"] = default_think
                 else:
                     extra.pop("think", None)
+                    settings.pop("thinking", None)
             elif isinstance(think, bool) and controls["thinking"]["support"] == "supported":
                 extra["think"] = think
+                settings["thinking"] = think
             else:
                 return {"ok": False, "error": f"{engine.model} has no thinking switch"}
             if extra:
@@ -7039,9 +7044,13 @@ class SessionManager:
         engine = self._engines.get(session_id)
         settings = (engine.model_settings if engine else None) or {}
         think = (settings.get("extra_body") or {}).get("think")
+        if think is None:
+            think = settings.get("thinking")
         controls = self.model_controls((engine.model if engine else "") or model)
         session_model = _model_config.model_settings_for(engine.model) if engine else {}
         default_think = (session_model.get("extra_body") or {}).get("think")
+        if default_think is None:
+            default_think = session_model.get("thinking")
         return {
             # Only what this session changed; the model's own setting reads as None.
             "thinking": think if isinstance(think, bool) and think != default_think else None,

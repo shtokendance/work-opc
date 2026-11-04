@@ -198,9 +198,11 @@ def model_settings_for(model: str) -> dict[str, Any]:
     thinking = saved.get("thinking")
     if thinking is None and rec and rec.thinking_available:
         thinking = rec.thinking_default
-    if thinking is not None and "reasoning_effort" not in settings:
-        # Ollama's native `think` rides the request body; other providers ignore it.
-        settings["extra_body"] = {"think": bool(thinking)}
+    if thinking is not None:
+        settings["thinking"] = bool(thinking)
+        if "reasoning_effort" not in settings:
+            # Ollama's native `think` rides the request body; other providers ignore it.
+            settings["extra_body"] = {"think": bool(thinking)}
     return settings
 
 

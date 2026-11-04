@@ -450,7 +450,26 @@ class GeminiProvider(ProviderClient):
         # thought SUMMARIES too so the GUI can show them. Parse-side keeps them out of
         # answer text (`thought` parts → reasoning).
         if model.startswith("gemini-"):
-            config["thinking_config"] = {"include_thoughts": True}
+            thinking_config: dict[str, Any] = {"include_thoughts": True}
+            think_enabled = settings.get("thinking")
+            if think_enabled is None and isinstance(settings.get("extra_body"), dict):
+                think_enabled = settings["extra_body"].get("think")
+            effort = str(settings.get("reasoning_effort") or "").lower().strip()
+            if think_enabled is False or effort == "none":
+                # Turning thinking off (budget=0) enables ultra-fast instant answers.
+                thinking_config = {"include_thoughts": False, "thinking_budget": 0}
+            elif effort:
+                budget_map = {
+                    "low": 1024,
+                    "medium": 8192,
+                    "high": 24576,
+                    "max": 65536,
+                    "xhigh": 32768,
+                }
+                budget = budget_map.get(effort)
+                if budget is not None:
+                    thinking_config["thinking_budget"] = budget
+            config["thinking_config"] = thinking_config
         if system:
             config["system_instruction"] = system
         if tools:

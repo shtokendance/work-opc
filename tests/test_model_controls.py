@@ -55,7 +55,6 @@ def test_local_thinking_models_get_a_switch_from_the_server_or_the_table():
 
 
 def test_unknown_or_unverified_models_have_neither_control():
-    assert mc.controls_for("deepseek", "deepseek-chat") == mc.NONE
     assert mc.controls_for("bedrock", "anthropic.claude-fable-5-1") == mc.NONE  # not verified there
     assert mc.controls_for("llamacpp", "gpt-oss-20b.gguf", local=True) == mc.NONE
 
@@ -67,3 +66,42 @@ def test_saved_settings_become_the_defaults_only_when_valid():
     assert c.reasoning.default is mc.EffortLevel.MEDIUM
     c = mc.controls_for("ollama", "qwen3:8b", local=True, server_thinking=True, saved={"thinking": False})
     assert c.thinking.default is False
+
+
+def test_dynamic_reasoning_and_thinking_controls():
+    # Kimi Code & Account models (k3.1-pro, k3-256k, kimi-for-coding)
+    kimi = mc.controls_for("kimi-code", "k3.1-pro").as_dict()
+    assert kimi["reasoning"]["support"] == "supported"
+    assert kimi["reasoning"]["levels"] == ["low", "high", "max"]
+
+    kimi_acct = mc.controls_for("kimi-account", "k3-256k").as_dict()
+    assert kimi_acct["reasoning"]["support"] == "supported"
+    assert kimi_acct["reasoning"]["levels"] == ["low", "high", "max"]
+
+    # Google Gemini models (gemini-3.8-flash, gemini-2.5-pro)
+    gemini = mc.controls_for("gemini", "gemini-3.8-flash").as_dict()
+    assert gemini["thinking"]["support"] == "supported"
+    assert gemini["thinking"]["default"] is True
+    assert gemini["reasoning"]["support"] == "supported"
+    assert "max" in gemini["reasoning"]["levels"]
+
+    # DeepSeek Reasoner & Chat (both support thinking toggle and reasoning controls)
+    ds_r1 = mc.controls_for("deepseek", "deepseek-reasoner").as_dict()
+    assert ds_r1["thinking"]["support"] == "supported"
+    assert ds_r1["reasoning"]["support"] == "supported"
+
+    ds_chat = mc.controls_for("deepseek", "deepseek-chat").as_dict()
+    assert ds_chat["thinking"]["support"] == "supported"
+    assert ds_chat["reasoning"]["support"] == "supported"
+    assert ds_chat["reasoning"]["levels"] == ["low", "medium", "high"]
+
+    # Zhipu GLM reasoning model
+    glm = mc.controls_for("zai-account", "glm-5.3").as_dict()
+    assert glm["thinking"]["support"] == "supported"
+    assert glm["reasoning"]["support"] == "supported"
+
+    # Future unknown custom reasoning model
+    custom = mc.controls_for("custom", "qwen-qwq-32b-preview-thinking").as_dict()
+    assert custom["thinking"]["support"] == "supported"
+    assert custom["reasoning"]["support"] == "supported"
+
