@@ -29,6 +29,8 @@ LABEL = "com.opc.app-adapter.run"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SLUG = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 EXCLUDED = {".git", ".svn", ".hg", "node_modules", ".venv", "venv", "__pycache__", ".idea", "__MACOSX", ".DS_Store"}
+# SQLite engine automatically generates transient WAL/SHM files during readonly inspections
+TRANSIENT_FILE_SUFFIXES = {".sqlite-shm", ".sqlite-wal", ".sqlite3-shm", ".sqlite3-wal", ".db-shm", ".db-wal"}
 SECRET_KEY = r"(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key(?:id|secret)?|client[_-]?secret|token|dsn|connectionstring)"
 ASSIGNMENT = re.compile(r"(?i)[\w.-]*" + SECRET_KEY + r"[\w.-]*[\"']?\s*(?::=|[:=])\s*(?:[\"']([^\"'\n]*)[\"']|([^\s,;{}]+))")
 CODE_SUFFIXES = {".go", ".py", ".java", ".cs", ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx"}
@@ -128,6 +130,8 @@ def inspect_source(source):
         require(not path.is_symlink(), "source contains symlink")
         if not path.is_file():
             continue
+        if any(path.name.lower().endswith(sfx) for sfx in TRANSIENT_FILE_SUFFIXES):
+            continue
         rel = path.relative_to(source).as_posix()
         raw = path.read_bytes()
         files.append({"path": rel, "bytes": len(raw), "sha256": sha(raw)})
@@ -156,7 +160,7 @@ def prepare(args):
                     for name in dirs:
                         require(not (Path(parent) / name).is_symlink(), "source directory contains a symlink; inspect it explicitly")
                     for name in sorted(names):
-                        if name in EXCLUDED:
+                        if name in EXCLUDED or any(name.lower().endswith(sfx) for sfx in TRANSIENT_FILE_SUFFIXES):
                             continue
                         item = Path(parent) / name
                         require(not item.is_symlink() and item.is_file(), "source contains a symlink or special file")
@@ -190,7 +194,7 @@ def prepare(args):
         source.mkdir()
         try:
             for member in members:
-                if any(p in EXCLUDED for p in PurePosixPath(member.filename).parts):
+                if any(p in EXCLUDED for p in PurePosixPath(member.filename).parts) or any(member.filename.lower().endswith(sfx) for sfx in TRANSIENT_FILE_SUFFIXES):
                     continue
                 target = relative(source, member.filename)
                 if member.is_dir():
