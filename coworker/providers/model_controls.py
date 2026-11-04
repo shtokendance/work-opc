@@ -133,6 +133,96 @@ def table_row(provider: str, bare_model: str) -> Optional[ModelControls]:
     return None
 
 
+def infer_controls(provider: str, bare_model: str) -> Optional[ModelControls]:
+    """Dynamically infer thinking and reasoning effort controls for models not explicitly
+    enumerated in model_controls.json (e.g. newly released models or custom endpoints)."""
+    p = (provider or "").lower()
+    name = (bare_model or "").lower()
+
+    # 1. Kimi / Moonshot family (k3, k3.1, kimi-for-coding, etc.)
+    if p in ("kimi", "kimi-code", "kimi-account") or "kimi" in name or name.startswith("k3") or name == "k3":
+        return ModelControls(
+            ThinkingControl(Support.NOT_SUPPORTED),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.HIGH, EffortLevel.MAX),
+                default=EffortLevel.MAX,
+            ),
+        )
+
+    # 2. Google Gemini family (gemini-2.5, gemini-3, etc.)
+    if p == "gemini" or name.startswith("gemini-"):
+        return ModelControls(
+            ThinkingControl(Support.SUPPORTED, default=True),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH, EffortLevel.MAX),
+                default=EffortLevel.MEDIUM,
+            ),
+        )
+
+    # 3. DeepSeek reasoning models
+    if p == "deepseek" or "deepseek" in name:
+        if "reasoner" in name or "r1" in name:
+            return ModelControls(
+                ThinkingControl(Support.SUPPORTED, default=True),
+                ReasoningControl(
+                    Support.SUPPORTED,
+                    levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                    default=EffortLevel.MEDIUM,
+                ),
+            )
+        return None
+
+    # 4. GLM (Zhipu) family (glm-5, glm-4.6, etc.)
+    if p in ("zai", "zai-account") or "glm" in name:
+        if any(x in name for x in ("5", "4.6", "plus")):
+            return ModelControls(
+                ThinkingControl(Support.SUPPORTED, default=True),
+                ReasoningControl(
+                    Support.SUPPORTED,
+                    levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                    default=EffortLevel.MEDIUM,
+                ),
+            )
+        return None
+
+    # 5. OpenAI / ChatGPT subscription reasoning models
+    if p in ("openai", "openai-codex") or any(name.startswith(x) for x in ("gpt-5", "gpt-6", "o1", "o3", "o4")):
+        return ModelControls(
+            ThinkingControl(Support.NOT_SUPPORTED),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                default=EffortLevel.MEDIUM,
+            ),
+        )
+
+    # 6. Claude / Anthropic
+    if p == "anthropic" or name.startswith("claude-"):
+        return ModelControls(
+            ThinkingControl(Support.NOT_SUPPORTED),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH, EffortLevel.XHIGH, EffortLevel.MAX),
+                default=EffortLevel.HIGH,
+            ),
+        )
+
+    # 7. Generic reasoning heuristics for custom OpenAI-compatible / OpenRouter endpoints
+    if any(k in name for k in ("reason", "think", "r1", "cot", "deep")):
+        return ModelControls(
+            ThinkingControl(Support.SUPPORTED, default=True),
+            ReasoningControl(
+                Support.SUPPORTED,
+                levels=(EffortLevel.LOW, EffortLevel.MEDIUM, EffortLevel.HIGH),
+                default=EffortLevel.MEDIUM,
+            ),
+        )
+
+    return None
+
+
 def controls_for(
     provider: str,
     bare_model: str,
@@ -167,7 +257,9 @@ def controls_for(
         else:
             controls = NONE
     else:
-        controls = NONE
+        # Dynamic capability inference for any cloud or custom provider model
+        dynamic = infer_controls(provider, bare_model)
+        controls = dynamic if dynamic is not None else NONE
     return _with_saved_defaults(controls, saved)
 
 

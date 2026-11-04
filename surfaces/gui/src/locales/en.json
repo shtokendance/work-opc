@@ -2875,6 +2875,7 @@
     "low": "Low",
     "medium": "Medium",
     "high": "High",
+    "max": "Max",
     "effort_note": "For models with effort levels. Each session can change it.",
     "sampling": "Sampling",
     "makers_settings": "The maker's settings",

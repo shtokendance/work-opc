@@ -2835,6 +2835,7 @@
     "low": "低",
     "medium": "中",
     "high": "高",
+    "max": "最高",
     "effort_note": "适用于有推理强度等级的模型。每个会话可单独更改。",
     "sampling": "采样",
     "makers_settings": "厂商设置",

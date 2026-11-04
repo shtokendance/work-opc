@@ -67,3 +67,40 @@ def test_saved_settings_become_the_defaults_only_when_valid():
     assert c.reasoning.default is mc.EffortLevel.MEDIUM
     c = mc.controls_for("ollama", "qwen3:8b", local=True, server_thinking=True, saved={"thinking": False})
     assert c.thinking.default is False
+
+
+def test_dynamic_reasoning_and_thinking_controls():
+    # Kimi Code & Account models (k3.1-pro, k3-256k, kimi-for-coding)
+    kimi = mc.controls_for("kimi-code", "k3.1-pro").as_dict()
+    assert kimi["reasoning"]["support"] == "supported"
+    assert kimi["reasoning"]["levels"] == ["low", "high", "max"]
+
+    kimi_acct = mc.controls_for("kimi-account", "k3-256k").as_dict()
+    assert kimi_acct["reasoning"]["support"] == "supported"
+    assert kimi_acct["reasoning"]["levels"] == ["low", "high", "max"]
+
+    # Google Gemini models (gemini-3.8-flash, gemini-2.5-pro)
+    gemini = mc.controls_for("gemini", "gemini-3.8-flash").as_dict()
+    assert gemini["thinking"]["support"] == "supported"
+    assert gemini["thinking"]["default"] is True
+    assert gemini["reasoning"]["support"] == "supported"
+    assert "max" in gemini["reasoning"]["levels"]
+
+    # DeepSeek Reasoner
+    ds_r1 = mc.controls_for("deepseek", "deepseek-reasoner").as_dict()
+    assert ds_r1["thinking"]["support"] == "supported"
+    assert ds_r1["reasoning"]["support"] == "supported"
+
+    # DeepSeek Chat (fast mode, no reasoning effort)
+    assert mc.controls_for("deepseek", "deepseek-chat") == mc.NONE
+
+    # Zhipu GLM reasoning model
+    glm = mc.controls_for("zai-account", "glm-5.3").as_dict()
+    assert glm["thinking"]["support"] == "supported"
+    assert glm["reasoning"]["support"] == "supported"
+
+    # Future unknown custom reasoning model
+    custom = mc.controls_for("custom", "qwen-qwq-32b-preview-thinking").as_dict()
+    assert custom["thinking"]["support"] == "supported"
+    assert custom["reasoning"]["support"] == "supported"
+

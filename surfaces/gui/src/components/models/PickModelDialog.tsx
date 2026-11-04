@@ -340,7 +340,13 @@ export function PickModelDialog({
                         rec ? t("pick.makers_default", { value: rec.thinking.default ? t("pick.on") : t("pick.off") }) : "")}
                     {!isLocal &&
                       setting("effort", t("pick.effort"),
-                        select("effort", draft.reasoning_effort || "", [{ v: "", label: t("pick.provider_default") }, { v: "low", label: t("pick.low") }, { v: "medium", label: t("pick.medium") }, { v: "high", label: t("pick.high") }], (v) => setDraft((d) => ({ ...d, reasoning_effort: v || undefined }))),
+                        select("effort", draft.reasoning_effort || "", [
+                          { v: "", label: t("pick.provider_default") },
+                          { v: "low", label: t("pick.low") },
+                          { v: "medium", label: t("pick.medium") },
+                          { v: "high", label: t("pick.high") },
+                          { v: "max", label: t("pick.max", { defaultValue: "最高" }) },
+                        ], (v) => setDraft((d) => ({ ...d, reasoning_effort: v || undefined }))),
                         t("pick.effort_note"))}
                     {(rec?.sampling.temperature !== undefined || draft.custom_sampling) &&
                       setting("sampling", t("pick.sampling"),

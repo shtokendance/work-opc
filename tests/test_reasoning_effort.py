@@ -204,6 +204,17 @@ def test_openai_compat_other_unknown_level_sends_no_parameter():
     assert plan.effective is None and plan.params == {} and "unknown" in plan.note
 
 
+def test_openai_compat_kimi_models_map_to_low_high_max():
+    for model in ("k3.1-pro", "k3.1-pro-highspeed", "k3-256k", "kimi-for-coding", "kimi-k3"):
+        plan = openai_compat_effort(model, "medium")
+        assert plan.effective == "high"
+        assert plan.params == {"reasoning_effort": "high"}
+
+        plan_max = openai_compat_effort(model, "max")
+        assert plan_max.effective == "max"
+        assert plan_max.params == {"reasoning_effort": "max"}
+
+
 @pytest.mark.parametrize(
     "model, budget",
     [("claude-sonnet-5", False), ("claude-opus-4-5", False), ("claude-unknown-9", False), ("claude-3-7-sonnet", True)],

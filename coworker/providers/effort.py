@@ -164,13 +164,33 @@ _OPENAI_COMPAT: dict[str, tuple[str, ...]] = {
     "moonshotai/Kimi-K3": ("low", "high", "max"),
     "moonshotai/kimi-k3": ("low", "high", "max"),  # OpenRouter's lowercase slug
     "kimi-k3": ("low", "high", "max"),
+    "kimi-k3-1": ("low", "high", "max"),
+    "k3.1-pro": ("low", "high", "max"),
+    "k3.1-pro-highspeed": ("low", "high", "max"),
+    "k3": ("low", "high", "max"),
+    "k3-256k": ("low", "high", "max"),
+    "kimi-for-coding": ("low", "high", "max"),
+    "deepseek-reasoner": ("low", "medium", "high"),
+    "deepseek/deepseek-r1": ("low", "medium", "high"),
+    "glm-5.3": ("low", "medium", "high"),
+    "glm-5.2": ("low", "medium", "high"),
+    "glm-4.6": ("low", "medium", "high"),
 }
 _OPENAI_DEFAULT = ("low", "medium", "high")
 
 
+def _is_kimi_model(model: str) -> bool:
+    m = model.lower()
+    return "kimi" in m or m.startswith("k3") or m == "k3"
+
+
 def openai_compat_effort(model: str, level: str) -> EffortPlan:
-    supported = _OPENAI_COMPAT.get(model) or _OPENAI_COMPAT.get(model.lower()) or _OPENAI_DEFAULT
-    verified = model in _OPENAI_COMPAT or model.lower() in _OPENAI_COMPAT
+    if _is_kimi_model(model):
+        supported = ("low", "high", "max")
+        verified = True
+    else:
+        supported = _OPENAI_COMPAT.get(model) or _OPENAI_COMPAT.get(model.lower()) or _OPENAI_DEFAULT
+        verified = model in _OPENAI_COMPAT or model.lower() in _OPENAI_COMPAT
     if level == NO_EFFORT:
         # Send it as-is where the OpenAI vocabulary is assumed (it includes "none"). A
         # verified row that documents no such value gets its lowest level instead — "none"
