@@ -298,6 +298,10 @@ def _sanitize_schema(schema: Any) -> Any:
                 cleaned["type"] = types[0]
             elif types:
                 cleaned["anyOf"] = [{"type": t} for t in types]
+        elif key == "enum" and isinstance(value, list):
+            # Gemini's OpenAPI subset (and google-genai Schema.enum) strictly enforces list[str].
+            # Integer or boolean enum entries (e.g. status=[200], port=[8080]) cause Pydantic validation errors.
+            cleaned[key] = [str(item) for item in value]
         else:
             cleaned[key] = value
     return cleaned
