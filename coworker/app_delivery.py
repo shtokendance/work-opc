@@ -523,11 +523,11 @@ class AppDelivery:
                 "decisions": {"type": "array", "description": "为 unresolved 问题提供简短影响说明和可选回答；不代表用户已经选择", "items": {"type": "object", "required": ["id", "question", "impact", "options"], "properties": {"id": {"type": "string"}, "question": {"type": "string"}, "impact": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}}},
                 "changes": {"type": "array", "items": {"type": "object", "required": ["id", "path", "reason"], "properties": {"id": {"type": "string"}, "path": {"type": "string"}, "reason": {"type": "string"}, "group": {"type": "string", "description": "面向用户的修改目的，同一目的涉及的文件使用同一分组名称"}, "content": {"type": "string", "description": "完整文件内容；若已通过 propose_file_change 提交，可省略。"}, "executable": {"type": "boolean"}}}},
                 "contract": {"type": "object", "required": ["schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "configs", "resources", "apis", "pages", "verification", "unresolved"], "properties": {
-                    "schema_version": {"type": "integer", "enum": [1]}, "slug": {"type": "string", "enum": [data["slug"]]}, "base_url": {"type": "string", "enum": [data["app_url"]]},
+                    "schema_version": {"type": "integer"}, "slug": {"type": "string", "enum": [data["slug"]]}, "base_url": {"type": "string", "enum": [data["app_url"]]},
                     "name": {"type": "string"}, "description": {"type": "string"},
-                    "runtime": {"type": "object", "required": ["language", "version", "port"], "properties": {"language": {"type": "string"}, "version": {"type": "string"}, "port": {"type": "integer", "enum": [data["port"]]}}},
+                    "runtime": {"type": "object", "required": ["language", "version", "port"], "properties": {"language": {"type": "string"}, "version": {"type": "string"}, "port": {"type": "integer"}}},
                     "build_context": {"type": "array", "items": {"type": "string"}},
-                    "health": {"type": "object", "required": ["path", "status", "json_contains"], "properties": {"path": {"type": "string"}, "status": {"type": "integer", "enum": [200]}, "json_contains": {"type": "object"}}},
+                    "health": {"type": "object", "required": ["path", "status", "json_contains"], "properties": {"path": {"type": "string"}, "status": {"type": "integer"}, "json_contains": {"type": "object"}}},
                     "auth_profile": {
                         "type": "object",
                         "description": "第三步生成应用技能内置的管理员/登录账密与接口授权信息，确保调用应用技能获取页面或 API 数据不因鉴权受阻",
