@@ -69,7 +69,6 @@ export function AppsView({ onBack }: Props) {
   const [reimportJobId, setReimportJobId] = useState("");
   const [repairFeedback, setRepairFeedback] = useState("");
   const [deliveryJob, setDeliveryJob] = useState<AppDeliveryJob | null>(null);
-  const [finalConfirmed, setFinalConfirmed] = useState(false);
   const [probeCredentials, setProbeCredentials] = useState<Record<string, string>>({});
   useEffect(() => { setProbeCredentials({}); }, [jobId, isModalOpen]);
   const readyArtifact = useRef("");
@@ -311,7 +310,7 @@ export function AppsView({ onBack }: Props) {
   const startTransform = async (targetAppUrl: string) => {
     if (!selectedFile && !sourcePath.trim()) return;
     setRepairFeedback(""); setTransforming(true); setDeliveryJob(null); setJobId("");
-    readyArtifact.current = ""; setConfigs([]); setSelectedResourceIds([]); setFinalConfirmed(false);
+    readyArtifact.current = ""; setConfigs([]); setSelectedResourceIds([]);
     try {
       const data_b64 = selectedFile ? await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -349,8 +348,6 @@ export function AppsView({ onBack }: Props) {
     if (job.manifest?.container_port) setContainerPort(job.manifest.container_port);
   };
 
-  useEffect(() => { setFinalConfirmed(false); }, [configs, selectedResourceIds, jobId]);
-
   const verifyDeployedSkill = async (logs: string) => {
     setDeploying(true);
     setDeployStatus("verifying");
@@ -370,8 +367,8 @@ export function AppsView({ onBack }: Props) {
 
   // Step 3: Confirm and Upload
   const handlePublish = async () => {
-    if (!jobId || !deliveryJob?.artifact_hash || !finalConfirmed) {
-      setError("请核对最终修改、配置与资源，并勾选部署确认");
+    if (!jobId || !deliveryJob?.artifact_hash) {
+      setError("请先完成前置改造与技术准备");
       return;
     }
     setDeploying(true);
@@ -437,7 +434,7 @@ export function AppsView({ onBack }: Props) {
     if (!candidate) {
       await closeWizard(); setRedeploySlug(app.slug); setName(app.name); setSlug(app.slug); setError("本机缺少此应用的交付记录，请选择原始源码重新分析"); setIsModalOpen(true); return;
     }
-    readyArtifact.current = candidate.artifact_hash || ""; setJobId(candidate.id); setDeliveryJob(candidate); setFinalConfirmed(false);
+    readyArtifact.current = candidate.artifact_hash || ""; setJobId(candidate.id); setDeliveryJob(candidate);
     setName(app.name);
     setRedeploySlug(app.slug);
     setSlug(app.slug);
@@ -474,7 +471,7 @@ export function AppsView({ onBack }: Props) {
     setDescription("");
     setSelectedFile(null);
     setSourcePath("");
-    setJobId(""); setReimportJobId(""); setDeliveryJob(null); setFinalConfirmed(false);
+    setJobId(""); setReimportJobId(""); setDeliveryJob(null);
     readyArtifact.current = "";
     setConfigs([]);
     setSelectedResourceIds([]);
@@ -501,7 +498,7 @@ export function AppsView({ onBack }: Props) {
     if (job.reasoning_effort) setSelectedEffort(job.reasoning_effort);
     if (job.thinking !== undefined) setSelectedSpeed(job.thinking ? "thinking" : "speed");
     setJobId(job.id); setDeliveryJob(null); readyArtifact.current = "";
-    setFinalConfirmed(false); setConfigs([]); setSelectedResourceIds([]);
+    setConfigs([]); setSelectedResourceIds([]);
     setStep(2); setIsModalOpen(true);
   };
 
@@ -1087,7 +1084,7 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 2 */}
               {step === 2 && (jobId
-                ? <AppDeliveryReview jobId={jobId} initialFeedback={repairFeedback} onReady={deliveryReady} onInvalidate={() => { setDeliveryJob(null); setFinalConfirmed(false); readyArtifact.current = ""; }} onReplaceSource={() => { setReimportJobId(jobId); setSelectedFile(null); setSourcePath(""); setStep(1); }} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
+                ? <AppDeliveryReview jobId={jobId} initialFeedback={repairFeedback} onReady={deliveryReady} onInvalidate={() => { setDeliveryJob(null); readyArtifact.current = ""; }} onReplaceSource={() => { setReimportJobId(jobId); setSelectedFile(null); setSourcePath(""); setStep(1); }} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
@@ -1467,7 +1464,6 @@ export function AppsView({ onBack }: Props) {
                 )}
                 {step === 3 && (
                   <>
-                    <label className="flex items-start gap-2 max-w-xs text-xs"><input type="checkbox" checked={finalConfirmed} onChange={e => setFinalConfirmed(e.target.checked)} /><span>我已核对应用和连接配置，同意上传并部署</span></label>
                     <button
                       onClick={() => setStep(2)}
                       className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper transition-colors"
@@ -1476,7 +1472,7 @@ export function AppsView({ onBack }: Props) {
                     </button>
                     <button
                       onClick={handlePublish}
-                      disabled={!finalConfirmed || !deliveryJob || missingConfigs.length > 0}
+                      disabled={!deliveryJob || missingConfigs.length > 0}
                       className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs transition-all"
                     >
                       确认并上传部署
