@@ -310,6 +310,14 @@ def extract_sqlite_tables(sqlite_file: Path, max_rows_per_table: int = 5000) -> 
             })
     finally:
         conn.close()
+        # Clean up any transient shm/wal files created by SQLite during readonly inspection
+        for sfx in ("-shm", "-wal"):
+            aux = Path(f"{sqlite_file}{sfx}")
+            if aux.exists():
+                try:
+                    aux.unlink()
+                except OSError:
+                    pass
     return tables
 
 
