@@ -4604,6 +4604,61 @@ export async function rollbackAppVersion(
   return data;
 }
 
+export async function recheckAppHealth(
+  slug: string,
+  appUrl?: string
+): Promise<{ ok: boolean; status: string; message?: string; error?: string }> {
+  // 1. 优先尝试本地 Coworker sidecar 接口探测与更新（无跨域限制）
+  try {
+    const res = await fetch(`${httpBase()}/v1/apps/recheck/${encodeURIComponent(slug)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        app_url: appUrl,
+        platform_url: platformBase(),
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { ok: true, status: data.status || "running", message: data.message };
+    }
+    const errData = await res.json().catch(() => ({}));
+    if (res.status === 400 || res.status === 422 || res.status === 500) {
+      return { ok: false, status: "failed", error: errData.detail || errData.error || `HTTP ${res.status}` };
+    }
+  } catch {
+    // sidecar 离线或开发模式回退
+  }
+
+  // 2. 回退机制：前端直接向应用健康检查与平台更新
+  const targetAppUrl = (appUrl || "").trim().replace(/\/+$/, "");
+  if (targetAppUrl) {
+    try {
+      const probeRes = await globalThis.fetch(`${targetAppUrl}/healthz`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (probeRes.ok) {
+        const text = await probeRes.text();
+        const lower = text.toLowerCase().trim();
+        if (!lower.includes("powered by caprover") && !lower.startsWith("<!doctype") && !lower.startsWith("<html")) {
+          // 向平台同步更新状态为 running
+          await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "running" }),
+          }).catch(() => {});
+          return { ok: true, status: "running", message: "应用健康检查通过，状态已恢复正常运行" };
+        }
+      }
+      return { ok: false, status: "failed", error: `健康检查未通过 (HTTP ${probeRes.status})` };
+    } catch (e: any) {
+      return { ok: false, status: "failed", error: `健康检查请求失败: ${e.message || String(e)}` };
+    }
+  }
+
+  return { ok: false, status: "failed", error: "无法探测应用健康状态" };
+}
+
 export async function checkAppSlug(slug: string): Promise<{
   available: boolean;
   slug: string;

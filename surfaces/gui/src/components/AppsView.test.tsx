@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppsView } from "./AppsView";
-import { appDeliveryRequest, checkAppSlug, getAppDeliveryJob, listDeployedApps, publishAppToPlatform, transformApp, updateDeployedAppConfig } from "../api";
+import { appDeliveryRequest, checkAppSlug, getAppDeliveryJob, listDeployedApps, publishAppToPlatform, recheckAppHealth, transformApp, updateDeployedAppConfig } from "../api";
 
 vi.mock("../tauri", () => ({ chooseFolder: vi.fn().mockResolvedValue("/tmp/source-folder") }));
 
@@ -23,6 +23,7 @@ vi.mock("../api", () => ({
   }),
   listAppVersions: vi.fn().mockResolvedValue({ versions: [] }),
   rollbackAppVersion: vi.fn().mockResolvedValue({ message: "ok" }),
+  recheckAppHealth: vi.fn().mockResolvedValue({ ok: true, status: "running", message: "应用健康检查通过" }),
   getAppVersionArtifactUrl: vi.fn().mockReturnValue("http://10.101.102.116:3002/api/v1/apps/app-1/versions/1/artifacts/app.tar"),
   getAppRuntimeLogs: vi.fn().mockResolvedValue({ logs: "" }),
   listDeployedApps: vi.fn().mockResolvedValue({
@@ -201,5 +202,32 @@ describe("AppsView Component", () => {
     expect(screen.getByDisplayValue("OPC_TEST_MONGO_ONLY").getAttribute("type")).toBe("text");
     fireEvent.click(screen.getAllByRole("button", { name: "隐藏" })[0]);
     expect(screen.getByDisplayValue("OPC_TEST_DSN_ONLY").getAttribute("type")).toBe("password");
+  });
+
+  it("allows rechecking health for a failed app and recovers running status", async () => {
+    vi.mocked(listDeployedApps).mockResolvedValueOnce({
+      apps: [
+        {
+          id: "app-failed",
+          name: "自动报销系统",
+          slug: "smart-expense",
+          description: "报销系统",
+          app_url: "http://smart-expense.10.101.102.116.nip.io:8080",
+          container_port: 8080,
+          status: "failed",
+          app_config: [],
+          resource_ids: [],
+          skill_name: "app-smart-expense",
+          skill_synced: false,
+          created_at: "2026-10-21T16:00:00Z",
+          updated_at: "2026-10-21T16:00:00Z",
+        },
+      ],
+    });
+    render(<AppsView />);
+    const recheckBtn = await screen.findByRole("button", { name: /重新检查/ });
+    expect(recheckBtn).toBeTruthy();
+    fireEvent.click(recheckBtn);
+    expect(recheckAppHealth).toHaveBeenCalledWith("smart-expense", "http://smart-expense.10.101.102.116.nip.io:8080");
   });
 });

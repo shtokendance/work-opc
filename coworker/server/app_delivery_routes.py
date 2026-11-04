@@ -282,6 +282,56 @@ def register_app_delivery_routes(app, manager):
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 
+    @app.post("/v1/apps/recheck/{slug}")
+    async def recheck_app_health(slug: str, body: dict = None):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            body = body or {}
+            target_platform = str(body.get("platform_url") or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+
+            app_url = str(body.get("app_url") or "").strip().rstrip("/")
+            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+                if not app_url:
+                    resp = await client.get(f"{target_platform}/api/v1/apps/{slug}")
+                    if resp.status_code != 200:
+                        raise ValueError(f"获取应用信息失败 ({resp.status_code}): {delivery_error(resp.text)}")
+                    app_data = resp.json()
+                    app_url = str(app_data.get("app_url") or "").strip().rstrip("/")
+
+                if not app_url:
+                    raise ValueError("应用尚未分配访问地址，无法执行健康检查")
+
+                health_url = app_url + "/healthz"
+                try:
+                    probe_resp = await client.get(health_url, timeout=10.0)
+                except Exception as probe_err:
+                    raise ValueError(f"健康检查请求失败: {probe_err}")
+
+                s = probe_resp.text.lower().strip()
+                is_invalid = (
+                    "powered by caprover" in s
+                    or "captain-root-domain" in s
+                    or s.startswith("<!doctype html")
+                    or s.startswith("<html")
+                )
+                if probe_resp.status_code != 200 or is_invalid:
+                    raise ValueError(f"健康检查未通过 (HTTP {probe_resp.status_code})：服务未就绪或返回异常")
+
+                # 探活通过，向平台更新状态为 running
+                try:
+                    await client.put(
+                        f"{target_platform}/api/v1/apps/{slug}",
+                        json={"status": "running"}
+                    )
+                except Exception:
+                    pass
+
+            return {"ok": True, "status": "running", "message": "应用健康检查通过，状态已恢复正常运行"}
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
     @app.post("/v1/apps/publish-to-platform")
     async def publish(body: dict):
         try:
