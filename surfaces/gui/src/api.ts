@@ -4813,7 +4813,71 @@ export interface AppDeliveryJob {
       decrypted_from?: string;
       notes?: string;
     };
+    discovery_report?: {
+      project_purpose?: string;
+      tech_stack?: {
+        language?: string;
+        runtime_version?: string;
+        frameworks?: string[];
+        syntax_requirements?: string[];
+        container_port?: number;
+      };
+      pages_overview?: {
+        total?: number;
+        items?: { path: string; purpose: string; actions?: string[]; evidence?: string }[];
+      };
+      apis_overview?: {
+        total?: number;
+        modules?: Record<string, number>;
+        read_count?: number;
+        write_count?: number;
+        items?: { id: string; method: string; path: string; purpose: string; effect: string; auth_type?: string; evidence?: string }[];
+      };
+      auth_and_credentials?: {
+        page_auth?: string;
+        api_auth?: string;
+        auth_profile?: Record<string, any>;
+        discovered_accounts_count?: number;
+      };
+      storage_and_database?: {
+        storage_type?: string;
+        sqlite_databases?: { path: string; size_mb: number; table_count: number; total_rows: number; table_names: string[] }[];
+        can_migrate_to_platform_pg?: boolean;
+        platform_pg_resource?: string;
+        platform_pg_id?: string;
+        storage_migration_plan?: string;
+      };
+      foundation_and_container?: {
+        has_dockerfile?: boolean;
+        dockerfile_base_image?: string;
+        dockerfile_action?: string;
+        has_readme?: boolean;
+        readme_summary?: string;
+        available_platform_resources?: { id?: string; name?: string; type?: string }[];
+      };
+      planned_adaptations?: string[];
+    };
+    transformation_report?: {
+      headline?: string;
+      added_files?: { path: string; group?: string; reason: string }[];
+      modified_files?: { path: string; group?: string; reason: string }[];
+      deleted_files?: { path: string; reason: string }[];
+      dockerfile_summary?: string;
+      storage_summary?: string;
+      health_check?: string;
+      skill_summary?:
+        | string
+        | {
+            skill_name?: string;
+            page_count?: number;
+            api_count?: number;
+            read_api_count?: number;
+            write_api_count?: number;
+          };
+    };
   };
+  discovery_report?: NonNullable<AppDeliveryJob["proposal"]>["discovery_report"];
+  transformation_report?: NonNullable<AppDeliveryJob["proposal"]>["transformation_report"];
 }
 
 export async function appDeliveryRequest<T>(path: string, body?: unknown): Promise<T> {

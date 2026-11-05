@@ -3,14 +3,60 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { AppDeliveryReview } from "./AppDeliveryReview";
 import { appDeliveryRequest, getAppDeliveryJob } from "../api";
 vi.mock("../api", () => ({ getAppDeliveryJob: vi.fn(), appDeliveryRequest: vi.fn() }));
-const plan = { id:"job", slug:"stock", name:"Stock", status:"review", model:"configured", app_url:"http://stock.test", events:[], proposal_hash:"v1", proposal: {summary:"保留业务", unresolved:[] as string[], issues:[], changes:[{id:"C1",path:"settings.py",reason:"支持服务器启动",diff:"-before\n+after"}], configs:[], apis:[],pages:[]} };
-const ready = {...plan,status:"ready",artifact_hash:"a"};
+const plan = {
+  id: "job",
+  slug: "stock",
+  name: "Stock",
+  status: "review",
+  model: "configured",
+  app_url: "http://stock.test",
+  events: [],
+  proposal_hash: "v1",
+  discovery_report: {
+    project_purpose: "保留业务",
+    tech_stack: { language: "Python", runtime_version: "3.11", syntax_requirements: ["StrEnum (Python 3.11+)"], container_port: 8000 },
+    storage_and_database: { storage_type: "sqlite", storage_migration_plan: "迁移到平台 PostgreSQL", can_migrate_to_platform_pg: true },
+    pages_overview: { total: 2, items: [{ path: "/", purpose: "首页" }, { path: "/admin", purpose: "管理后台" }] },
+    apis_overview: { total: 2, modules: { auth: 1, stock: 1 }, read_count: 1, write_count: 1, items: [{ id: "login", method: "POST", path: "/api/auth/login", purpose: "登录", effect: "write" }, { id: "stock", method: "GET", path: "/api/stock", purpose: "查询库存", effect: "read" }] },
+    planned_adaptations: ["改造 settings.py：支持服务器启动"],
+  },
+  proposal: {
+    summary: "保留业务",
+    unresolved: [] as string[],
+    issues: [],
+    changes: [{ id: "C1", path: "settings.py", reason: "支持服务器启动", diff: "-before\n+after" }],
+    configs: [],
+    apis: [],
+    pages: [],
+  },
+};
+const ready = {
+  ...plan,
+  status: "ready",
+  artifact_hash: "a",
+  transformation_report: {
+    headline: "已完成改造：新增 2 个平台交付文件，改造 1 个源码文件，删除 0 个文件。",
+    added_files: [{ path: "Dockerfile", reason: "容器构建文件" }, { path: "captain-definition", reason: "平台部署配置" }],
+    modified_files: [{ path: "settings.py", reason: "支持服务器启动" }],
+    deleted_files: [],
+    storage_summary: "数据库已配置为 postgresql（已纳入 3 张表结构与数据迁移）",
+    skill_summary: "已生成完整应用业务技能（包含 2 个页面视图、2 个后端接口）",
+  },
+};
 afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(getAppDeliveryJob).mockResolvedValue(plan); vi.mocked(appDeliveryRequest).mockResolvedValue(ready); });
-it("automatically prepares technical changes but advances only after explicit next with a fresh version", async () => {
+it("shows Step 1 discovery report and prepares Step 2 only after user clicks confirmation, then renders Step 2 report", async () => {
   const onReady=vi.fn(), next=vi.fn();
   render(<AppDeliveryReview jobId="job" onReady={onReady} onNextStep={next} />);
+  expect(await screen.findByLabelText("第一步：AI 深度分析结果")).toBeTruthy();
+  expect(screen.getByText(/StrEnum \(Python 3\.11\+\)/)).toBeTruthy();
+  expect(appDeliveryRequest).not.toHaveBeenCalledWith("jobs/job/prepare", expect.anything());
+  const confirmBtn = await screen.findByRole("button", { name: "确认分析结果，执行第二步改造" });
+  fireEvent.click(confirmBtn);
   await waitFor(()=>expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/prepare",{proposal_hash:"v1"}));
+  expect(await screen.findByLabelText("第二步：应用改造完成报告")).toBeTruthy();
+  expect(screen.getByText(/新增了什么（2 项）/)).toBeTruthy();
+  expect(screen.getByText(/改造了什么（1 项）/)).toBeTruthy();
   const advance=await screen.findByRole("button",{name:"下一步：核对部署内容"});
   expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   expect(screen.getAllByRole("textbox")).toHaveLength(1);

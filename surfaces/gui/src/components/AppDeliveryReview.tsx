@@ -112,12 +112,9 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
     }
   };
 
-  useEffect(() => {
-    if (job?.status === "review" && job.proposal && !questions.length && !inFlight.current && preparing.current !== job.proposal_hash) {
-      preparing.current = job.proposal_hash || "preparing";
-      void prepare();
-    }
-  }, [job?.status, job?.proposal_hash]);
+  const awaitingDiscoveryConfirm = job?.status === "review" && !!plan && !questions.length && !activeError && !running;
+  const discovery = plan?.discovery_report || job?.discovery_report;
+  const transformation = plan?.transformation_report || job?.transformation_report;
 
   const saveConfig = async () => {
     inFlight.current = true;
@@ -161,6 +158,8 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
     ? "有一步没有完成"
     : questions.length
     ? `有 ${questions.length} 件事需要你决定`
+    : awaitingDiscoveryConfirm
+    ? "第一步分析完成，请确认分析结果后执行改造"
     : needsConfig
     ? "补齐连接配置，就可以继续"
     : ready
@@ -294,45 +293,192 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
           </article>
         )}
 
-        {(plan?.four_step_report || plan?.auth_profile) && (
-          <details className="rounded-2xl border border-line bg-paper/60 px-4 py-3 text-xs space-y-2">
-            <summary className="cursor-pointer font-medium text-ink select-none flex items-center justify-between">
-              <span>查看四步改造与免登技能全景摘要</span>
-              <span className="text-accent">展开详情</span>
-            </summary>
-            <div className="pt-2 border-t border-line/60 space-y-2 text-muted">
-              {plan.four_step_report?.step1_discovery && (
-                <div>
-                  <span className="font-semibold text-ink">第一步 · 源码与技术栈摸底：</span>
-                  <span className="ml-1 font-mono">
-                    {plan.four_step_report.step1_discovery.language || "-"} {plan.four_step_report.step1_discovery.runtime_version || ""}
-                  </span>
-                  {plan.four_step_report.step1_discovery.storage_type && (
-                    <span className="ml-2">存储类型: {plan.four_step_report.step1_discovery.storage_type}</span>
+        {/* Step 1 Fixed-Format Deep Discovery Card */}
+        {plan && (discovery || plan.four_step_report || plan.auth_profile || plan.apis?.length || plan.pages?.length) && (
+          <section
+            aria-label="第一步：AI 深度分析结果"
+            className="rounded-2xl border border-accent/30 bg-paper/90 p-4 space-y-3 text-xs shadow-xs"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-line/70">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-md bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
+                  第一步 · 应用深度分析报告
+                </span>
+                <span className="font-semibold text-sm text-ink">
+                  {job?.name || job?.slug} 全景摸底结果
+                </span>
+              </div>
+              <span className="text-[11px] text-muted font-mono">
+                页面 {discovery?.pages_overview?.total ?? plan.pages?.length ?? 0} 个 · 接口 {discovery?.apis_overview?.total ?? plan.apis?.length ?? 0} 个
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* 1. 项目定位 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
+                <div className="font-semibold text-ink">1. 应用定位与业务用途</div>
+                <p className="text-muted leading-relaxed">
+                  {discovery?.project_purpose || plan.summary || "已完成应用源码结构与核心业务分析"}
+                </p>
+              </div>
+
+              {/* 2. 语言版本与技术栈 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
+                <div className="font-semibold text-ink">2. 开发语言、版本与技术栈</div>
+                <div className="text-muted space-y-0.5">
+                  <div>
+                    <span className="text-ink font-medium">运行时：</span>
+                    <span className="font-mono text-ink">
+                      {discovery?.tech_stack?.language || plan.four_step_report?.step1_discovery?.language || "自动识别"}{" "}
+                      {discovery?.tech_stack?.runtime_version || plan.four_step_report?.step1_discovery?.runtime_version || ""}
+                    </span>
+                    <span className="ml-2 text-muted">（容器端口 {discovery?.tech_stack?.container_port || job?.port || 8080}）</span>
+                  </div>
+                  {!!discovery?.tech_stack?.frameworks?.length && (
+                    <div>
+                      <span className="text-ink font-medium">核心框架：</span>
+                      <span>{discovery.tech_stack.frameworks.join(" + ")}</span>
+                    </div>
+                  )}
+                  {!!discovery?.tech_stack?.syntax_requirements?.length && (
+                    <div className="text-warnInk">
+                      <span className="font-medium">版本特性要求：</span>
+                      <span>{discovery.tech_stack.syntax_requirements.join("、")}</span>
+                    </div>
                   )}
                 </div>
-              )}
-              {plan.four_step_report?.step2_transformation && (
-                <div>
-                  <span className="font-semibold text-ink">第二步 · 容器与存储改造：</span>
-                  <span className="ml-1">
-                    Dockerfile={plan.four_step_report.step2_transformation.dockerfile_action || "已就绪"}
-                    {plan.four_step_report.step2_transformation.storage_migration ? ` · 数据迁移=${plan.four_step_report.step2_transformation.storage_migration}` : ""}
+              </div>
+
+              {/* 3. 页面与功能视图全景 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-ink">
+                    3. 页面与业务视图（共 {discovery?.pages_overview?.total ?? plan.pages?.length ?? 0} 个）
                   </span>
                 </div>
-              )}
-              {plan.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
-                <div>
-                  <span className="font-semibold text-ok">第三步 · 免登授权技能：</span>
-                  <span className="ml-1 font-mono text-ink">
-                    {plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
-                    {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
-                    {plan.auth_profile.decrypted_from ? ` (${plan.auth_profile.decrypted_from})` : ""}
+                {(discovery?.pages_overview?.items || plan.pages || []).length > 0 ? (
+                  <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                    {(discovery?.pages_overview?.items || plan.pages || []).map((pg, idx) => (
+                      <div key={`${pg.path}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
+                        <span className="font-mono px-1.5 py-0.2 rounded bg-paper border border-line text-ink shrink-0">
+                          {pg.path}
+                        </span>
+                        <span className="text-muted truncate" title={pg.purpose}>
+                          {pg.purpose}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted">纯后端 API 服务（无独立前端页面）</p>
+                )}
+              </div>
+
+              {/* 4. API 接口全景统计 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-ink">
+                    4. 后端 API 接口（共 {discovery?.apis_overview?.total ?? plan.apis?.length ?? 0} 个）
                   </span>
+                  {discovery?.apis_overview && (
+                    <span className="text-[11px] text-muted">
+                      只读 {discovery.apis_overview.read_count ?? 0} · 写操作 {discovery.apis_overview.write_count ?? 0}
+                    </span>
+                  )}
                 </div>
-              )}
+                {discovery?.apis_overview?.modules && Object.keys(discovery.apis_overview.modules).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {Object.entries(discovery.apis_overview.modules).map(([mod, cnt]) => (
+                      <span key={mod} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-[11px] text-ink">
+                        {mod}: {cnt}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(discovery?.apis_overview?.items || plan.apis || []).length > 0 && (
+                  <details className="pt-1">
+                    <summary className="cursor-pointer text-accent hover:underline select-none">
+                      展开查看全部 {(discovery?.apis_overview?.items || plan.apis || []).length} 个接口清单
+                    </summary>
+                    <div className="mt-1.5 space-y-1 max-h-44 overflow-y-auto pr-1 border-t border-line/50 pt-1.5">
+                      {(discovery?.apis_overview?.items || plan.apis || []).map((api, idx) => (
+                        <div key={`${api.id}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
+                          <span className="font-mono font-semibold px-1 rounded bg-paper border border-line text-ink shrink-0">
+                            {api.method}
+                          </span>
+                          <span className="font-mono text-ink shrink-0">{api.path}</span>
+                          <span className="text-muted truncate" title={api.purpose}>
+                            · {api.purpose}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+
+              {/* 5. 数据存储与数据库 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
+                <div className="font-semibold text-ink">5. 数据存储与平台数据库</div>
+                <div className="text-muted space-y-1">
+                  <div>
+                    <span className="text-ink font-medium">存储类型：</span>
+                    <span className="font-mono text-ink">
+                      {discovery?.storage_and_database?.storage_type || plan.four_step_report?.step1_discovery?.storage_type || "本地/内置存储"}
+                    </span>
+                  </div>
+                  {discovery?.storage_and_database?.sqlite_databases?.map(db => (
+                    <div key={db.path} className="text-[11px] bg-paper/80 rounded-lg p-2 border border-line/60 space-y-0.5">
+                      <div className="font-mono text-ink">
+                        {db.path} ({db.size_mb} MB · {db.table_count} 张表 · {db.total_rows} 条记录)
+                      </div>
+                      <div className="text-muted truncate" title={db.table_names.join(", ")}>
+                        核心表：{db.table_names.slice(0, 8).join("、")}
+                        {db.table_names.length > 8 ? ` 等 ${db.table_names.length} 张表` : ""}
+                      </div>
+                    </div>
+                  ))}
+                  <div>{discovery?.storage_and_database?.storage_migration_plan}</div>
+                </div>
+              </div>
+
+              {/* 6. 权限验证与容器化现状 */}
+              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
+                <div className="font-semibold text-ink">6. 登录鉴权与容器化现状</div>
+                <div className="text-muted space-y-0.5">
+                  <div>
+                    <span className="text-ink font-medium">页面/接口鉴权：</span>
+                    <span>
+                      {discovery?.auth_and_credentials?.page_auth || "免登访问"} · {discovery?.auth_and_credentials?.api_auth || "无特殊鉴权"}
+                    </span>
+                  </div>
+                  {plan.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
+                    <div className="text-ok font-mono">
+                      已提取内置凭据：{plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
+                      {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
+                      {plan.auth_profile.token ? ` Token已就绪` : ""}
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-ink font-medium">Dockerfile 策略：</span>
+                    <span>{discovery?.foundation_and_container?.dockerfile_action || "自动生成标准容器构建配置"}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </details>
+
+            {/* 拟执行改造动作预览 */}
+            {!!discovery?.planned_adaptations?.length && (
+              <div className="rounded-xl border border-line/70 bg-panel/20 px-3 py-2 space-y-1">
+                <div className="font-semibold text-ink">第二步拟执行的改造项：</div>
+                <ul className="list-disc list-inside text-muted space-y-0.5">
+                  {discovery.planned_adaptations.map((act, idx) => (
+                    <li key={idx}>{act}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
         )}
 
         {/* Real-time AI Process Timeline Bubble */}
@@ -532,20 +678,63 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
           </div>
         )}
 
-        {/* Ready Status Bubble */}
+        {/* Step 1 Confirmation Action Bubble */}
+        {awaitingDiscoveryConfirm && !needsConfig && (
+          <div className="flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-accentSoft border border-accentLine text-accent flex items-center justify-center shrink-0 mt-0.5">
+              <Icon name="sparkle" size={14} />
+            </div>
+            <div className="flex-1 rounded-2xl rounded-tl-xs border border-accentLine bg-accentSoft/20 px-4 py-3 text-ink space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-sm text-ink">第一步深度分析已完成，请确认后进入第二步改造</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    核对上方「一～六」项分析结果无误后，点击右侧按钮开始执行改造与生成应用技能；如需调整策略，可在下方对话框直接输入要求。
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {discovery?.storage_and_database?.can_migrate_to_platform_pg && (
+                    <button
+                      type="button"
+                      className={button + " bg-panel border-accentLine text-accent font-medium"}
+                      disabled={running}
+                      onClick={() =>
+                        void sendFeedback(
+                          "请将本地 SQLite 数据库完整迁移到平台提供的 PostgreSQL 服务端数据库，并导入原有表结构与数据后执行改造。",
+                        )
+                      }
+                    >
+                      迁移 SQLite 到平台 PostgreSQL 并改造
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={button + " bg-accent text-white border-accent font-medium shadow-xs"}
+                    disabled={running}
+                    onClick={prepare}
+                  >
+                    确认分析结果，执行第二步改造
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2 Concise Transformation Report & Ready Status Bubble */}
         {ready && !needsConfig && !questions.length && !activeError && !running && (
           <div className="flex items-start gap-3">
             <div className="w-7 h-7 rounded-lg bg-okSoft border border-okLine text-ok flex items-center justify-center shrink-0 mt-0.5">
               <Icon name="check" size={14} />
             </div>
-            <div className="flex-1 rounded-2xl rounded-tl-xs border border-okLine bg-okSoft/30 px-4 py-3 text-ink space-y-2">
+            <div className="flex-1 rounded-2xl rounded-tl-xs border border-okLine bg-okSoft/30 px-4 py-3.5 text-ink space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="font-medium text-sm text-ok">改造与交付检查已完成</div>
+                  <div className="font-medium text-sm text-ok">第二步：改造与第三步应用技能生成已完成</div>
                   <div className="text-xs text-muted mt-0.5">
-                    {feedback.trim()
+                    {transformation?.headline || (feedback.trim()
                       ? "请先发送输入框中的补充要求，或清空输入后继续。"
-                      : "可以点击右侧按钮进入部署核对，或在下方对话框继续提要求。"}
+                      : "可以点击右侧按钮进入部署核对，或在下方对话框继续提要求。")}
                   </div>
                 </div>
                 <button
@@ -557,6 +746,76 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                   下一步：核对部署内容
                 </button>
               </div>
+
+              {transformation && (
+                <div
+                  aria-label="第二步：应用改造完成报告"
+                  className="rounded-xl border border-okLine/60 bg-paper/90 p-3 space-y-2.5 text-xs"
+                >
+                  <div className="font-medium text-ink">📋 改造简报（增减与改动一览）</div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <div className="rounded-lg border border-line bg-panel/50 p-2.5 space-y-1">
+                      <div className="font-medium text-ink">
+                        ➕ 新增了什么（{transformation.added_files?.length || 0} 项）
+                      </div>
+                      {transformation.added_files?.length ? (
+                        <ul className="space-y-1 text-muted">
+                          {transformation.added_files.map(item => (
+                            <li key={item.path}>
+                              <span className="font-mono text-ink">{item.path}</span> · {item.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div className="text-muted">无新增文件</div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-line bg-panel/50 p-2.5 space-y-1">
+                      <div className="font-medium text-ink">
+                        🔧 改造了什么（{transformation.modified_files?.length || 0} 项）
+                      </div>
+                      {transformation.modified_files?.length ? (
+                        <ul className="space-y-1 text-muted">
+                          {transformation.modified_files.map(item => (
+                            <li key={item.path}>
+                              <span className="font-mono text-ink">{item.path}</span> · {item.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div className="text-muted">未改动业务源码（零侵入交付）</div>
+                      )}
+                    </div>
+                  </div>
+                  {!!transformation.deleted_files?.length && (
+                    <div className="rounded-lg border border-line bg-panel/50 p-2 space-y-1">
+                      <div className="font-medium text-ink">
+                        🗑️ 删减了什么（{transformation.deleted_files.length} 项）
+                      </div>
+                      <div className="text-muted font-mono">
+                        {transformation.deleted_files.map(d => (typeof d === "string" ? d : `${d.path} (${d.reason})`)).join("、")}
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid gap-2 md:grid-cols-2 pt-1">
+                    {transformation.storage_summary && (
+                      <div className="rounded-lg border border-line bg-panel/40 px-2.5 py-1.5 text-muted">
+                        <span className="font-medium text-ink">🗄️ 数据与存储：</span>
+                        {transformation.storage_summary}
+                      </div>
+                    )}
+                    {transformation.skill_summary && (
+                      <div className="rounded-lg border border-line bg-panel/40 px-2.5 py-1.5 text-muted">
+                        <span className="font-medium text-ink">🧩 应用技能：</span>
+                        {typeof transformation.skill_summary === "string"
+                          ? transformation.skill_summary
+                          : `${transformation.skill_summary.skill_name || `app-${job?.slug}`}（含 ${transformation.skill_summary.page_count ?? 0} 个页面、${transformation.skill_summary.api_count ?? 0} 个接口）`}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {!!job?.preparation_checks?.length && (
                 <div className="pt-2 border-t border-okLine/40 space-y-1 text-xs">
                   {job.preparation_checks.map(c => (

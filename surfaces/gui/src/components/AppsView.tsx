@@ -1824,50 +1824,73 @@ export function AppsView({ onBack }: Props) {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {appVersions.map((ver) => {
-                        const apiCount = ver.apis_summary?.length || 0;
-                        const pageCount = ver.pages_summary?.length || 0;
-                        return (
-                          <div
-                            key={ver.id || ver.version}
-                            className={`p-4 rounded-xl border space-y-2.5 transition-colors ${
-                              ver.is_active
-                                ? "border-accent/50 bg-accentSoft/20"
-                                : "border-line bg-paper/50 hover:border-lineStrong"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-mono font-bold text-ui text-ink">v{ver.version}</span>
-                                {ver.is_active ? (
-                                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-okSoft text-ok border border-okLine">
-                                    ✓ 当前生效版本
+                      {appVersions
+                        .filter((ver, idx) => {
+                          const isCurrentRunning =
+                            ver.is_active ||
+                            ver.status === "running" ||
+                            (selectedApp.status === "running" && ver.version === (selectedApp.current_version || 1));
+                          if (isCurrentRunning) return true;
+                          const hasAnyRunning =
+                            selectedApp.status === "running" ||
+                            appVersions.some(v => v.status === "running" || v.is_active);
+                          if (ver.status === "failed") {
+                            return !hasAnyRunning && idx === 0;
+                          }
+                          return true;
+                        })
+                        .map((ver) => {
+                          const apiCount = ver.apis_summary?.length || 0;
+                          const pageCount = ver.pages_summary?.length || 0;
+                          const isCurrentActive =
+                            ver.is_active ||
+                            (selectedApp.status === "running" && ver.version === (selectedApp.current_version || 1));
+                          const isRunningRelease = ver.status === "running" || isCurrentActive;
+                          return (
+                            <div
+                              key={ver.id || ver.version}
+                              className={`p-4 rounded-xl border space-y-2.5 transition-colors ${
+                                isCurrentActive
+                                  ? "border-accent/50 bg-accentSoft/20"
+                                  : "border-line bg-paper/50 hover:border-lineStrong"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-mono font-bold text-ui text-ink">v{ver.version}</span>
+                                  {isCurrentActive ? (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-okSoft text-ok border border-okLine">
+                                      ✓ 当前生效版本
+                                    </span>
+                                  ) : isRunningRelease ? (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] bg-panel text-muted border border-line">
+                                      已发布历史版本
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] bg-danger/10 text-danger border border-danger/30">
+                                      部署未成功 ({ver.status}) · 不可回退
+                                    </span>
+                                  )}
+                                  <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono">
+                                    API: {apiCount} · 页面: {pageCount}
                                   </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full text-[11px] bg-panel text-muted border border-line">
-                                    历史归档 ({ver.status})
-                                  </span>
-                                )}
-                                <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono">
-                                  API: {apiCount} · 页面: {pageCount}
-                                </span>
-                                {ver.caprover_image_name && (
-                                  <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono truncate max-w-[180px]" title={ver.caprover_image_name}>
-                                    {ver.caprover_image_name}
-                                  </span>
+                                  {ver.caprover_image_name && (
+                                    <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono truncate max-w-[180px]" title={ver.caprover_image_name}>
+                                      {ver.caprover_image_name}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {!isCurrentActive && isRunningRelease && (
+                                  <button
+                                    disabled={rollingBackVersion !== null}
+                                    onClick={() => void handleRollbackVersion(selectedApp.slug, ver.version)}
+                                    className="px-3 py-1 rounded-lg bg-warnSoft hover:opacity-90 text-warnInk border border-warnInk/30 text-label font-semibold transition-opacity disabled:opacity-50 shrink-0 cursor-pointer"
+                                  >
+                                    {rollingBackVersion === ver.version ? "正在回退..." : `⏪ 回退到 v${ver.version}`}
+                                  </button>
                                 )}
                               </div>
-
-                              {!ver.is_active && (
-                                <button
-                                  disabled={rollingBackVersion !== null}
-                                  onClick={() => void handleRollbackVersion(selectedApp.slug, ver.version)}
-                                  className="px-3 py-1 rounded-lg bg-warnSoft hover:opacity-90 text-warnInk border border-warnInk/30 text-label font-semibold transition-opacity disabled:opacity-50 shrink-0 cursor-pointer"
-                                >
-                                  {rollingBackVersion === ver.version ? "正在回退..." : `⏪ 回退到 v${ver.version}`}
-                                </button>
-                              )}
-                            </div>
 
                             <div className="text-meta text-ink">
                               {ver.version_note || `版本 v${ver.version} 部署快照`}

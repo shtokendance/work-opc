@@ -441,3 +441,123 @@ def test_step3_auth_profile_embedded_in_skill_and_auto_resolved_by_invoker():
     )
     assert req.get_header("Authorization") == "Bearer pre-issued-admin-token-xyz"
 
+
+@pytest.mark.asyncio
+async def test_full_route_and_page_scanner_enriches_contract_and_reports(tmp_path):
+    """Ensure Step 1 discovery_report, Step 2 transformation_report, and Step 3 100% API/page skill inclusion work without omitting routes."""
+    app_dir = tmp_path / "sample-app"
+    (app_dir / "routers").mkdir(parents=True)
+    (app_dir / "static/components").mkdir(parents=True)
+    (app_dir / "main.py").write_text(
+        "from enum import StrEnum\n"
+        "from fastapi import FastAPI\n"
+        "from routers import bills, admin\n"
+        "class Mode(StrEnum):\n"
+        "    PROD = 'prod'\n"
+        "def create_app():\n"
+        "    app = FastAPI()\n"
+        "    app.include_router(bills.router)\n"
+        "    app.include_router(admin.router, prefix='/api/admin')\n"
+        "    @app.get('/api/health')\n"
+        "    def health():\n"
+        "        return {'ok': True}\n"
+        "    return app\n"
+    )
+    (app_dir / "routers/bills.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter(prefix='/api/bills')\n"
+        "@router.get('')\n"
+        "def list_bills(limit: int = 20):\n"
+        "    '''查询报销单列表'''\n"
+        "    return []\n"
+        "@router.post('/{bill_id}/submit')\n"
+        "def submit_bill(bill_id: str, payload: dict):\n"
+        "    '''提交报销单'''\n"
+        "    return {'id': bill_id}\n"
+    )
+    (app_dir / "routers/admin.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.delete('/users/{user_id}')\n"
+        "def delete_user(user_id: str):\n"
+        "    return {'deleted': user_id}\n"
+    )
+    (app_dir / "static/index.html").write_text("<html><head><title>智能报销系统</title></head><body></body></html>\n")
+    (app_dir / "static/components/travel-page.js").write_text("// 差旅费报销填单页\nexport const TravelPage = { template: '<h2>差旅费报销</h2>' };\n")
+    (app_dir / "static/components/sales-order-panel.js").write_text("// 销售订单面板\nexport const SalesOrderPanel = { template: '<h3>销售订单分配</h3>' };\n")
+
+    # Provider only submits 1 API and 0 pages; scanner must auto-complete all 4 APIs and all 3 pages/panels
+    partial_proposal = proposal()
+    partial_proposal["changes"] = [
+        {
+            "id": "C01",
+            "path": "Dockerfile",
+            "group": "容器化构建",
+            "reason": "新增 Python 3.11 容器构建配置",
+            "content": 'FROM python:3.11-slim\nCOPY . /app\nCMD ["python", "/app/main.py"]\n',
+        },
+        {
+            "id": "C02",
+            "path": "main.py",
+            "group": "健康检查适配",
+            "reason": "补齐 /healthz 健康检查端点并监听 8080 端口",
+            "content": (app_dir / "main.py").read_text() + "\n# adapted healthz\n",
+        },
+    ]
+    partial_proposal["contract"]["build_context"] = ["Dockerfile", "main.py", "routers", "static"]
+
+    class PartialProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            return AssistantTurn(tool_calls=[ToolCall("submit-1", "submit_proposal", partial_proposal)])
+
+    manager = SimpleNamespace(
+        provider=PartialProvider(),
+        model="test:configured",
+        _model_provider=lambda m: "test",
+        _provider_configured=lambda p: True,
+    )
+    svc = AppDelivery(manager, tmp_path / "jobs")
+    job = svc.create(
+        {"name": "智能报销", "slug": "test-app", "app_url": "http://test-app.apps.localhost", "model": "test:configured"},
+        app_dir,
+    )
+    svc.launch_analysis(job["id"])
+    await svc.tasks[job["id"]]
+    pub = svc.public(job["id"])
+    assert pub["status"] == "review"
+
+    # 1. Step 1 discovery_report is populated in fixed format
+    disc = pub["proposal"]["discovery_report"]
+    assert disc["tech_stack"]["language"] == "python"
+    assert disc["tech_stack"]["runtime_version"] == "3.11"
+    assert "StrEnum (Python 3.11+)" in disc["tech_stack"]["syntax_requirements"]
+    assert disc["pages_overview"]["total"] == 3
+    assert disc["apis_overview"]["total"] >= 5  # /lookup + 4 scanned routes (/api/health, /api/bills, /api/bills/{bill_id}/submit, /api/admin/users/{user_id})
+
+    # 2. Step 2 transformation_report concisely lists added & modified files
+    trans = pub["proposal"]["transformation_report"]
+    assert len(trans["added_files"]) == 1 and trans["added_files"][0]["path"] == "Dockerfile"
+    assert len(trans["modified_files"]) == 1 and trans["modified_files"][0]["path"] == "main.py"
+    assert trans["deleted_files"] == []
+
+    # 3. Step 3 packaged skill.zip includes 100% of APIs and pages
+    ready = await svc.approve(job["id"], {"proposal_hash": pub["proposal_hash"]}, technical_preparation=True)
+    assert ready["status"] == "ready"
+    skill_zip = svc.path(job["id"]) / "bundle/skill.zip"
+    with zipfile.ZipFile(skill_zip) as zf:
+        ops = json.loads(zf.read("references/operations.json").decode("utf-8"))
+        skill_md = zf.read("SKILL.md").decode("utf-8")
+        api_paths = {(a["method"], a["path"]) for a in ops["apis"]}
+        assert ("GET", "/api/bills") in api_paths
+        assert ("POST", "/api/bills/{bill_id}/submit") in api_paths
+        assert ("DELETE", "/api/admin/users/{user_id}") in api_paths
+        assert ("GET", "/api/health") in api_paths
+        page_paths = {p["path"] for p in ops["pages"]}
+        assert "/" in page_paths
+        assert "/#/travel-page" in page_paths
+        assert "/#/sales-order-panel" in page_paths
+        assert "/api/bills/{bill_id}/submit" in skill_md
+        assert "/#/sales-order-panel" in skill_md
+
+

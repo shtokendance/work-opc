@@ -387,7 +387,18 @@ def register_app_delivery_routes(app, manager):
                 resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions")
             if resp.status_code != 200:
                 raise ValueError(f"查询应用版本历史失败 ({resp.status_code}): {delivery_error(resp.text)}")
-            return resp.json()
+            payload = resp.json()
+            versions = payload.get("versions")
+            if isinstance(versions, list) and len(versions) > 1:
+                has_running = any(v.get("status") == "running" or v.get("is_active") for v in versions if isinstance(v, dict))
+                filtered = []
+                for idx, v in enumerate(versions):
+                    if isinstance(v, dict) and v.get("status") == "failed" and not v.get("is_active"):
+                        if has_running or idx > 0:
+                            continue
+                    filtered.append(v)
+                payload["versions"] = filtered
+            return payload
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 

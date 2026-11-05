@@ -13,20 +13,20 @@ metadata:
 
 ## 第一步：读取用户上传的应用源码，完整了解应用 (Step 1: Deep Discovery)
 
-首先通过只读工具（`list_source`、`read_source`、`inspect_credentials_and_decrypt`、`inspect_local_storage`、`read_go_dependency`）完整扫描并阅读源码，查明并在 `four_step_report.step1_discovery` 与 `summary` 中清晰列出以下全部事项：
+首先通过只读工具（`scan_routes_and_pages`、`list_source`、`read_source`、`inspect_credentials_and_decrypt`、`inspect_local_storage`、`read_go_dependency`）完整扫描并阅读源码，查明并在 `four_step_report.step1_discovery` 与 `summary` 中按固定结构简洁明了地向用户输出以下全部内容（用户在界面上核对并确认第一步分析结果后，再进入第二步执行改造）：
 
 1. **应用是干啥的**：应用的核心业务定位、主要功能模块与目标场景。
-2. **开发语言与版本**：使用什么语言、运行时版本（如 Python 3.11、Node.js 20、Go 1.22、Java 17）及核心框架版本。
-3. **有哪些接口 (APIs)**：完整盘点路由路径、HTTP 方法、请求参数/正文、响应结构及副作用类型（`read` / `write` / `destructive` / `external`）。
-4. **有哪些页面 (Pages)**：完整盘点前端页面路由、页面用途及可执行的关键交互操作。
+2. **开发语言与版本**：使用什么语言、精确运行时版本要求（如使用 `StrEnum` 必须锁定 Python 3.11+、Node.js 20、Go 1.22、Java 17）及核心前后端框架版本。
+3. **有哪些接口 (APIs，零遗漏全量盘点)**：基于 `scan_routes_and_pages` 扫描结果与源码阅读，完整盘点全部路由路径、HTTP 方法、请求参数/正文、响应结构及副作用类型（`read` / `write` / `destructive` / `external`），不得遗漏任何一个接口。
+4. **有哪些页面与业务视图 (Pages，零遗漏全量盘点)**：完整盘点前端所有独立页面路由及单页应用（SPA）内部的业务子面板/视图组件、页面用途及可执行的关键交互操作。
 5. **页面是否有权限验证**：访问各个页面是否需要登录或特定角色权限。
 6. **是否有管理员账号及账密解密**：
    - 通过应用的配置文件、初始化脚本、种子数据（seed）、本地数据库或源码逻辑，查找本地或远端记录的管理员/默认登录账号与密码。
    - **若密码经过加密、编码或哈希**（如 Base64、Hex、AES、自定义可逆加密或已知默认密码哈希），请调用 `inspect_credentials_and_decrypt` 工具并结合应用源码中的加解密/校验函数逆向还原出明文密码，明确输出管理员账号与明文密码。
-7. **调用接口是否需要授权**：API 是否需要 Bearer Token、Session Cookie、API Key 或 Basic Auth。
+7. **调用接口是否需要授权**：API 是否需要 Bearer Token、Session Cookie、API Key、`X-Admin-Token` 或 Basic Auth。
 8. **能否拿到登录的账号密码**：明确说明是否已拿到可用登录账密或固定 Token；若拿到，直接输出账号密码是什么。
 9. **数据存在哪里**：
-   - **本地 SQLite**（如 `.sqlite` / `.db` 文件）
+   - **本地 SQLite**（如 `.sqlite` / `.sqlite3` / `.db` 文件，说明表数量与数据行数）
    - **本地 JSON 或其他本地文件**（如 `.json` / `.csv` / 本地文件目录）
    - **远端数据库实例**（非本机回环地址的外部/内网数据库）
    - **本地数据库实例**（连接地址为 `127.0.0.1` / `localhost` 的 MySQL、PostgreSQL、SQLServer 等）
@@ -41,9 +41,9 @@ metadata:
 
 ---
 
-## 第二步：明确并执行要改造哪些内容 (Step 2: Smart Transformation & Auto-Migration)
+## 第二步：明确并执行要改造哪些内容，输出简明改造报告 (Step 2: Smart Transformation & Report)
 
-在 `four_step_report.step2_transformation` 与 `changes` 中落实以下改造规则：
+在用户确认第一步分析结果后，执行改造并在 `four_step_report.step2_transformation` 与 `changes` 中生成**简明易懂的改造报告**（清晰告诉用户新增了什么、修改了什么、删减了什么、数据库怎么处理的，无需堆砌复杂代码细节）：
 
 1. **`Dockerfile` 改造或生成**：
    - 先调用 `fetch_dockerfile_template(language, version)` 从 `platform-opc`（`deploy-opc` 数据库）获取同语言、同版本的标准 `Dockerfile` 模板与基础镜像。
@@ -64,15 +64,18 @@ metadata:
 
 ---
 
-## 第三步：生成无授权阻碍的应用技能 (Step 3: Auth-Ready App Skill Generation)
+## 第三步：生成无授权阻碍、全量收录页面与接口的应用技能 (Step 3: Full-Coverage App Skill Generation)
 
-生成的应用技能（`app-<slug>`）**绝不能因为登录或接口授权问题，导致后续 AI 在调用该技能获取页面或 API 数据时受阻**：
+生成的应用技能（`app-<slug>`）必须**将用户上传应用内包含的所有页面（含 SPA 子视图/面板）与所有后端接口 100% 放入应用技能内，绝不遗漏**，且**不能因为登录或接口授权问题导致后续 AI 调用受阻**：
 
-1. **写入 `contract.auth_profile`**：
+1. **全量收录所有页面与所有接口（零遗漏）**：
+   - `contract.pages` 必须包含前端全部路由页面及业务视图/子面板；
+   - `contract.apis` 必须包含后端全部 API 路由（包括公共接口、业务单据接口、字典配置接口、管理端接口等），不得只挑代表性接口或随意省略管理接口。
+2. **写入 `contract.auth_profile`**：
    - 若应用存在页面登录或 API 鉴权，将第一步中获取/解密并验证过的管理员账号、明文密码、登录接口路径（`login_url`）、Token 字段路径（`token_json_path`）或固定授权码完整填入 `contract.auth_profile`。
-2. **访问页面需要登录**：
+3. **访问页面需要登录**：
    - 打包器会自动把 `contract.auth_profile` 中的管理员账号密码写入生成的 `SKILL.md`「登录与接口授权凭据（已内置）」章节，直接告诉调用该技能的 AI 使用技能内记录的账密完成页面登录。
-3. **调用 API 需要授权**：
+4. **调用 API 需要授权**：
    - 在 `contract.apis[].auth` 中声明认证方式，同时配套的 `scripts/invoke_api.py` 会自动读取 `references/operations.json` 中的 `auth_profile`：当外部未传入环境变量时，自动使用内置授权码或自动调用应用的登录接口换取 Token / Cookie 并按应用认可的方式传入请求头。
 
 ---

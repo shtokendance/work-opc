@@ -377,14 +377,21 @@ def render_skill_markdown(contract):
         md += "- **API 调用指引**：`scripts/invoke_api.py` 已自动读取 `references/operations.json` 中的 `auth_profile` 完成令牌注入或自动登录兑换，确保接口调用不会因授权受阻。\n\n"
     else:
         md += "先阅读 references/operations.json 的业务、参数、响应和认证约定。页面操作需要调用方具备浏览器工具，不能把页面描述当成已执行结果。\n\n"
+    apis = contract.get("apis", [])
+    pages = contract.get("pages", [])
+    md += f"## 应用能力概览\n\n- **收录页面/业务视图总数**：{len(pages)} 个\n- **收录 API 接口总数**：{len(apis)} 个\n\n"
     md += "## 业务操作\n\n"
-    for api in contract["apis"]:
-        md += f"- **{api['id']}**：{api['purpose']}；`{api['method']} {api['path']}`；副作用 `{api['effect']}`。\n"
+    for api in apis:
+        param_names = [f"{p['name']}({p['in']}{'*' if p.get('required') else ''})" for p in api.get("parameters", [])]
+        param_desc = f"；参数：`{', '.join(param_names)}`" if param_names else ""
+        auth_type = (api.get("auth") or {}).get("type", "none")
+        auth_desc = f"；鉴权：`{auth_type}`" if auth_type != "none" else ""
+        md += f"- **{api['id']}**：{api['purpose']}；`{api['method']} {api['path']}`；副作用 `{api['effect']}`{param_desc}{auth_desc}。\n"
     md += "\n## 页面\n\n"
-    for page in contract.get("pages", []):
+    for page in pages:
         actions = "；".join(action if isinstance(action, str) else json.dumps(action, ensure_ascii=False) for action in page.get("actions", []))
         md += f"- `{page['path']}`：{page['purpose']}。操作：{actions}。页面交互需调用方有浏览器能力，HTTP 脚本不能替代浏览器。\n"
-    if not contract.get("pages"):
+    if not pages:
         md += "此应用未声明页面，以 API 为准。\n"
     md += "\n## 业务流程\n\n"
     for flow in contract.get("workflows") or contract.get("verification", {}).get("workflows", []):
