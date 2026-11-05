@@ -4634,23 +4634,47 @@ export async function recheckAppHealth(
   const targetAppUrl = (appUrl || "").trim().replace(/\/+$/, "");
   if (targetAppUrl) {
     try {
-      const probeRes = await globalThis.fetch(`${targetAppUrl}/healthz`, {
+      // 2.1 优先探测 /healthz
+      let probeRes = await globalThis.fetch(`${targetAppUrl}/healthz`, {
         signal: AbortSignal.timeout(6000),
-      });
-      if (probeRes.ok) {
+      }).catch(() => null);
+
+      let passed = false;
+      if (probeRes && probeRes.ok) {
         const text = await probeRes.text();
         const lower = text.toLowerCase().trim();
         if (!lower.includes("powered by caprover") && !lower.startsWith("<!doctype") && !lower.startsWith("<html")) {
-          // 向平台同步更新状态为 running
-          await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "running" }),
-          }).catch(() => {});
-          return { ok: true, status: "running", message: "应用健康检查通过，状态已恢复正常运行" };
+          passed = true;
         }
       }
-      return { ok: false, status: "failed", error: `健康检查未通过 (HTTP ${probeRes.status})` };
+
+      // 2.2 若 /healthz 不存在，回退探测根路径 (/) 业务入口
+      if (!passed) {
+        const rootRes = await globalThis.fetch(`${targetAppUrl}/`, {
+          signal: AbortSignal.timeout(6000),
+        }).catch(() => null);
+        if (rootRes && rootRes.ok) {
+          const rootText = await rootRes.text();
+          const rLower = rootText.toLowerCase().trim();
+          if (!rLower.includes("powered by caprover") && !rLower.includes("captain-root-domain") && rLower.length > 0) {
+            passed = true;
+            probeRes = rootRes;
+          }
+        }
+      }
+
+      if (passed) {
+        // 向平台同步更新状态为 running
+        await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "running" }),
+        }).catch(() => {});
+        return { ok: true, status: "running", message: "应用健康检查通过，状态已恢复正常运行" };
+      }
+
+      const statusText = probeRes ? `HTTP ${probeRes.status}` : "服务未就绪";
+      return { ok: false, status: "failed", error: `健康检查未通过 (${statusText})` };
     } catch (e: any) {
       return { ok: false, status: "failed", error: `健康检查请求失败: ${e.message || String(e)}` };
     }

@@ -304,20 +304,42 @@ def register_app_delivery_routes(app, manager):
                     raise ValueError("应用尚未分配访问地址，无法执行健康检查")
 
                 health_url = app_url + "/healthz"
+                root_url = app_url + "/"
+                probe_resp = None
                 try:
                     probe_resp = await client.get(health_url, timeout=10.0)
-                except Exception as probe_err:
-                    raise ValueError(f"健康检查请求失败: {probe_err}")
+                except Exception:
+                    pass
 
-                s = probe_resp.text.lower().strip()
-                is_invalid = (
-                    "powered by caprover" in s
-                    or "captain-root-domain" in s
-                    or s.startswith("<!doctype html")
-                    or s.startswith("<html")
-                )
-                if probe_resp.status_code != 200 or is_invalid:
-                    raise ValueError(f"健康检查未通过 (HTTP {probe_resp.status_code})：服务未就绪或返回异常")
+                # 1. 优先校验 /healthz
+                passed = False
+                if probe_resp is not None and probe_resp.status_code == 200:
+                    s = probe_resp.text.lower().strip()
+                    is_invalid = (
+                        "powered by caprover" in s
+                        or "captain-root-domain" in s
+                        or s.startswith("<!doctype html")
+                        or s.startswith("<html")
+                    )
+                    if not is_invalid:
+                        passed = True
+
+                # 2. 若应用未实现 /healthz，回退探测主页面入口 (/)
+                if not passed:
+                    try:
+                        root_resp = await client.get(root_url, timeout=10.0)
+                        if root_resp.status_code == 200:
+                            rs = root_resp.text.lower().strip()
+                            if "powered by caprover" not in rs and "captain-root-domain" not in rs and len(rs) > 0:
+                                passed = True
+                                probe_resp = root_resp
+                    except Exception as root_err:
+                        if probe_resp is None:
+                            raise ValueError(f"健康检查请求失败: {root_err}")
+
+                if not passed:
+                    code_str = f"HTTP {probe_resp.status_code}" if probe_resp else "超时"
+                    raise ValueError(f"健康检查未通过 ({code_str})：服务未就绪或返回异常")
 
                 # 探活通过，向平台更新状态为 running
                 try:
