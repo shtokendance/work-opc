@@ -302,7 +302,20 @@ class AppDelivery:
         if not files:
             return None
         plan = delivery.load(files[-1])
-        return {"summary": plan["summary"], "issues": plan["issues"], "unresolved": plan.get("unresolved", []) + plan.get("contract", {}).get("unresolved", []), "decisions": plan.get("decisions", []), "changes": [{k: c[k] for k in ("id", "path", "reason")} for c in plan["changes"]]}
+        prev_contract = plan.get("contract") or {}
+        compact_contract = {
+            k: prev_contract[k]
+            for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "configs", "resources", "verification")
+            if k in prev_contract
+        }
+        return {
+            "summary": plan["summary"],
+            "issues": plan["issues"],
+            "unresolved": plan.get("unresolved", []) + prev_contract.get("unresolved", []),
+            "decisions": plan.get("decisions", []),
+            "changes": [{k: c[k] for k in ("id", "path", "reason") if k in c} for c in plan.get("changes", [])],
+            "contract": compact_contract,
+        }
 
     def skill_preview(self, job_id):
         data = self.load(job_id)
@@ -390,6 +403,15 @@ class AppDelivery:
         registry = ToolRegistry()
         proposal = {}
         draft_files = {}
+        history_files = sorted((self.path(job_id) / "history").glob("*/proposal.json"), key=lambda p: int(p.parent.name))
+        if history_files:
+            try:
+                last_prop = delivery.load(history_files[-1])
+                for prev_ch in last_prop.get("changes", []):
+                    if isinstance(prev_ch, dict) and prev_ch.get("id") and prev_ch.get("path") and isinstance(prev_ch.get("content"), str):
+                        draft_files[prev_ch["id"]] = dict(prev_ch)
+            except Exception:
+                pass
         validation_errors = []
         source_cache: dict[tuple[str, int, int], str] = {}
 
@@ -683,6 +705,8 @@ IMPORTANT ANTI-LOOP RULES:
 2. `scan_routes_and_pages` automatically caches 100% of APIs and pages in the backend and auto-merges them into `contract.apis` and `contract.pages` inside `submit_proposal`. When an app has many APIs, you do NOT need to manually re-type all 60+ API objects in `submit_proposal` — you can pass `contract.apis=[]` (or only a few customized APIs) and the backend will deterministically populate all scanned APIs and pages with zero omissions.
 3. When the user's feedback asks to migrate SQLite to platform PostgreSQL (or confirms database migration), that selection IS full authorization to modify all involved database connection code and dependencies. Immediately call `migrate_storage_to_platform`, propose the necessary database connection adaptation (`db.py` + `psycopg2-binary` in `requirements.txt`) and Dockerfile via `propose_file_change`, and call `submit_proposal` with `unresolved=[]`. NEVER put "尚无经过核实的 PostgreSQL 连接适配实现" or "数据库切换不能视为已完成" into `unresolved`.
 4. When multiple platform resources exist, `available_resource_metadata` already provides the `is_default: true` default resource for each type (`postgres`, `redis`, `s3`, etc.). Always use the default resource of the matching type without asking the user which resource of the same type to pick.
+5. NEVER ask the user whether to keep default/demo admin passwords (e.g. `admin / ChangeMe123!`) or whether local JSON/file data can be stored in container local files — always preserve existing demo accounts (and record them in `contract.auth_profile`) and preserve local JSON/files in `build_context` automatically.
+6. Format `summary` cleanly using multi-line sections separated by `\\n` (e.g., `【应用定位】...\\n【运行环境】...\\n【接口与页面】...\\n【登录与鉴权】...\\n【数据与存储】...\\n【改造与技能】...`) rather than jamming everything into a single paragraph. When `previous_plan` is present (Round 2+ after user answers), DO NOT repeat Step 1 discovery or re-read unchanged files; reuse the pre-staged `changes` IDs from `previous_plan.changes` and write a concise 2-3 line `summary` confirming how `user_answers` were applied.
 """
         model_settings: dict[str, Any] = {"max_tokens": 32000}
         effort = data.get("reasoning_effort")
@@ -693,7 +717,13 @@ IMPORTANT ANTI-LOOP RULES:
             model_settings["extra_body"] = {"think": bool(thinking)}
         engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=100, model_settings=model_settings, tool_result_max_bytes=0)
         ai_resources = select_and_filter_platform_resources(data.get("resources") or [], data["slug"], default_only=True)
-        prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": ai_resources, "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范生成分析与改造方案。"}, ensure_ascii=False)
+        prev_plan = self.previous_plan(job_id)
+        task_instruction = (
+            "这是基于上一轮分析结果（previous_plan）的用户确认/补充轮次。上一轮暂存的文件修改（changes）已预载入暂存区（未改动的文件可直接按原 id 引用，无需重复读取源码或重新调用 propose_file_change），扫描的全部接口与页面也已由后端缓存并自动合并。请仅针对 user_answers 进行必要的增量调整并直接调用 submit_proposal（unresolved 设为空数组 []）。本轮 summary 只需简明说明已按用户确认完成了哪些调整，严禁重复输出『第一步发现：…』等全量摸底内容！"
+            if (prev_plan and data.get("feedback", "").strip())
+            else "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范分段清晰输出分析与改造方案。"
+        )
+        prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": ai_resources, "user_answers": data.get("feedback", ""), "previous_plan": prev_plan, "task": task_instruction}, ensure_ascii=False)
         async def run_analysis():
             request = prompt
             for attempt in range(3):

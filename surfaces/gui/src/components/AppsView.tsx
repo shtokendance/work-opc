@@ -108,6 +108,9 @@ export function AppsView({ onBack }: Props) {
   const [loadingVersions, setLoadingVersions] = useState<boolean>(false);
   const [rollingBackVersion, setRollingBackVersion] = useState<number | null>(null);
   const [recheckingSlug, setRecheckingSlug] = useState<string | null>(null);
+  const [step2CanContinue, setStep2CanContinue] = useState(false);
+  const [step2Running, setStep2Running] = useState(false);
+  const step2NextRef = useRef<(() => void) | null>(null);
 
   // Platform Resource API Configuration state
   const [showPlatformConfigModal, setShowPlatformConfigModal] = useState(false);
@@ -1197,7 +1200,31 @@ export function AppsView({ onBack }: Props) {
 
               {/* STEP 2 */}
               {step === 2 && (jobId
-                ? <AppDeliveryReview jobId={jobId} initialFeedback={repairFeedback} onReady={deliveryReady} onInvalidate={() => { setDeliveryJob(null); readyArtifact.current = ""; }} onReplaceSource={() => { setReimportJobId(jobId); setSelectedFile(null); setSourcePath(""); setStep(1); }} onNextStep={() => setStep(3)} onlineResources={onlineResources} />
+                ? (
+                  <AppDeliveryReview
+                    jobId={jobId}
+                    initialFeedback={repairFeedback}
+                    onReady={deliveryReady}
+                    onInvalidate={() => {
+                      setDeliveryJob(null);
+                      readyArtifact.current = "";
+                    }}
+                    onReplaceSource={() => {
+                      setReimportJobId(jobId);
+                      setSelectedFile(null);
+                      setSourcePath("");
+                      setStep(1);
+                    }}
+                    onNextStep={() => setStep(3)}
+                    onlineResources={onlineResources}
+                    footerMode="external"
+                    onStepStateChange={({ canContinue, running, triggerNext }) => {
+                      setStep2CanContinue(canContinue);
+                      setStep2Running(running);
+                      step2NextRef.current = triggerNext;
+                    }}
+                  />
+                )
                 : <div className="p-6 text-muted">正在安全解包并连接所选 AI…</div>)}
 
               {step === 3 && (
@@ -1592,12 +1619,19 @@ export function AppsView({ onBack }: Props) {
                   <>
                     <button
                       onClick={() => setStep(1)}
-                      disabled={transforming}
+                      disabled={transforming || step2Running}
                       className="px-4 py-2 rounded-xl border border-line text-ui font-medium text-muted hover:text-ink hover:bg-paper disabled:opacity-40 transition-colors"
                     >
                       ← 重新选择源码
                     </button>
-                    <span className="text-xs text-muted">在上方与 AI 对话；准备好后可进入部署核对。</span>
+                    <button
+                      type="button"
+                      onClick={() => step2NextRef.current?.()}
+                      disabled={!step2CanContinue}
+                      className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 disabled:opacity-40 text-white text-ui font-medium shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      下一步 (核对部署内容)
+                    </button>
                   </>
                 )}
                 {step === 3 && (
