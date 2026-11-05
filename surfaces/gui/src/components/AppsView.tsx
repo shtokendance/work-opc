@@ -34,6 +34,15 @@ import { AppDeliveryArtifacts } from "./AppDeliveryArtifacts";
 import { chooseFolder } from "../tauri";
 import { toAppSlug } from "../appSlug";
 
+function formatLogOutput(raw?: string): string {
+  if (!raw) return "";
+  return raw
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0)
+    .join("\n");
+}
+
 interface Props {
   onBack?: () => void;
 }
@@ -1589,7 +1598,7 @@ export function AppsView({ onBack }: Props) {
                       ref={logContainerRef}
                       className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label flex-1 min-h-0 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
                     >
-                      {buildLogs || "等待输出..."}
+                      {formatLogOutput(buildLogs) || "等待输出..."}
                     </pre>
                   </div>
                 </div>
@@ -2182,7 +2191,7 @@ export function AppsView({ onBack }: Props) {
                       </div>
                     </div>
                     <pre className="p-3.5 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[300px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white">
-                      {loadingRuntimeLogs ? "正在拉取服务端容器实时运行日志..." : (runtimeLogs || "暂无实时运行日志输出")}
+                      {loadingRuntimeLogs ? "正在拉取服务端容器实时运行日志..." : (formatLogOutput(runtimeLogs) || "暂无实时运行日志输出")}
                     </pre>
                   </div>
 
@@ -2190,7 +2199,7 @@ export function AppsView({ onBack }: Props) {
                     <div className="flex items-center justify-between text-meta text-muted">
                       <span className="font-semibold text-ink">最近构建与部署日志 (Build Logs)</span>
                       <button
-                        onClick={() => copyToClipboard(selectedApp.build_log || "", "部署日志")}
+                        onClick={() => copyToClipboard(formatLogOutput(selectedApp.build_log), "部署日志")}
                         className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
                       >
                         <Icon name="copy" size={12} />
@@ -2198,7 +2207,7 @@ export function AppsView({ onBack }: Props) {
                       </button>
                     </div>
                     <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[240px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
-                      {selectedApp.build_log || "暂无构建日志输出"}
+                      {formatLogOutput(selectedApp.build_log) || "暂无构建日志输出"}
                     </pre>
                   </div>
 
