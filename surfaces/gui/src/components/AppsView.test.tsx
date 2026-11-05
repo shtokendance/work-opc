@@ -230,4 +230,28 @@ describe("AppsView Component", () => {
     fireEvent.click(recheckBtn);
     expect(recheckAppHealth).toHaveBeenCalledWith("smart-expense", "http://smart-expense.10.101.102.116.nip.io:8080");
   });
+
+  it("automatically generates pinyin slug from app name and handles IME composition in slug field", async () => {
+    render(<AppsView />);
+    fireEvent.click(screen.getByRole("button", { name: "新建应用" }));
+
+    const nameInput = screen.getByPlaceholderText(/报销审批助手/);
+    const slugInput = screen.getByPlaceholderText(/devops-aly（仅限/);
+
+    // 1. Typing Chinese name automatically generates pinyin slug
+    fireEvent.change(nameInput, { target: { value: "自动报销系统" } });
+    expect((slugInput as HTMLInputElement).value).toBe("zi-dong-bao-xiao-xi-tong");
+
+    // 2. Simulating IME composition in slug input does not disrupt or duplicate
+    fireEvent.compositionStart(slugInput);
+    fireEvent.change(slugInput, { target: { value: "baoxiao" } });
+    // Still not clobbering while composing
+    fireEvent.compositionEnd(slugInput, { target: { value: "报销" } });
+    expect((slugInput as HTMLInputElement).value).toBe("bao-xiao");
+
+    // 3. User can click reset to re-derive from name
+    const resetBtn = screen.getByRole("button", { name: "根据应用名称重新生成" });
+    fireEvent.click(resetBtn);
+    expect((slugInput as HTMLInputElement).value).toBe("zi-dong-bao-xiao-xi-tong");
+  });
 });

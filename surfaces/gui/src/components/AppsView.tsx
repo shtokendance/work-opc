@@ -32,6 +32,7 @@ import { AppDeliveryReview } from "./AppDeliveryReview";
 import { AppSkillPreview } from "./AppSkillPreview";
 import { AppDeliveryArtifacts } from "./AppDeliveryArtifacts";
 import { chooseFolder } from "../tauri";
+import { toAppSlug } from "../appSlug";
 
 interface Props {
   onBack?: () => void;
@@ -51,6 +52,9 @@ export function AppsView({ onBack }: Props) {
   // Wizard Step 1 form fields
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
+  const isSlugComposingRef = useRef(false);
+  const isNameComposingRef = useRef(false);
   const [description, setDescription] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [sourcePath, setSourcePath] = useState("");
@@ -489,6 +493,9 @@ export function AppsView({ onBack }: Props) {
     setStep(1);
     setName("");
     setSlug("");
+    setSlugManuallyEdited(false);
+    isSlugComposingRef.current = false;
+    isNameComposingRef.current = false;
     setRedeploySlug("");
     setDescription("");
     setSelectedFile(null);
@@ -555,6 +562,53 @@ export function AppsView({ onBack }: Props) {
     }
     setSelectedResourceIds([...new Set(items.map(item => item.resource_id).filter((id): id is string => !!id))]);
   };
+
+  const handleNameChange = (val: string) => {
+    setName(val);
+    if (!slugManuallyEdited && !redeploySlug && !isNameComposingRef.current) {
+      setSlug(toAppSlug(val));
+      setSlugError(null);
+    }
+  };
+
+  const handleNameCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+    isNameComposingRef.current = false;
+    const finalVal = e.currentTarget.value;
+    setName(finalVal);
+    if (!slugManuallyEdited && !redeploySlug) {
+      setSlug(toAppSlug(finalVal));
+      setSlugError(null);
+    }
+  };
+
+  const handleSlugChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSlugManuallyEdited(true);
+    // When composing with IME (e.g. Chinese Pinyin), do not touch or re-format
+    // to avoid WebKit committing partial composition and duplicating syllables
+    if (isSlugComposingRef.current || (e.nativeEvent as InputEvent).isComposing) {
+      return;
+    }
+    setSlug(toAppSlug(e.target.value, { allowTrailingDash: true }));
+    setSlugError(null);
+  };
+
+  const handleSlugCompositionStart = () => {
+    isSlugComposingRef.current = true;
+  };
+
+  const handleSlugCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+    isSlugComposingRef.current = false;
+    setSlugManuallyEdited(true);
+    const val = e.currentTarget.value;
+    setSlug(toAppSlug(val, { allowTrailingDash: true }));
+    setSlugError(null);
+  };
+
+  const handleSlugBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    isSlugComposingRef.current = false;
+    const val = toAppSlug(e.currentTarget.value, { allowTrailingDash: false });
+    setSlug(val);
+  };
   const plan = deliveryJob?.proposal;
   const hasBusinessProbe = plan?.verification_plan?.cases?.some(c => plan.apis.some(api => api.id === c.operation && api.effect === "read" && api.path !== plan.health_path));
 
@@ -601,6 +655,7 @@ export function AppsView({ onBack }: Props) {
           </button>
           <button
             onClick={() => {
+              setSlugManuallyEdited(false);
               setStep(1);
               setIsModalOpen(true);
             }}
@@ -630,7 +685,11 @@ export function AppsView({ onBack }: Props) {
               点击右上角「新建应用」，选择单应用源码文件夹或 ZIP，由 AI 分析部署差距。AI 改造完成后，核对配置和业务技能，再确认部署。
             </p>
             <button
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                setSlugManuallyEdited(false);
+                setStep(1);
+                setIsModalOpen(true);
+              }}
               className="px-4 py-2 rounded-lg bg-accent hover:opacity-90 text-white text-xs font-medium"
             >
               新建第一个应用
@@ -860,21 +919,42 @@ export function AppsView({ onBack }: Props) {
                     <input
                       type="text"
                       value={name}
-                      onChange={(e) => setName(e.target.value)}
+                      onChange={(e) => handleNameChange(e.target.value)}
+                      onCompositionStart={() => { isNameComposingRef.current = true; }}
+                      onCompositionEnd={handleNameCompositionEnd}
                       placeholder="例如：报销审批助手 / 阿里云效流水线"
                       className="w-full px-3.5 py-2 rounded-xl border border-line bg-paper text-ink placeholder:text-muted/60 focus:outline-accent focus:border-accent"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-meta font-medium text-ink mb-1.5">
-                      唯一标识 (slug) <span className="text-danger">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-meta font-medium text-ink">
+                        唯一标识 (slug) <span className="text-danger">*</span>
+                      </label>
+                      {!redeploySlug && slugManuallyEdited && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSlugManuallyEdited(false);
+                            if (name.trim()) {
+                              setSlug(toAppSlug(name));
+                            }
+                          }}
+                          className="text-label text-accent hover:underline cursor-pointer"
+                        >
+                          根据应用名称重新生成
+                        </button>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={slug}
-                      onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                      placeholder="例如：devops-aly（仅限小写字母、数字和中划线）"
+                      onChange={handleSlugChange}
+                      onCompositionStart={handleSlugCompositionStart}
+                      onCompositionEnd={handleSlugCompositionEnd}
+                      onBlur={handleSlugBlur}
+                      placeholder="例如：devops-aly（仅限小写字母、数字和中划线，支持中文拼音转换）"
                       className="w-full px-3.5 py-2 rounded-xl border border-line bg-paper text-ink font-mono placeholder:text-muted/60 focus:outline-accent focus:border-accent"
                     />
                     {slugError && <p className="text-label text-danger mt-1">{slugError}</p>}
