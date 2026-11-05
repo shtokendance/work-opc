@@ -379,6 +379,7 @@ def register_app_delivery_routes(app, manager):
                 "version_note": version_note,
                 "app_config": json.dumps(body.get("app_config", [])),
                 "resource_ids": json.dumps(body.get("resource_ids", [])),
+                "storage_mounts": json.dumps(data["proposal"]["contract"].get("storage_mounts", [])),
             }
             files = {"app_tar": ("app.tar", (folder / "app.tar").read_bytes(), "application/x-tar"), "skill_zip": ("skill.zip", (folder / "skill.zip").read_bytes(), "application/zip")}
             async with httpx.AsyncClient(timeout=60, trust_env=False) as client:

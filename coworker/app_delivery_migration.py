@@ -241,8 +241,151 @@ def _fallback_template(language: str, version: str) -> dict:
     }
 
 
+_PERSISTENT_DIR_CATALOG: dict[str, dict[str, str]] = {
+    "data": {"purpose": "业务状态与 JSON/本地数据文件持久化目录", "kind": "data_dir"},
+    "uploads": {"purpose": "用户上传文件与现场证据附件持久化目录", "kind": "upload_dir"},
+    "upload": {"purpose": "用户上传文件持久化目录", "kind": "upload_dir"},
+    "reports": {"purpose": "评估报告与导出文件持久化目录", "kind": "report_dir"},
+    "backups": {"purpose": "业务数据快照与备份归档目录", "kind": "backup_dir"},
+    "backup": {"purpose": "业务数据快照与备份归档目录", "kind": "backup_dir"},
+    "storage": {"purpose": "应用运行时本地持久化存储目录", "kind": "data_dir"},
+    "attachments": {"purpose": "业务附件与凭证持久化目录", "kind": "upload_dir"},
+    "exports": {"purpose": "业务导出报表持久化目录", "kind": "report_dir"},
+    "db_data": {"purpose": "本地数据库与数据文件持久化目录", "kind": "data_dir"},
+}
+
+_EXCLUDED_PERSISTENT_PARENT_DIRS = {
+    "src", "lib", "app", "web", "public", "static", "assets", "views", "pages",
+    "components", "routes", "controllers", "models", "services", "utils", "helpers",
+    "middleware", "test", "tests", "__tests__", "spec", "docs", "doc", "miniprogram",
+    "node_modules", "vendor", "dist", "build", ".git", ".github", ".vscode", ".idea",
+}
+
+_SOURCE_CODE_EXTENSIONS = {
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".go", ".java", ".kt", ".cs", ".rb", ".php", ".vue", ".svelte",
+}
+
+_CODE_MUTABLE_DIR_RE = re.compile(
+    r"""(?i)(?:join|resolve)\s*\([^)]*?['"](data|uploads|upload|reports|backups|backup|storage|attachments|exports|db_data)['"]\s*\)|"""
+    r"""(?:DATA_DIR|UPLOAD_DIR|UPLOAD_FOLDER|REPORT_DIR|BACKUP_DIR|STORAGE_DIR)\s*(?:=|\|\||\?\?)\s*[^;\n]*?['"](/[^'"]+|data|uploads|upload|reports|backups|backup|storage|attachments|exports)['"]"""
+)
+
+
+def inspect_local_file_storage(
+    source: Path,
+    slug: str = "",
+    workdir: str = "/app",
+    has_migrations: bool = False,
+) -> dict:
+    """Detect local JSON/file data directories, upload folders, report/backup folders, and seed files
+    that require external persistent volume mounting (Docker Volume / Host Bind / S3-OSS).
+    """
+    clean_workdir = "/" + (workdir or "/app").strip().strip("/")
+    clean_slug = re.sub(r"[^a-z0-9-]+", "-", (slug or "app").lower()).strip("-") or "app"
+
+    dir_seed_files: dict[str, list[str]] = {}
+    dir_has_code: set[str] = set()
+    code_referenced_dirs: set[str] = set()
+
+    for p in sorted(source.rglob("*")):
+        if p.is_symlink():
+            continue
+        rel_parts = p.relative_to(source).parts
+        if not rel_parts or any(part in delivery.EXCLUDED for part in rel_parts):
+            continue
+        top = rel_parts[0]
+        if top in _EXCLUDED_PERSISTENT_PARENT_DIRS:
+            continue
+
+        # 1. Check top-level persistent directories (e.g. data/, uploads/, reports/, backups/)
+        if top in _PERSISTENT_DIR_CATALOG:
+            if p.is_dir() and len(rel_parts) == 1:
+                dir_seed_files.setdefault(top, [])
+            elif p.is_file():
+                ext = p.suffix.lower()
+                if ext in _SOURCE_CODE_EXTENSIONS:
+                    dir_has_code.add(top)
+                elif not (has_migrations and ext in {".sqlite", ".sqlite3", ".db"}):
+                    dir_seed_files.setdefault(top, []).append(p.relative_to(source).as_posix())
+
+        # 2. Check second-level persistent directories (e.g. reimburse-web/server/data)
+        if len(rel_parts) >= 2 and top not in _PERSISTENT_DIR_CATALOG and not any(part in _EXCLUDED_PERSISTENT_PARENT_DIRS for part in rel_parts[:-1]):
+            if p.is_dir() and len(rel_parts) <= 3 and rel_parts[-1] in _PERSISTENT_DIR_CATALOG:
+                rel_dir = p.relative_to(source).as_posix()
+                dir_seed_files.setdefault(rel_dir, [])
+            elif p.is_file():
+                for idx in range(2, min(4, len(rel_parts))):
+                    cand_name = rel_parts[idx - 1]
+                    if cand_name in _PERSISTENT_DIR_CATALOG:
+                        rel_dir = "/".join(rel_parts[:idx])
+                        ext = p.suffix.lower()
+                        if ext in _SOURCE_CODE_EXTENSIONS:
+                            dir_has_code.add(rel_dir)
+                        elif not (has_migrations and ext in {".sqlite", ".sqlite3", ".db"}):
+                            dir_seed_files.setdefault(rel_dir, []).append(p.relative_to(source).as_posix())
+
+        # 3. Scan source code for runtime mutable directories (e.g. join(root, "uploads"), join(root, "reports"))
+        if p.is_file() and p.suffix.lower() in {".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".java", ".cs"} and p.stat().st_size <= 2_000_000:
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            for m in _CODE_MUTABLE_DIR_RE.finditer(text):
+                raw_dir = (m.group(1) or m.group(2) or "").strip().strip("/")
+                if not raw_dir:
+                    continue
+                base_dir = raw_dir.split("/")[-1].lower()
+                if base_dir in _PERSISTENT_DIR_CATALOG:
+                    code_referenced_dirs.add(base_dir)
+
+    for d in sorted(code_referenced_dirs):
+        if d not in dir_has_code:
+            dir_seed_files.setdefault(d, [])
+
+    candidate_dirs = sorted(d for d in dir_seed_files if d not in dir_has_code)
+    # Deduplicate nested directories (if both 'data' and 'data/uploads' matched, keep outer 'data')
+    filtered_dirs: list[str] = []
+    for d in candidate_dirs:
+        if any(parent != d and d.startswith(parent + "/") for parent in candidate_dirs):
+            continue
+        # Only keep a directory if it either has seed files OR was explicitly referenced in code OR is a top-level existing directory
+        if dir_seed_files.get(d) or d in code_referenced_dirs or ("/" not in d and (source / d).is_dir()):
+            filtered_dirs.append(d)
+
+    mounts: list[dict] = []
+    for rel_dir in filtered_dirs:
+        base_name = rel_dir.split("/")[-1].lower()
+        meta = _PERSISTENT_DIR_CATALOG.get(base_name, {"purpose": "应用持久化数据目录", "kind": "data_dir"})
+        seeds = sorted(set(dir_seed_files.get(rel_dir, [])))
+        container_path = f"{clean_workdir}/{rel_dir}".replace("//", "/")
+        vol_suffix = re.sub(r"[^a-z0-9-]+", "-", rel_dir.lower()).strip("-") or base_name
+        purpose = meta["purpose"]
+        if seeds:
+            sample_names = ", ".join(Path(s).name for s in seeds[:3])
+            if len(seeds) > 3:
+                sample_names += f" 等 {len(seeds)} 个文件"
+            purpose = f"{meta['purpose']}（含初始种子文件：{sample_names}）"
+        mounts.append({
+            "name": base_name if "/" not in rel_dir else vol_suffix,
+            "relative_path": rel_dir,
+            "container_path": container_path,
+            "purpose": purpose,
+            "kind": meta["kind"],
+            "volume_name": f"opc-vol-{clean_slug}-{vol_suffix}",
+            "storage_backend": "docker_volume",
+            "seed_files_count": len(seeds),
+            "seed_files": seeds[:10],
+        })
+
+    return {
+        "has_persistent_file_storage": bool(mounts),
+        "storage_mounts": mounts,
+    }
+
+
 def inspect_local_sqlite_files(source: Path, sqlite_rel_path: str = "") -> dict:
-    """Inspect SQLite database files inside the application source directory."""
+    """Inspect SQLite database files AND local JSON/file storage mounts inside the application source directory."""
     candidates = []
     if sqlite_rel_path.strip():
         p = delivery.relative(source, sqlite_rel_path.strip())
@@ -279,7 +422,11 @@ def inspect_local_sqlite_files(source: Path, sqlite_rel_path: str = "") -> dict:
             ],
         })
     databases.sort(key=lambda d: (d.get("total_rows", 0), d.get("table_count", 0), d.get("size_bytes", 0)), reverse=True)
-    return {"sqlite_databases": databases}
+    file_storage = inspect_local_file_storage(source)
+    return {
+        "sqlite_databases": databases,
+        "local_file_storage": file_storage,
+    }
 
 
 def extract_sqlite_tables(sqlite_file: Path, max_rows_per_table: int | None = None) -> list[dict]:
@@ -622,6 +769,9 @@ def scan_app_routes_and_pages(source: Path) -> dict:
     # 4. Scan frontend pages and SPA sub-panels
     pages = _scan_frontend_pages(source, source_files)
 
+    # 5. Scan local file storage (JSON state files, uploads, reports, backups)
+    local_file_storage = inspect_local_file_storage(source)
+
     return {
         "runtime": runtime_info,
         "api_count": len(sorted_apis),
@@ -629,6 +779,7 @@ def scan_app_routes_and_pages(source: Path) -> dict:
         "apis": sorted_apis,
         "page_count": len(pages),
         "pages": pages,
+        "local_file_storage": local_file_storage,
     }
 
 
@@ -2033,6 +2184,135 @@ def _auto_adapt_sqlite_to_postgres_changes(source: Path, slug: str, data: dict, 
                 build_ctx.append(top_dir if "/" in ch_path else ch_path)
 
 
+def _auto_adapt_persistent_file_storage(source: Path, slug: str, data: dict, proposal: dict) -> list[dict]:
+    """Automatically detect local JSON/file data directories and upload/report/backup folders,
+    populate contract['storage_mounts'], include existing seed folders in contract['build_context'],
+    and inject non-destructive .opc-seed backup & startup seed hydration into Dockerfile.
+    """
+    contract = proposal.setdefault("contract", {})
+    changes: list[dict] = proposal.setdefault("changes", [])
+    changes_by_path: dict[str, dict] = {
+        str(c.get("path", "")): c for c in changes if isinstance(c, dict) and c.get("path")
+    }
+
+    # 1. Extract WORKDIR from proposed or existing Dockerfile
+    df_text = ""
+    if "Dockerfile" in changes_by_path and isinstance(changes_by_path["Dockerfile"].get("content"), str):
+        df_text = changes_by_path["Dockerfile"]["content"]
+    elif (source / "Dockerfile").is_file():
+        try:
+            df_text = (source / "Dockerfile").read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            pass
+    workdir = "/app"
+    m_wd = re.search(r"(?im)^\s*WORKDIR\s+([^\s#]+)", df_text)
+    if m_wd and m_wd.group(1).startswith("/"):
+        workdir = m_wd.group(1).rstrip("/") or "/app"
+
+    # 2. Deterministically inspect local file storage & merge with any AI-declared mounts
+    has_migrations = bool(data.get("migrations"))
+    scanned_storage = inspect_local_file_storage(source, slug=slug, workdir=workdir, has_migrations=has_migrations)
+    mounts_by_cpath: dict[str, dict] = {}
+    for item in scanned_storage.get("storage_mounts") or []:
+        if isinstance(item, dict) and item.get("container_path"):
+            mounts_by_cpath[item["container_path"]] = dict(item)
+
+    for raw in contract.get("storage_mounts") or []:
+        if not isinstance(raw, dict):
+            continue
+        rel = str(raw.get("relative_path") or raw.get("name") or "").strip().strip("/")
+        cpath = str(raw.get("container_path") or (f"{workdir}/{rel}" if rel else "")).strip()
+        if not cpath.startswith("/") or cpath in {"/", "/app", workdir}:
+            continue
+        if cpath not in mounts_by_cpath:
+            base_name = cpath.rstrip("/").split("/")[-1].lower()
+            clean_slug = re.sub(r"[^a-z0-9-]+", "-", (slug or "app").lower()).strip("-") or "app"
+            mounts_by_cpath[cpath] = {
+                "name": str(raw.get("name") or base_name),
+                "relative_path": rel or base_name,
+                "container_path": cpath,
+                "purpose": str(raw.get("purpose") or "应用持久化数据与文件目录"),
+                "kind": str(raw.get("kind") or "data_dir"),
+                "volume_name": str(raw.get("volume_name") or f"opc-vol-{clean_slug}-{base_name}"),
+                "storage_backend": str(raw.get("storage_backend") or "docker_volume"),
+                "seed_files_count": int(raw.get("seed_files_count") or 0),
+                "seed_files": list(raw.get("seed_files") or []),
+            }
+
+    mounts = sorted(mounts_by_cpath.values(), key=lambda m: m["container_path"])
+    if not mounts:
+        return []
+
+    contract["storage_mounts"] = mounts
+
+    # 3. Ensure build_context includes existing seed directories so initial JSON/files enter the image
+    build_ctx: list[str] = contract.setdefault("build_context", [])
+    if isinstance(build_ctx, list) and build_ctx and "." not in build_ctx:
+        for m in mounts:
+            rel_dir = str(m.get("relative_path") or "").strip().strip("/")
+            if not rel_dir or not (source / rel_dir).exists():
+                continue
+            covered = any(rel_dir == entry.rstrip("/") or rel_dir.startswith(entry.rstrip("/") + "/") for entry in build_ctx if isinstance(entry, str))
+            if not covered:
+                top_dir = rel_dir.split("/")[0]
+                if (source / top_dir).exists() and top_dir not in build_ctx:
+                    build_ctx.append(top_dir)
+
+    # 4. Inject .opc-seed build-time snapshot & /opc-storage-init.sh non-destructive startup seed hydration into Dockerfile
+    if df_text and ".opc-seed" not in df_text and "opc-storage-init.sh" not in df_text:
+        rel_dirs_sh = " ".join(
+            f'"{m["relative_path"]}"' for m in mounts if re.fullmatch(r"[A-Za-z0-9_./-]+", str(m.get("relative_path", "")))
+        )
+        cpaths_sh = " ".join(
+            f'"{m["container_path"]}"' for m in mounts if re.fullmatch(r"[A-Za-z0-9_./-]+", str(m.get("container_path", "")))
+        )
+        if rel_dirs_sh and cpaths_sh:
+            has_entrypoint = bool(re.search(r"(?im)^\s*ENTRYPOINT\s+", df_text))
+            seed_snippet_lines = [
+                "# [OPC Persistent Storage] Backup initial seed data & hydrate external volume on startup",
+                f"RUN mkdir -p {workdir}/.opc-seed {cpaths_sh} \\",
+                f"    && for d in {rel_dirs_sh}; do \\",
+                f'         if [ -d "{workdir}/$d" ] && [ -n "$(ls -A "{workdir}/$d" 2>/dev/null)" ]; then \\',
+                f'           mkdir -p "{workdir}/.opc-seed/$d" && cp -a "{workdir}/$d/." "{workdir}/.opc-seed/$d/"; \\',
+                "         fi; \\",
+                "       done \\",
+                f"    && printf '#!/bin/sh\\nset -e\\nfor d in {rel_dirs_sh}; do\\n  mkdir -p \"{workdir}/$d\"\\n  if [ -d \"{workdir}/.opc-seed/$d\" ]; then\\n    for f in \"{workdir}/.opc-seed/$d\"/* \"{workdir}/.opc-seed/$d\"/.[!.]*; do\\n      [ -e \"$f\" ] || continue\\n      bn=\"$(basename \"$f\")\"\\n      [ -e \"{workdir}/$d/$bn\" ] || cp -a \"$f\" \"{workdir}/$d/$bn\"\\n    done\\n  fi\\ndone\\nexec \"$@\"\\n' > /opc-storage-init.sh \\",
+                "    && chmod +x /opc-storage-init.sh",
+            ]
+            if not has_entrypoint:
+                seed_snippet_lines.append('ENTRYPOINT ["/opc-storage-init.sh"]')
+            seed_block = "\n".join(seed_snippet_lines)
+
+            lines = df_text.splitlines()
+            insert_idx = len(lines)
+            for idx in range(len(lines) - 1, -1, -1):
+                stripped = lines[idx].strip().upper()
+                if stripped.startswith("CMD ") or stripped.startswith("CMD[") or stripped.startswith("EXPOSE "):
+                    insert_idx = idx
+            updated_df = "\n".join(lines[:insert_idx] + [seed_block] + lines[insert_idx:]) + "\n"
+            mount_summary = "、".join(m["container_path"] for m in mounts)
+            if "Dockerfile" in changes_by_path:
+                changes_by_path["Dockerfile"]["content"] = updated_df
+                old_reason = str(changes_by_path["Dockerfile"].get("reason") or "")
+                if "持久化" not in old_reason and "外部卷" not in old_reason:
+                    changes_by_path["Dockerfile"]["reason"] = (
+                        f"{old_reason.rstrip('。')}；自动配置 {mount_summary} 外部持久化卷种子保护，应用更新或重启不丢失本地数据。"
+                    )
+            elif (source / "Dockerfile").is_file():
+                df_change = {
+                    "id": "dockerfile-persistent-storage",
+                    "path": "Dockerfile",
+                    "group": "持久化数据与文件保护",
+                    "reason": f"配置 {mount_summary} 外部持久化存储卷与初始种子数据保护，确保版本升级不丢失本地文件",
+                    "content": updated_df,
+                    "executable": False,
+                }
+                changes.append(df_change)
+                changes_by_path["Dockerfile"] = df_change
+
+    return mounts
+
+
 def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dict) -> dict:
     """Ensure 100% of statically scanned APIs & pages are present in proposal['contract'],
     and build a fixed-format Step 1 Discovery Report (proposal['discovery_report']) and
@@ -2082,6 +2362,9 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
 
     # 2b. When user has migrated SQLite to platform PostgreSQL, auto-complete any missing DB code/driver/config adaptations
     _auto_adapt_sqlite_to_postgres_changes(source, str(data.get("slug", "")), data, proposal)
+
+    # 2b-2. Automatically detect & adapt persistent local file storage (JSON state, uploads, reports, backups)
+    storage_mounts = _auto_adapt_persistent_file_storage(source, str(data.get("slug", "")), data, proposal)
 
     # 2c. Filter out internal tool/truncation/row-diff/db-adaptation/default-password/local-json noise from unresolved & decisions
     internal_noise_re = re.compile(
@@ -2171,7 +2454,25 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
         and not str(r.get("id", "")).lower().startswith("db-")
     ]
     pg_resources.sort(key=lambda r: (0 if r.get("is_default") else 1, str(r.get("id", ""))))
-    storage_type = step1_ai.get("storage_type") or ("sqlite" if sqlite_dbs else "none")
+    storage_type = step1_ai.get("storage_type") or (
+        "sqlite" if sqlite_dbs else ("persistent_volume" if storage_mounts else "none")
+    )
+    mount_paths_desc = "、".join(m["container_path"] for m in storage_mounts)
+    default_storage_plan = (
+        f"检测到本地 SQLite 数据库（共 {sqlite_dbs[0]['table_count']} 张表、{sqlite_dbs[0].get('total_rows', 0)} 条记录），可迁移至平台 {pg_resources[0]['name']} 或保留应用内置 SQLite"
+        if (sqlite_dbs and pg_resources)
+        else (
+            "保留应用内置 SQLite 数据库随镜像部署"
+            if sqlite_dbs
+            else (
+                f"已自动配置容器外持久化存储卷挂载（{mount_paths_desc}），保留初始种子文件且应用升级/重启不丢失数据，并支持无缝扩展 S3/OSS 对象存储"
+                if storage_mounts
+                else "无本地持久化数据库文件"
+            )
+        )
+    )
+    if storage_mounts and sqlite_dbs:
+        default_storage_plan += f"；同时自动挂载外部持久化目录（{mount_paths_desc}）"
 
     api_modules: dict[str, int] = {}
     for a in existing_apis:
@@ -2262,11 +2563,8 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
             "can_migrate_to_platform_pg": bool(sqlite_dbs and pg_resources),
             "platform_pg_resource": pg_resources[0]["name"] if pg_resources else "",
             "platform_pg_id": pg_resources[0]["id"] if pg_resources else "",
-            "storage_migration_plan": step2_ai.get("storage_migration") or (
-                f"检测到本地 SQLite 数据库（共 {sqlite_dbs[0]['table_count']} 张表、{sqlite_dbs[0].get('total_rows', 0)} 条记录），可迁移至平台 {pg_resources[0]['name']} 或保留应用内置 SQLite"
-                if (sqlite_dbs and pg_resources)
-                else ("保留应用内置 SQLite 数据库随镜像部署" if sqlite_dbs else "无本地持久化数据库文件")
-            ),
+            "storage_mounts": storage_mounts,
+            "storage_migration_plan": step2_ai.get("storage_migration") or default_storage_plan,
         },
         "foundation_and_container": {
             "has_dockerfile": scan["runtime"]["has_dockerfile"],

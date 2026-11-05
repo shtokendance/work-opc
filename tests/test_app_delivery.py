@@ -761,6 +761,66 @@ def test_native_node_routes_and_structured_summary_without_round2_repetition(tmp
     assert "【确认已生效】" in prop2["summary"]
 
 
+def test_persistent_file_storage_discovery_and_dockerfile_seed_adaptation(tmp_path):
+    from coworker.app_delivery_migration import enrich_contract_and_discovery_report, inspect_local_file_storage
+
+    app_dir = tmp_path / "supplier-app"
+    (app_dir / "data").mkdir(parents=True)
+    (app_dir / "src" / "data").mkdir(parents=True)
+    # Seed JSON files in data/
+    (app_dir / "data" / "state.json").write_text('{"suppliers": []}', encoding="utf-8")
+    (app_dir / "data" / "complaints-store.json").write_text('{"items": []}', encoding="utf-8")
+    # Frontend code file under src/data/ must NEVER be treated as a mutable volume mount
+    (app_dir / "src" / "data" / "seedData.js").write_text("export const seed = [];", encoding="utf-8")
+    # Server code referencing data, uploads, reports, backups
+    (app_dir / "server.mjs").write_text(
+        'const dataDir = join(root, "data");\n'
+        'const uploadDir = join(root, "uploads");\n'
+        'const reportDir = join(root, "reports");\n'
+        'const backupDir = join(root, "backups");\n',
+        encoding="utf-8",
+    )
+
+    storage = inspect_local_file_storage(app_dir, slug="supplier")
+    assert storage["has_persistent_file_storage"] is True
+    by_path = {m["container_path"]: m for m in storage["storage_mounts"]}
+    assert set(by_path.keys()) == {"/app/data", "/app/uploads", "/app/reports", "/app/backups"}
+    assert by_path["/app/data"]["seed_files_count"] == 2
+    assert by_path["/app/data"]["volume_name"] == "opc-vol-supplier-data"
+    assert by_path["/app/uploads"]["kind"] == "upload_dir"
+
+    prop = proposal()
+    prop["changes"] = [
+        {
+            "id": "dockerfile",
+            "path": "Dockerfile",
+            "reason": "添加容器构建配置",
+            "content": "FROM node:20-alpine\nWORKDIR /app\nCOPY . .\nEXPOSE 8080\nCMD [\"node\", \"server.mjs\"]\n",
+            "executable": False,
+        }
+    ]
+    prop["contract"]["build_context"] = ["Dockerfile", "server.mjs"]
+    job_data = {"slug": "test-app", "name": "供应商系统", "port": 8080, "revision": 1, "resources": []}
+    enrich_contract_and_discovery_report(app_dir, job_data, prop)
+
+    # 1. contract.storage_mounts is populated
+    c_mounts = {m["container_path"]: m for m in prop["contract"].get("storage_mounts", [])}
+    assert "/app/data" in c_mounts
+    assert "/app/uploads" in c_mounts
+    # 2. build_context automatically includes "data" so seed files enter the image
+    assert "data" in prop["contract"]["build_context"]
+    # 3. Dockerfile is automatically enhanced with .opc-seed backup and /opc-storage-init.sh entrypoint
+    df_content = prop["changes"][0]["content"]
+    assert ".opc-seed" in df_content
+    assert "/opc-storage-init.sh" in df_content
+    assert 'ENTRYPOINT ["/opc-storage-init.sh"]' in df_content
+    # 4. Discovery and transformation reports include persistent volume plan
+    assert prop["discovery_report"]["storage_and_database"]["storage_type"] == "persistent_volume"
+    assert len(prop["discovery_report"]["storage_and_database"]["storage_mounts"]) == 4
+    assert "/app/data" in prop["transformation_report"]["storage_summary"]
+
+
+
 
 
 

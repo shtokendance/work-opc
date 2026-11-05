@@ -595,6 +595,20 @@ export function AppDeliveryReview({
                       </details>
                     </div>
                   ))}
+                  {!!discovery?.storage_and_database?.storage_mounts?.length && (
+                    <div className="flex flex-wrap gap-1.5 py-0.5">
+                      {discovery.storage_and_database.storage_mounts.map((m) => (
+                        <span
+                          key={m.container_path}
+                          title={m.purpose || m.container_path}
+                          className="rounded border border-brand/25 bg-brand/5 px-1.5 py-0.5 font-mono text-[11px] text-ink"
+                        >
+                          📁 {m.container_path} → {m.volume_name || m.name}
+                          {typeof m.seed_files_count === "number" && m.seed_files_count > 0 ? ` (种子文件:${m.seed_files_count})` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div>{discovery?.storage_and_database?.storage_migration_plan}</div>
                 </div>
               </div>
