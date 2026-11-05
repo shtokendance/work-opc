@@ -114,7 +114,7 @@ def secret_lines(text, source_name=""):
 
 
 def text_of(path):
-    require(path.stat().st_size <= 2_000_000, "text file exceeds inspection limit: " + path.name)
+    require(path.stat().st_size <= 50_000_000, "text file exceeds inspection limit: " + path.name)
     raw = path.read_bytes()
     if b"\x00" in raw:
         return None
@@ -135,7 +135,7 @@ def inspect_source(source):
         rel = path.relative_to(source).as_posix()
         raw = path.read_bytes()
         files.append({"path": rel, "bytes": len(raw), "sha256": sha(raw)})
-        if len(raw) <= 2_000_000:
+        if len(raw) <= 5_000_000:
             text = text_of(path)
             if text is not None:
                 for line in secret_lines(text, rel):
@@ -166,7 +166,7 @@ def prepare(args):
                         require(not item.is_symlink() and item.is_file(), "source contains a symlink or special file")
                         size = item.stat().st_size
                         count, total = count + 1, total + size
-                        require(count <= 20000 and size <= 32 * 1024 * 1024 and total <= 256 * 1024 * 1024, "source directory exceeds snapshot limits")
+                        require(count <= 200000 and size <= 1024 * 1024 * 1024 and total <= 4 * 1024 * 1024 * 1024, "source directory exceeds snapshot limits")
                         z.write(item, item.relative_to(archive).as_posix())
             child = argparse.Namespace(**vars(args))
             child.archive = str(snapshot)
@@ -175,12 +175,12 @@ def prepare(args):
             inventory["source_type"] = "directory-snapshot"
             save(work / "inventory.json", inventory)
             return result
-    require(archive.stat().st_size <= 256 * 1024 * 1024, "compressed archive exceeds 256 MiB")
+    require(archive.stat().st_size <= 4 * 1024 * 1024 * 1024, "compressed archive exceeds 4 GiB")
     with zipfile.ZipFile(archive) as z:
         members = z.infolist()
-        require(len(members) <= 20000, "archive has too many entries")
-        require(sum(m.file_size for m in members) <= 256 * 1024 * 1024, "archive expands beyond 256 MiB")
-        require(all(m.file_size <= 32 * 1024 * 1024 for m in members), "archive contains oversized file")
+        require(len(members) <= 200000, "archive has too many entries")
+        require(sum(m.file_size for m in members) <= 4 * 1024 * 1024 * 1024, "archive expands beyond 4 GiB")
+        require(all(m.file_size <= 1024 * 1024 * 1024 for m in members), "archive contains oversized file")
         source = work / "source"
         # Validate the entire archive before creating files.
         names = set()

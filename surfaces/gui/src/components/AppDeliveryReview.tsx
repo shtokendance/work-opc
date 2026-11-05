@@ -428,14 +428,29 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                     </span>
                   </div>
                   {discovery?.storage_and_database?.sqlite_databases?.map(db => (
-                    <div key={db.path} className="text-[11px] bg-paper/80 rounded-lg p-2 border border-line/60 space-y-0.5">
+                    <div key={db.path} className="text-[11px] bg-paper/80 rounded-lg p-2 border border-line/60 space-y-1">
                       <div className="font-mono text-ink">
                         {db.path} ({db.size_mb} MB · {db.table_count} 张表 · {db.total_rows} 条记录)
                       </div>
-                      <div className="text-muted truncate" title={db.table_names.join(", ")}>
-                        核心表：{db.table_names.slice(0, 8).join("、")}
-                        {db.table_names.length > 8 ? ` 等 ${db.table_names.length} 张表` : ""}
-                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-accent hover:underline select-none">
+                          查看全部 {db.table_names.length} 张数据表及行数明细
+                        </summary>
+                        <div className="mt-1.5 flex flex-wrap gap-1 max-h-36 overflow-y-auto pr-1">
+                          {(db.tables && db.tables.length > 0
+                            ? db.tables
+                            : db.table_names.map(n => ({ name: n, row_count: undefined, column_count: undefined }))
+                          ).map(t => (
+                            <span
+                              key={t.name}
+                              className="px-1.5 py-0.5 rounded bg-panel border border-line/70 font-mono text-[10px] text-ink"
+                            >
+                              {t.name}
+                              {typeof t.row_count === "number" ? ` (${t.row_count}行)` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      </details>
                     </div>
                   ))}
                   <div>{discovery?.storage_and_database?.storage_migration_plan}</div>

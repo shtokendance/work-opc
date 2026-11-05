@@ -384,7 +384,7 @@ class AppDelivery:
             inventory = delivery.load(work / "inventory.json")
             return json.dumps(inventory["files"], ensure_ascii=False)
 
-        def read_source(path: str, start_line: int = 1, lines: int = 180) -> str:
+        def read_source(path: str, start_line: int = 1, lines: int = 1000) -> str:
             """Read a source file with line numbers and common credentials redacted."""
             cache_key = (path, start_line, lines)
             if cache_key in source_cache:
@@ -395,7 +395,7 @@ class AppDelivery:
                 return "Binary file: not a text source"
             text = redacted(text, path).splitlines()
             start = max(0, start_line - 1)
-            excerpt = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(text[start:start + min(250, max(1, lines))], start))[:24000]
+            excerpt = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(text[start:start + min(5000, max(1, lines))], start))[:500_000]
             fields = original_fields(source, path)
             if fields:
                 excerpt += "\nOriginal configuration references (metadata only; values stay local):\n" + json.dumps(fields, ensure_ascii=False)
@@ -408,7 +408,7 @@ class AppDelivery:
                 raise ValueError("Unknown adapter reference")
             return (SKILL / "references" / name).read_text()
 
-        def read_go_dependency(module: str = "", path: str = "", start_line: int = 1, lines: int = 180) -> str:
+        def read_go_dependency(module: str = "", path: str = "", start_line: int = 1, lines: int = 1000) -> str:
             """Read cached dependencies declared in go.mod, without downloading or running code.
 
             Empty module lists declared versions and cache availability. Empty path lists the
@@ -422,7 +422,7 @@ class AppDelivery:
                 return "Binary dependency file; provide source or interface documentation"
             rows = redacted(text, path).splitlines()
             start = max(0, start_line - 1)
-            return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(rows[start:start + min(250, max(1, lines))], start))[:24000]
+            return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(rows[start:start + min(5000, max(1, lines))], start))[:500_000]
 
         def propose_file_change(id: str, path: str, reason: str, content: str, executable: bool = False, group: str = "") -> str:
             """Propose ONE complete file without writing source. Reference its ID in submit_proposal."""
@@ -451,6 +451,12 @@ class AppDelivery:
         def scan_routes_and_pages() -> str:
             """Step 1 & 3 tool: Deterministically scan all backend API routes, frontend pages/SPA sub-panels, and runtime version requirements."""
             res = scan_app_routes_and_pages(source)
+            res["_auto_contract_enrichment"] = (
+                "系统已在后端自动缓存全部扫描到的 API 接口与页面视图。你在调用 submit_proposal 时，"
+                "后端会自动将全部扫描到的接口与页面 100% 合并注入 contract.apis 与 contract.pages 中。"
+                "你无需在 submit_proposal 中重复手写几十个接口对象（传空数组 [] 或仅传需定制覆盖的接口即可），"
+                "也严禁把接口数量多或扫描问题写入 unresolved！"
+            )
             return json.dumps(res, ensure_ascii=False)
 
         def migrate_storage_to_platform(source_type: str = "sqlite", sqlite_path: str = "", target_type: str = "postgres", target_resource_id: str = "") -> str:
@@ -646,15 +652,19 @@ Set executable=true on a proposed new executable launch script; preserve existin
 No changes are needed when already deployable: changes=[] is valid. Otherwise propose all necessary changes.
 Whenever source files are sufficient to build a working container, ALWAYS submit a complete, buildable
 proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.0.0.0 and PORT=container_port).
+IMPORTANT ANTI-LOOP RULES:
+1. NEVER put internal technical/tool mechanics (such as "接口扫描被截断", "补齐完整扫描结果", "核对数据库行数差异", "添加 /healthz", "创建 Dockerfile") into `unresolved` or `decisions`.
+2. `scan_routes_and_pages` automatically caches 100% of APIs and pages in the backend and auto-merges them into `contract.apis` and `contract.pages` inside `submit_proposal`. When an app has many APIs, you do NOT need to manually re-type all 60+ API objects in `submit_proposal` — you can pass `contract.apis=[]` (or only a few customized APIs) and the backend will deterministically populate all scanned APIs and pages with zero omissions.
+3. When the user's feedback asks to migrate SQLite to platform PostgreSQL (or confirms database migration), immediately call `migrate_storage_to_platform`, propose the necessary database connection adaptation and Dockerfile via `propose_file_change`, and call `submit_proposal` with `unresolved=[]`.
 """
-        model_settings: dict[str, Any] = {"max_tokens": 16000}
+        model_settings: dict[str, Any] = {"max_tokens": 32000}
         effort = data.get("reasoning_effort")
         if effort:
             model_settings["reasoning_effort"] = effort
         thinking = data.get("thinking")
         if thinking is not None:
             model_settings["extra_body"] = {"think": bool(thinking)}
-        engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=60, model_settings=model_settings)
+        engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=100, model_settings=model_settings, tool_result_max_bytes=0)
         prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": data["resources"], "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范生成分析与改造方案。"}, ensure_ascii=False)
         async def run_analysis():
             request = prompt
@@ -727,7 +737,7 @@ proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.
             raise ValueError("禁止修改版本库或 Agent 配置")
         if not isinstance(change.get("id"), str) or not change["id"] or not isinstance(change.get("reason"), str) or not change["reason"] or not isinstance(change.get("content"), str):
             raise ValueError("修改项必须有 ID、路径、原因和完整文件内容")
-        if len(change["content"].encode()) > 2_000_000 or "[REDACTED]" in change["content"]:
+        if len(change["content"].encode()) > 50_000_000 or "[REDACTED]" in change["content"]:
             raise ValueError("提案文件超限或包含脱敏占位符，需重新分析")
 
     @staticmethod

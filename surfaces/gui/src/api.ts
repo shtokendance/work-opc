@@ -4841,7 +4841,14 @@ export interface AppDeliveryJob {
       };
       storage_and_database?: {
         storage_type?: string;
-        sqlite_databases?: { path: string; size_mb: number; table_count: number; total_rows: number; table_names: string[] }[];
+        sqlite_databases?: {
+          path: string;
+          size_mb: number;
+          table_count: number;
+          total_rows: number;
+          table_names: string[];
+          tables?: { name: string; row_count: number; column_count?: number }[];
+        }[];
         can_migrate_to_platform_pg?: boolean;
         platform_pg_resource?: string;
         platform_pg_id?: string;

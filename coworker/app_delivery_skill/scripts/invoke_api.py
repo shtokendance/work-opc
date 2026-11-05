@@ -208,11 +208,11 @@ def execute(contract, operation, params, body=None, approve_write=False, credent
     # Do not forward credentials through redirects or system proxies.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
-        with opener.open(request, timeout=20) as response:
-            return response.status, response.headers.get("Content-Type", ""), response.read(2_000_001)
+        with opener.open(request, timeout=180) as response:
+            return response.status, response.headers.get("Content-Type", ""), response.read(100_000_001)
     except urllib.error.HTTPError as exc:
         try:
-            return exc.code, exc.headers.get("Content-Type", ""), exc.read(2_000_001)
+            return exc.code, exc.headers.get("Content-Type", ""), exc.read(100_000_001)
         finally:
             exc.close()
 
@@ -234,8 +234,8 @@ def main():
         params = read_json(args.params, args.params_file)
         body = read_json("null", args.body_file)
         status, content_type, content = execute(contract, args.operation, params, body, args.approve_write)
-        if len(content) > 2_000_000:
-            raise ValueError("response exceeds 2 MB; narrow the query")
+        if len(content) > 100_000_000:
+            raise ValueError("response exceeds 100 MB; narrow the query")
         print(content.decode("utf-8", errors="replace"))
         return 0 if 200 <= status < 300 else 1
     except (ValueError, KeyError, OSError, urllib.error.URLError) as exc:

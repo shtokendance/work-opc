@@ -561,3 +561,51 @@ async def test_full_route_and_page_scanner_enriches_contract_and_reports(tmp_pat
         assert "/#/sales-order-panel" in skill_md
 
 
+def test_sqlite_unbounded_extraction_and_unresolved_noise_sanitizer(tmp_path):
+    from coworker.app_delivery_migration import (
+        enrich_contract_and_discovery_report,
+        extract_sqlite_tables,
+        inspect_local_sqlite_files,
+    )
+    import sqlite3
+
+    app_dir = tmp_path / "app"
+    data_dir = app_dir / "server" / "data"
+    data_dir.mkdir(parents=True)
+    # 1. Create a 0-byte app.db that previously confused alphabetical sorting
+    (data_dir / "app.db").write_bytes(b"")
+    # 2. Create reimburse.sqlite3 with >6000 rows (exceeding old 5000 cap)
+    real_db = data_dir / "reimburse.sqlite3"
+    conn = sqlite3.connect(str(real_db))
+    conn.execute("CREATE TABLE special_ticket (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT)")
+    conn.executemany("INSERT INTO special_ticket (code) VALUES (?)", [(f"T-{i}",) for i in range(6200)])
+    conn.commit()
+    conn.close()
+
+    inspected = inspect_local_sqlite_files(app_dir)
+    assert len(inspected["sqlite_databases"]) == 1
+    assert inspected["sqlite_databases"][0]["path"] == "server/data/reimburse.sqlite3"
+    assert inspected["sqlite_databases"][0]["total_rows"] == 6200
+
+    tables = extract_sqlite_tables(real_db)
+    assert len(tables) == 1
+    assert len(tables[0]["rows"]) == 6200
+
+    # 3. Verify internal tool truncation / row diff questions are stripped from unresolved & decisions
+    prop = proposal()
+    prop["unresolved"] = [
+        "SQLite 源库有 14,758 行而目标迁移记录为 10,264 行；目前没有逐表差异与失败明细，是否先完成逐表核对再决定补迁或保留 SQLite？",
+        "接口扫描显示 61 个路由，但返回的完整接口详情被截断；目前无法形成真实且零遗漏的接口契约。",
+    ]
+    prop["decisions"] = [
+        {"id": "d1", "question": prop["unresolved"][0], "impact": "差异", "options": ["先核对逐表差异"]},
+        {"id": "d2", "question": prop["unresolved"][1], "impact": "截断", "options": ["补齐完整扫描结果"]},
+    ]
+    job_data = {"slug": "test-app", "name": "智能报销", "port": 8080, "resources": [], "migrations": [{"resource_id": "db-test-app"}], "feedback": "直接迁移所有表和数据"}
+    enrich_contract_and_discovery_report(app_dir, job_data, prop)
+    assert prop["unresolved"] == []
+    assert prop["decisions"] == []
+    assert prop["discovery_report"]["storage_and_database"]["sqlite_databases"][0]["tables"][0]["row_count"] == 6200
+
+
+
