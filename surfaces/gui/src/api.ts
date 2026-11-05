@@ -4876,6 +4876,16 @@ export interface AppDeliveryJob {
         can_migrate_to_platform_pg?: boolean;
         platform_pg_resource?: string;
         platform_pg_id?: string;
+        storage_mounts?: {
+          name: string;
+          relative_path?: string;
+          container_path: string;
+          purpose?: string;
+          kind?: string;
+          volume_name?: string;
+          storage_backend?: string;
+          seed_files_count?: number;
+        }[];
         storage_migration_plan?: string;
       };
       foundation_and_container?: {

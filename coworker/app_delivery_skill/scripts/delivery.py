@@ -422,7 +422,7 @@ def bundle_work(work, out):
             info = tarfile.TarInfo("captain-definition")
             info.size, info.mode = len(data), 0o644
             tar.addfile(info, io.BytesIO(data))
-    manifest = {"slug": contract["slug"], "app_url": contract["base_url"], "container_port": contract["runtime"]["port"], "configs": [{"key": c["key"], "value": "" if c.get("secret") else c.get("default", ""), "required": bool(c.get("required")), "description": c.get("description", "")} for c in contract.get("configs", [])], "detected_resource_types": [r["type"] for r in contract.get("resources", [])], "apis": contract["apis"], "pages": contract.get("pages", []), "skill_version": VERSION, "verification_status": "not-verified"}
+    manifest = {"slug": contract["slug"], "app_url": contract["base_url"], "container_port": contract["runtime"]["port"], "configs": [{"key": c["key"], "value": "" if c.get("secret") else c.get("default", ""), "required": bool(c.get("required")), "description": c.get("description", "")} for c in contract.get("configs", [])], "detected_resource_types": [r["type"] for r in contract.get("resources", [])], "storage_mounts": contract.get("storage_mounts", []), "apis": contract["apis"], "pages": contract.get("pages", []), "skill_version": VERSION, "verification_status": "not-verified"}
     save(out / "app-manifest.json", manifest)
     md = render_skill_markdown(contract)
     with zipfile.ZipFile(out / "skill.zip", "w", zipfile.ZIP_DEFLATED) as z:
@@ -510,6 +510,10 @@ def smoke(args):
         evidence["checks"].append({"kind": "build", "ok": True})
         docker("network", "create", "--internal", "--label", LABEL + "=" + run_id, network)
         command = ["run", "--detach", "--name", args.container, "--label", LABEL + "=" + run_id, "--network", network, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "512m", "--cpus", "1", "--tmpfs", "/tmp:rw,nosuid,size=64m"]
+        for mount in contract.get("storage_mounts", []):
+            cpath = str(mount.get("container_path", "")).strip() if isinstance(mount, dict) else ""
+            if cpath.startswith("/") and cpath not in {"/", "/tmp", "/app"} and re.fullmatch(r"/[A-Za-z0-9_./-]+", cpath):
+                command += ["--tmpfs", f"{cpath}:rw,nosuid,size=64m"]
         for key, value in environment.items():
             command += ["-e", key + "=" + value]
         if local_host:

@@ -135,6 +135,7 @@ class AppDelivery:
                 "changes": changes,
                 "configs": configs,
                 "detected_resources": enriched["contract"].get("resources", []),
+                "storage_mounts": enriched["contract"].get("storage_mounts", []),
                 "apis": enriched["contract"].get("apis", []),
                 "pages": enriched["contract"].get("pages", []),
                 "health_path": enriched["contract"].get("health", {}).get("path"),
@@ -305,7 +306,7 @@ class AppDelivery:
         prev_contract = plan.get("contract") or {}
         compact_contract = {
             k: prev_contract[k]
-            for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "configs", "resources", "verification")
+            for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "configs", "resources", "storage_mounts", "verification")
             if k in prev_contract
         }
         return {
@@ -631,6 +632,7 @@ class AppDelivery:
                     },
                     "configs": {"type": "array", "items": {"type": "object", "required": ["key", "default", "secret", "required"], "properties": {"key": {"type": "string"}, "default": {"type": "string"}, "secret": {"type": "boolean"}, "required": {"type": "boolean"}, "description": {"type": "string"}, "source": {"type": "object", "description": "已有值的原文件路径与字段数组引用，例如 path=config.yaml, keys=[db,password]；禁止填写真实秘密值。"}}}},
                     "resources": {"type": "array", "items": {"type": "object"}},
+                    "storage_mounts": {"type": "array", "description": "需要挂载容器外持久化存储的目录列表（如 /app/data、/app/uploads 等）", "items": {"type": "object"}},
                     "apis": {"type": "array", "items": {"type": "object", "required": ["id", "method", "path", "purpose", "evidence", "parameters", "request_body", "responses", "auth", "effect", "confirmation_required"], "properties": {
                         "id": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]}, "path": {"type": "string"}, "purpose": {"type": "string"},
                         "evidence": {"type": "array", "items": {"type": "string"}}, "parameters": {"type": "array", "items": {"type": "object"}}, "request_body": {"anyOf": [{"type": "null"}, {"type": "object"}]},
