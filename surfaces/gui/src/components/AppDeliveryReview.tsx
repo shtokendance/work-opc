@@ -649,7 +649,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                 compact
                 configs={configs.filter(c => problemKeys.has(c.key) || configProblems.some(p => p.key === c.key))}
                 originals={job?.runtime_configs || []}
-                resources={onlineResources}
+                resources={[...new Map([...onlineResources, ...(job?.resources || [])].map(r => [r.id, r])).values()]}
                 onChange={items => {
                   setConfigs(all => all.map(c => items.find(i => i.key === c.key) || c));
                   setConfigEditing(true);

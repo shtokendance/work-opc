@@ -608,4 +608,95 @@ def test_sqlite_unbounded_extraction_and_unresolved_noise_sanitizer(tmp_path):
     assert prop["discovery_report"]["storage_and_database"]["sqlite_databases"][0]["tables"][0]["row_count"] == 6200
 
 
+def test_default_resource_selection_and_auto_postgres_code_adaptation(tmp_path):
+    from coworker.app_delivery_migration import (
+        enrich_contract_and_discovery_report,
+        select_and_filter_platform_resources,
+    )
+
+    # 1. Verify select_and_filter_platform_resources filters other apps' db-* and picks default per type
+    raw_resources = [
+        {"id": "db-baoxiao", "name": "报销库", "type": "postgres", "status": "available"},
+        {"id": "pg-secondary", "name": "备用PG", "type": "postgres", "status": "available", "is_default": False},
+        {"id": "pg-main", "name": "主PG", "type": "postgres", "status": "available", "is_default": True},
+        {"id": "redis-main", "name": "主Redis", "type": "redis", "status": "available"},
+    ]
+    filtered = select_and_filter_platform_resources(raw_resources, slug="test-app")
+    ai_defaults = select_and_filter_platform_resources(raw_resources, slug="test-app", default_only=True)
+    assert [r["id"] for r in filtered] == ["pg-main", "redis-main", "pg-secondary"]
+    assert [r["id"] for r in ai_defaults] == ["pg-main", "redis-main"]
+    assert all(r["is_default"] for r in ai_defaults)
+
+    # 2. Verify auto-adaptation when user chose migrating SQLite to platform Postgres
+    app_dir = tmp_path / "app"
+    (app_dir / "server" / "app").mkdir(parents=True)
+    (app_dir / "requirements.txt").write_text("fastapi==0.115.0\nuvicorn==0.30.0\n", encoding="utf-8")
+    (app_dir / "server" / "app" / "db.py").write_text(
+        "from contextlib import contextmanager\nimport sqlite3\n\n"
+        "@contextmanager\ndef get_conn():\n    conn = sqlite3.connect('data.db')\n    yield conn\n",
+        encoding="utf-8",
+    )
+
+    prop = proposal()
+    prop["changes"] = [
+        {
+            "id": "C01",
+            "path": "Dockerfile",
+            "group": "容器化",
+            "reason": "新增 Dockerfile",
+            "content": "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\nCMD [\"uvicorn\", \"server.app.main:app\"]\n",
+        }
+    ]
+    prop["unresolved"] = [
+        "用户已确认使用专属 PostgreSQL，但当前提案尚无经过核实的 PostgreSQL 连接适配实现，数据库切换不能视为已完成。"
+    ]
+    prop["decisions"] = [
+        {
+            "id": "d_pg",
+            "question": prop["unresolved"][0],
+            "impact": "阻塞切换",
+            "options": ["补齐适配"],
+        }
+    ]
+    job_data = {
+        "slug": "test-app",
+        "name": "自动报销系统",
+        "port": 8080,
+        "resources": filtered,
+        "migrations": [
+            {
+                "kind": "sqlite",
+                "target": "postgres",
+                "resource_id": "db-test-app",
+                "database": "app_test_app",
+                "env_key": "DATABASE_URL",
+                "migrated_tables": 27,
+                "migrated_rows": 14758,
+            }
+        ],
+    }
+    enrich_contract_and_discovery_report(app_dir, job_data, prop)
+
+    # Unresolved blocker about unverified PG adaptation is cleared
+    assert prop["unresolved"] == []
+    assert prop["decisions"] == []
+
+    # db.py and requirements.txt are automatically adapted in proposal changes
+    import ast
+    changes_by_path = {c["path"]: c for c in prop["changes"]}
+    assert "server/app/db.py" in changes_by_path
+    ast.parse(changes_by_path["server/app/db.py"]["content"])
+    assert "OPC Platform PostgreSQL (DATABASE_URL) Compatibility Shim" in changes_by_path["server/app/db.py"]["content"]
+    assert "psycopg2" in changes_by_path["server/app/db.py"]["content"]
+    assert "requirements.txt" in changes_by_path
+    assert "psycopg2-binary" in changes_by_path["requirements.txt"]["content"]
+
+    # Contract configs and resources automatically bind DATABASE_URL and db-test-app
+    config_keys = {c["key"] for c in prop["contract"]["configs"]}
+    assert "DATABASE_URL" in config_keys
+    res_ids = {r["id"] for r in prop["contract"]["resources"]}
+    assert "db-test-app" in res_ids
+
+
+
 
