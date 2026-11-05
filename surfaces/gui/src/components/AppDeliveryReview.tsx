@@ -3,9 +3,119 @@ import { appDeliveryRequest, getAppDeliveryJob, type AppDeliveryJob, type AppCon
 import { AppDeliveryConfig, needsConnectionDecision } from "./AppDeliveryConfig";
 import { Icon } from "./Icon";
 
-export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep, onInvalidate, initialFeedback = "", onlineResources = [] }: {
-  jobId: string; onReady: (job: AppDeliveryJob) => void; onReplaceSource?: () => void;
-  onNextStep?: () => void; onlineResources?: ResourceSummary[]; onInvalidate?: () => void; initialFeedback?: string;
+function renderFormattedSummary(rawText: string) {
+  const trimmed = (rawText || "").trim();
+  if (!trimmed) return null;
+
+  // Short single-sentence text (e.g. unit test fixtures or brief notes): render directly
+  if (
+    trimmed.length <= 50 &&
+    !trimmed.includes("\n") &&
+    !trimmed.includes("【") &&
+    !/第[一二三四]步/.test(trimmed)
+  ) {
+    return <span>{trimmed}</span>;
+  }
+
+  // Split by newlines first; if a line is still a jammed paragraph, split by step markers or sentences
+  const rawLines = trimmed
+    .split(/\n+/)
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  const segments: string[] = [];
+  for (const line of rawLines) {
+    if (!line.startsWith("【") && (/第[一二三四]步/.test(line) || line.length > 60)) {
+      const byStep = line
+        .split(/(?=(?:第一步(?:发现)?[：:]?|第二步(?:拟|改造)?[：:]?|第三步(?:契约)?[：:]?|第四步[：:]?|请确认))/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (byStep.length > 1) {
+        for (const part of byStep) {
+          if (part.length > 110) {
+            const subParts = part
+              .split(/(?<=[。；])\s*/)
+              .map(s => s.trim())
+              .filter(Boolean);
+            segments.push(...subParts);
+          } else {
+            segments.push(part);
+          }
+        }
+        continue;
+      }
+      const bySentence = line
+        .split(/(?<=[。；])\s*/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (bySentence.length > 1) {
+        segments.push(...bySentence);
+        continue;
+      }
+    }
+    segments.push(line);
+  }
+
+  if (segments.length <= 1 && !trimmed.includes("【")) {
+    return <span>{trimmed}</span>;
+  }
+
+  return (
+    <div className="space-y-2 text-xs sm:text-sm leading-relaxed">
+      {segments.map((seg, idx) => {
+        const bracketMatch = seg.match(/^【([^】]+)】\s*(.*)$/);
+        if (bracketMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2 rounded-lg bg-panel/45 border border-line/60 px-2.5 py-1.5">
+              <span className="shrink-0 px-1.5 py-0.5 rounded bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
+                {bracketMatch[1]}
+              </span>
+              <span className="text-ink flex-1">{bracketMatch[2]}</span>
+            </div>
+          );
+        }
+        const stepMatch = seg.match(/^(第[一二三四]步[^：:，。]{0,6}|请确认)[：:]?\s*(.*)$/);
+        if (stepMatch && stepMatch[2]) {
+          return (
+            <div key={idx} className="flex items-start gap-2 rounded-lg bg-panel/45 border border-line/60 px-2.5 py-1.5">
+              <span className="shrink-0 px-1.5 py-0.5 rounded bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
+                {stepMatch[1]}
+              </span>
+              <span className="text-ink flex-1">{stepMatch[2]}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={idx} className="flex items-start gap-2 pl-1">
+            <span className="text-accent font-bold shrink-0 mt-0.5">•</span>
+            <span className="text-ink flex-1">{seg.replace(/^[•\-*]\s*/, "")}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function AppDeliveryReview({
+  jobId,
+  onReady,
+  onReplaceSource,
+  onNextStep,
+  onInvalidate,
+  initialFeedback = "",
+  onlineResources = [],
+  footerMode = "inline",
+  onStepStateChange,
+}: {
+  jobId: string;
+  onReady: (job: AppDeliveryJob) => void;
+  onReplaceSource?: () => void;
+  onNextStep?: () => void;
+  onlineResources?: ResourceSummary[];
+  onInvalidate?: () => void;
+  initialFeedback?: string;
+  footerMode?: "inline" | "external";
+  onStepStateChange?: (state: { canContinue: boolean; running: boolean; triggerNext: () => void }) => void;
 }) {
   const [job, setJob] = useState<AppDeliveryJob | null>(null);
   const [feedback, setFeedback] = useState(initialFeedback);
@@ -71,6 +181,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
         ...j,
         status: "analyzing",
         error: "",
+        discovery_report: j.proposal?.discovery_report || j.discovery_report,
         proposal: undefined,
         artifact_hash: undefined,
         preparation_checks: undefined,
@@ -115,6 +226,25 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
   const awaitingDiscoveryConfirm = job?.status === "review" && !!plan && !questions.length && !activeError && !running;
   const discovery = plan?.discovery_report || job?.discovery_report;
   const transformation = plan?.transformation_report || job?.transformation_report;
+  const autoPreparedHashRef = useRef("");
+
+  // When user has already answered AI questions in a previous round (revision > 1) and the updated proposal has 0 unresolved questions,
+  // automatically execute Step 2 technical preparation so the user does not have to confirm Step 1 a second time.
+  useEffect(() => {
+    const rev = job?.revision || 1;
+    const hasUserReply = (job?.conversation || []).some(m => m.role === "user");
+    const pHash = job?.proposal_hash || "";
+    if (
+      awaitingDiscoveryConfirm &&
+      rev > 1 &&
+      hasUserReply &&
+      pHash &&
+      autoPreparedHashRef.current !== pHash
+    ) {
+      autoPreparedHashRef.current = pHash;
+      void prepare();
+    }
+  }, [awaitingDiscoveryConfirm, job?.revision, job?.proposal_hash, job?.conversation]);
 
   const saveConfig = async () => {
     inFlight.current = true;
@@ -150,6 +280,18 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
       setBusy(false);
     }
   };
+
+  const nextRef = useRef(next);
+  nextRef.current = next;
+  useEffect(() => {
+    onStepStateChange?.({
+      canContinue: Boolean(canContinue),
+      running: Boolean(running),
+      triggerNext: () => {
+        void nextRef.current();
+      },
+    });
+  }, [canContinue, running, job?.artifact_hash, onStepStateChange]);
 
   const button = "rounded-lg border border-line px-3.5 py-1.5 text-ui transition-colors disabled:opacity-40 cursor-pointer";
   const title = running
@@ -269,10 +411,10 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               </div>
               <div className="flex-1 min-w-0 space-y-1">
                 <p className="text-xs text-muted">
-                  AI 改造助手 · 第 {m.revision || job?.revision || 1} 轮分析
+                  AI 改造助手 · 第 {m.revision || job?.revision || 1} 轮{((m.revision || 1) > 1) ? "确认与改造" : "分析"}
                 </p>
                 <div className="rounded-2xl rounded-tl-xs border border-line bg-paper/80 px-4 py-3.5 text-ink whitespace-pre-wrap leading-relaxed">
-                  {m.text}
+                  {renderFormattedSummary(m.text)}
                 </div>
               </div>
             </article>
@@ -287,14 +429,14 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
             <div className="flex-1 min-w-0 space-y-1">
               <p className="text-xs text-muted">AI 改造助手 · 第 {job?.revision || 1} 轮分析</p>
               <div className="rounded-2xl rounded-tl-xs border border-line bg-paper/80 px-4 py-3.5 text-ink whitespace-pre-wrap leading-relaxed">
-                {plan.summary}
+                {renderFormattedSummary(plan.summary)}
               </div>
             </div>
           </article>
         )}
 
         {/* Step 1 Fixed-Format Deep Discovery Card */}
-        {plan && (discovery || plan.four_step_report || plan.auth_profile || plan.apis?.length || plan.pages?.length) && (
+        {(discovery || (plan && (plan.four_step_report || plan.auth_profile || plan.apis?.length || plan.pages?.length))) && (
           <section
             aria-label="第一步：AI 深度分析结果"
             className="rounded-2xl border border-accent/30 bg-paper/90 p-4 space-y-3 text-xs shadow-xs"
@@ -309,7 +451,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                 </span>
               </div>
               <span className="text-[11px] text-muted font-mono">
-                页面 {discovery?.pages_overview?.total ?? plan.pages?.length ?? 0} 个 · 接口 {discovery?.apis_overview?.total ?? plan.apis?.length ?? 0} 个
+                页面 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个 · 接口 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个
               </span>
             </div>
 
@@ -318,7 +460,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
                 <div className="font-semibold text-ink">1. 应用定位与业务用途</div>
                 <p className="text-muted leading-relaxed">
-                  {discovery?.project_purpose || plan.summary || "已完成应用源码结构与核心业务分析"}
+                  {discovery?.project_purpose || plan?.summary || "已完成应用源码结构与核心业务分析"}
                 </p>
               </div>
 
@@ -329,8 +471,8 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                   <div>
                     <span className="text-ink font-medium">运行时：</span>
                     <span className="font-mono text-ink">
-                      {discovery?.tech_stack?.language || plan.four_step_report?.step1_discovery?.language || "自动识别"}{" "}
-                      {discovery?.tech_stack?.runtime_version || plan.four_step_report?.step1_discovery?.runtime_version || ""}
+                      {discovery?.tech_stack?.language || plan?.four_step_report?.step1_discovery?.language || "自动识别"}{" "}
+                      {discovery?.tech_stack?.runtime_version || plan?.four_step_report?.step1_discovery?.runtime_version || ""}
                     </span>
                     <span className="ml-2 text-muted">（容器端口 {discovery?.tech_stack?.container_port || job?.port || 8080}）</span>
                   </div>
@@ -353,12 +495,12 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-ink">
-                    3. 页面与业务视图（共 {discovery?.pages_overview?.total ?? plan.pages?.length ?? 0} 个）
+                    3. 页面与业务视图（共 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个）
                   </span>
                 </div>
-                {(discovery?.pages_overview?.items || plan.pages || []).length > 0 ? (
+                {(discovery?.pages_overview?.items || plan?.pages || []).length > 0 ? (
                   <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
-                    {(discovery?.pages_overview?.items || plan.pages || []).map((pg, idx) => (
+                    {(discovery?.pages_overview?.items || plan?.pages || []).map((pg, idx) => (
                       <div key={`${pg.path}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
                         <span className="font-mono px-1.5 py-0.2 rounded bg-paper border border-line text-ink shrink-0">
                           {pg.path}
@@ -378,7 +520,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
               <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-ink">
-                    4. 后端 API 接口（共 {discovery?.apis_overview?.total ?? plan.apis?.length ?? 0} 个）
+                    4. 后端 API 接口（共 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个）
                   </span>
                   {discovery?.apis_overview && (
                     <span className="text-[11px] text-muted">
@@ -395,13 +537,13 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                     ))}
                   </div>
                 )}
-                {(discovery?.apis_overview?.items || plan.apis || []).length > 0 && (
+                {(discovery?.apis_overview?.items || plan?.apis || []).length > 0 && (
                   <details className="pt-1">
                     <summary className="cursor-pointer text-accent hover:underline select-none">
-                      展开查看全部 {(discovery?.apis_overview?.items || plan.apis || []).length} 个接口清单
+                      展开查看全部 {(discovery?.apis_overview?.items || plan?.apis || []).length} 个接口清单
                     </summary>
                     <div className="mt-1.5 space-y-1 max-h-44 overflow-y-auto pr-1 border-t border-line/50 pt-1.5">
-                      {(discovery?.apis_overview?.items || plan.apis || []).map((api, idx) => (
+                      {(discovery?.apis_overview?.items || plan?.apis || []).map((api, idx) => (
                         <div key={`${api.id}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
                           <span className="font-mono font-semibold px-1 rounded bg-paper border border-line text-ink shrink-0">
                             {api.method}
@@ -424,7 +566,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                   <div>
                     <span className="text-ink font-medium">存储类型：</span>
                     <span className="font-mono text-ink">
-                      {discovery?.storage_and_database?.storage_type || plan.four_step_report?.step1_discovery?.storage_type || "本地/内置存储"}
+                      {discovery?.storage_and_database?.storage_type || plan?.four_step_report?.step1_discovery?.storage_type || "本地/内置存储"}
                     </span>
                   </div>
                   {discovery?.storage_and_database?.sqlite_databases?.map(db => (
@@ -467,7 +609,7 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                       {discovery?.auth_and_credentials?.page_auth || "免登访问"} · {discovery?.auth_and_credentials?.api_auth || "无特殊鉴权"}
                     </span>
                   </div>
-                  {plan.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
+                  {plan?.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
                     <div className="text-ok font-mono">
                       已提取内置凭据：{plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
                       {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
@@ -749,17 +891,23 @@ export function AppDeliveryReview({ jobId, onReady, onReplaceSource, onNextStep,
                   <div className="text-xs text-muted mt-0.5">
                     {transformation?.headline || (feedback.trim()
                       ? "请先发送输入框中的补充要求，或清空输入后继续。"
-                      : "可以点击右侧按钮进入部署核对，或在下方对话框继续提要求。")}
+                      : "可以点击右下角「下一步」按钮进入部署核对，或在下方对话框继续提要求。")}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className={button + " bg-accent text-white border-accent font-medium shadow-xs"}
-                  disabled={!canContinue}
-                  onClick={next}
-                >
-                  下一步：核对部署内容
-                </button>
+                {footerMode === "external" ? (
+                  <span className="px-2.5 py-1 rounded-full bg-okSoft text-ok border border-okLine text-xs font-medium shrink-0">
+                    ✓ 已就绪 · 请点击右下角「下一步」
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className={button + " bg-accent text-white border-accent font-medium shadow-xs"}
+                    disabled={!canContinue}
+                    onClick={next}
+                  >
+                    下一步：核对部署内容
+                  </button>
+                )}
               </div>
 
               {transformation && (

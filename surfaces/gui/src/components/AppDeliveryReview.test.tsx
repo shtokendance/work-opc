@@ -173,3 +173,32 @@ it("renders AI progress steps in conversation timeline and omits redundant detai
   expect(screen.getByText(/正在深入分析源码文件: package.json/)).toBeTruthy();
   expect(screen.getByText(/匹配官方适配 Dockerfile 容器模板/)).toBeTruthy();
 });
+
+it("formats long Step 1 summaries into structured blocks and supports external footer next button", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({
+    ...ready,
+    conversation: [
+      {
+        role: "assistant",
+        revision: 1,
+        text: "第一步发现：这是供应商审厂管理系统，包含供应商档案与审厂任务。第二步拟新增容器启动文件，保留原有 JSON 数据机制。第三步契约纳入扫描发现的全部页面与接口。",
+      },
+    ],
+  });
+  const onStepState = vi.fn();
+  const next = vi.fn();
+  render(
+    <AppDeliveryReview
+      jobId="job"
+      onReady={vi.fn()}
+      onNextStep={next}
+      footerMode="external"
+      onStepStateChange={onStepState}
+    />
+  );
+  expect(await screen.findByText("第一步发现")).toBeTruthy();
+  expect(screen.getByText(/这是供应商审厂管理系统/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "下一步：核对部署内容" })).toBeNull();
+  expect(screen.getByText(/请点击右下角「下一步」/)).toBeTruthy();
+  await waitFor(() => expect(onStepState).toHaveBeenCalledWith(expect.objectContaining({ canContinue: true })));
+});

@@ -698,5 +698,69 @@ def test_default_resource_selection_and_auto_postgres_code_adaptation(tmp_path):
     assert "db-test-app" in res_ids
 
 
+def test_native_node_routes_and_structured_summary_without_round2_repetition(tmp_path):
+    from coworker.app_delivery_migration import enrich_contract_and_discovery_report
+
+    app_dir = tmp_path / "supplier-app"
+    app_dir.mkdir(parents=True)
+    (app_dir / "package.json").write_text('{"name": "supplier-audit", "version": "1.0.0"}', encoding="utf-8")
+    (app_dir / "server.mjs").write_text(
+        'if (request.method === "GET" && pathname === "/api/suppliers") { return ok(); }\n'
+        'if (request.method === "POST" && pathname === "/api/suppliers") { return ok(); }\n'
+        'if (request.method === "GET" && pathname.endsWith("/records") && pathname.startsWith("/api/audit-tasks/")) { return ok(); }\n',
+        encoding="utf-8",
+    )
+
+    prop1 = proposal()
+    prop1["summary"] = (
+        "第一步发现：这是供应商审厂管理系统，包含供应商档案与审厂任务。"
+        "源码以 Node.js 原生 HTTP 服务实现。"
+        "第二步拟新增容器启动文件。"
+        "第三步契约纳入全部页面与接口。"
+        "请确认正式部署是否仍使用公开的默认管理员密码，以及业务数据是否可以仅存于容器本地文件。"
+    )
+    prop1["unresolved"] = [
+        "正式部署是否仍使用公开的默认管理员密码？",
+        "业务数据是否可以仅存于容器本地文件？",
+    ]
+    prop1["decisions"] = [
+        {"id": "d1", "question": prop1["unresolved"][0], "impact": "口令", "options": ["先保留演示口令"]},
+        {"id": "d2", "question": prop1["unresolved"][1], "impact": "存储", "options": ["保留文件存储"]},
+    ]
+    job_r1 = {"slug": "test-app", "name": "供应商系统", "port": 8080, "revision": 1, "resources": []}
+    enrich_contract_and_discovery_report(app_dir, job_r1, prop1)
+
+    # Native Node HTTP routes are scanned
+    api_paths = {(a["method"], a["path"]) for a in prop1["contract"]["apis"]}
+    assert ("GET", "/api/suppliers") in api_paths
+    assert ("POST", "/api/suppliers") in api_paths
+    assert ("GET", "/api/audit-tasks/{id}/records") in api_paths
+
+    # Unnecessary questions about demo password and local file storage are stripped
+    assert prop1["unresolved"] == []
+    assert prop1["decisions"] == []
+
+    # Round 1 summary is formatted into multi-line 【...】 sections
+    assert "\n" in prop1["summary"]
+    assert "【应用定位】" in prop1["summary"]
+    assert "【接口与页面】" in prop1["summary"]
+
+    # Round 2 summary does NOT repeat "第一步发现：..."
+    prop2 = proposal()
+    prop2["summary"] = "第一步发现：这是供应商审厂管理系统，重复了第一轮的全部摸底内容……"
+    job_r2 = {
+        "slug": "test-app",
+        "name": "供应商系统",
+        "port": 8080,
+        "revision": 2,
+        "feedback": "问题 1：先保留演示口令\n问题 2：保留文件存储",
+        "resources": [],
+    }
+    enrich_contract_and_discovery_report(app_dir, job_r2, prop2)
+    assert "第一步发现" not in prop2["summary"]
+    assert "【确认已生效】" in prop2["summary"]
+
+
+
 
 

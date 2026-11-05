@@ -523,6 +523,27 @@ def _humanize_identifier(name: str, method: str = "GET", path: str = "") -> str:
         "contract": "合同",
         "dedup": "查重",
         "duplicate": "重复项",
+        "supplier": "供应商",
+        "suppliers": "供应商",
+        "task": "任务",
+        "tasks": "任务",
+        "checklist": "检查表",
+        "corrective": "整改项",
+        "action": "处理项",
+        "actions": "处理项",
+        "evidence": "现场证据",
+        "finding": "发现项",
+        "findings": "发现项",
+        "signature": "签字确认",
+        "signatures": "签字确认",
+        "session": "登录会话",
+        "directory": "目录",
+        "activity": "活动记录",
+        "standard": "标准版本",
+        "reset": "重置",
+        "state": "状态数据",
+        "report": "评估报告",
+        "exports": "导出记录",
     }
     tokens = [t.lower() for t in re.split(r"[_\-/]+", n) if t]
     if not tokens:
@@ -960,11 +981,63 @@ def _scan_python_routes(source: Path, files: list[Path], pydantic_models: dict[s
 def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
     routes: list[dict] = []
     route_re = re.compile(r"""\b(?:app|router|api|server)\.(get|post|put|patch|delete)\(\s*['"`](/[^'"`]*)['"`]""", re.I)
+    native_exact_re = re.compile(
+        r"""(?:(?:request|req)\.method|method)\s*===\s*['"](GET|POST|PUT|PATCH|DELETE)['"]\s*&&\s*(?:url\.)?pathname\s*===\s*['"](/[^'"]+)['"]"""
+        r"""|(?:url\.)?pathname\s*===\s*['"](/[^'"]+)['"]\s*&&\s*(?:(?:request|req)\.method|method)\s*===\s*['"](GET|POST|PUT|PATCH|DELETE)['"]""",
+        re.I,
+    )
+    native_method_re = re.compile(r"""(?:(?:request|req)\.method|method)\s*===\s*['"](GET|POST|PUT|PATCH|DELETE)['"]""", re.I)
+    native_starts_re = re.compile(r"""(?:url\.)?pathname\.startsWith\(\s*['"](/api/[^'"]+)['"]\s*\)""")
+    native_ends_re = re.compile(r"""(?:url\.)?pathname\.endsWith\(\s*['"](/[^'"]+)['"]\s*\)""")
+    native_includes_re = re.compile(r"""(?:url\.)?pathname\.includes\(\s*['"](/[^'"]+)['"]\s*\)""")
+
+    def _make_js_route(mth: str, path: str, rel: str, idx: int) -> dict:
+        mth = mth.upper()
+        effect = "read" if mth == "GET" else ("destructive" if mth == "DELETE" else "write")
+        raw_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
+        api_id = raw_id if (raw_id and raw_id[0].isalpha()) else f"op-{raw_id or 'root'}"
+        path_params = []
+        seen_p: set[str] = set()
+        for pname in re.findall(r"\{([a-zA-Z0-9_]+)\}", path):
+            if pname not in seen_p:
+                seen_p.add(pname)
+                path_params.append({
+                    "name": pname,
+                    "in": "path",
+                    "type": "string",
+                    "required": True,
+                    "description": f"路径参数 {pname}",
+                    "schema": {"type": "string"},
+                })
+        req_body = (
+            {
+                "required": False,
+                "content_type": "application/json",
+                "schema": {"type": "object", "required": [], "properties": {"payload": {"type": "object"}}},
+            }
+            if mth in {"POST", "PUT", "PATCH"}
+            else None
+        )
+        return {
+            "id": api_id,
+            "method": mth,
+            "path": path,
+            "handler": f"line_{idx}",
+            "purpose": _humanize_identifier("", mth, path),
+            "evidence": [f"{rel}:{idx}"],
+            "parameters": path_params,
+            "request_body": req_body,
+            "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+            "auth": {"type": "none"},
+            "effect": effect,
+            "confirmation_required": effect != "read",
+        }
+
     for p in files:
         if p.suffix not in {".js", ".ts", ".mjs", ".cjs"} or p.stat().st_size > 500_000:
             continue
         rel = p.relative_to(source).as_posix()
-        if any(seg in rel for seg in ("static/", "public/", "dist/", "assets/", "components/")):
+        if any(seg in rel for seg in ("static/", "public/", "dist/", "assets/", "components/", "miniprogram/")):
             continue
         try:
             lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -972,24 +1045,30 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
             continue
         for idx, line in enumerate(lines, start=1):
             for m in route_re.finditer(line):
-                mth = m.group(1).upper()
-                path = m.group(2)
-                effect = "read" if mth == "GET" else ("destructive" if mth == "DELETE" else "write")
-                api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
-                routes.append({
-                    "id": api_id,
-                    "method": mth,
-                    "path": path,
-                    "handler": f"line_{idx}",
-                    "purpose": _humanize_identifier("", mth, path),
-                    "evidence": [f"{rel}:{idx}"],
-                    "parameters": [],
-                    "request_body": None,
-                    "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                    "auth": {"type": "none"},
-                    "effect": effect,
-                    "confirmation_required": effect != "read",
-                })
+                routes.append(_make_js_route(m.group(1), m.group(2), rel, idx))
+            for m in native_exact_re.finditer(line):
+                if "return false" in line:
+                    continue
+                mth = m.group(1) or m.group(4)
+                path = m.group(2) or m.group(3)
+                routes.append(_make_js_route(mth, path, rel, idx))
+            if "return false" not in line and "pathname.startsWith" in line:
+                m_mth = native_method_re.search(line)
+                m_st = native_starts_re.search(line)
+                if m_mth and m_st:
+                    mth = m_mth.group(1)
+                    prefix = m_st.group(1).rstrip("/")
+                    m_end = native_ends_re.search(line)
+                    m_inc = native_includes_re.search(line)
+                    if m_end:
+                        suffix = m_end.group(1)
+                        synth_path = f"{prefix}/{{id}}{suffix}"
+                    elif m_inc:
+                        mid = m_inc.group(1).strip("/")
+                        synth_path = f"{prefix}/{{id}}/{mid}/{{item_id}}"
+                    else:
+                        synth_path = f"{prefix}/{{id}}"
+                    routes.append(_make_js_route(mth, synth_path, rel, idx))
     return routes
 
 
@@ -1495,14 +1574,15 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
     # 2b. When user has migrated SQLite to platform PostgreSQL, auto-complete any missing DB code/driver/config adaptations
     _auto_adapt_sqlite_to_postgres_changes(source, str(data.get("slug", "")), data, proposal)
 
-    # 2c. Filter out internal tool/truncation/row-diff/db-adaptation noise from unresolved & decisions so the user is never blocked by internal mechanics
+    # 2c. Filter out internal tool/truncation/row-diff/db-adaptation/default-password/local-json noise from unresolved & decisions
     internal_noise_re = re.compile(
-        r"(截断|truncated|补齐.*扫描|完整接口详情|接口扫描显示|逐表差异|逐表核对|10,?264|14,?758|healthz|健康检查接口|尚无.*PostgreSQL.*连接适配|数据库切换不能视为已完成|专属\s*PostgreSQL.*连接适配)",
+        r"(截断|truncated|补齐.*扫描|完整接口详情|接口扫描显示|扫描结果不一致|自动路由扫描未识别|逐表差异|逐表核对|10,?264|14,?758|healthz|健康检查接口|尚无.*PostgreSQL.*连接适配|数据库切换不能视为已完成|专属\s*PostgreSQL.*连接适配|默认管理员密码|公开的默认.*密码|演示口令|仅存于容器本地文件|容器重建后.*丢失)",
         re.I,
     )
     has_migrated = bool(data.get("migrations"))
     feedback_text = str(data.get("feedback") or "")
     user_confirmed_db = has_migrated or bool(re.search(r"(迁移|PostgreSQL|平台.*数据库|直接迁移|保留.*SQLite)", feedback_text, re.I))
+    user_confirmed_local_or_pwd = bool(re.search(r"(保留演示口令|保留文件存储|保留原|先保留)", feedback_text, re.I))
 
     def _keep_question(q: str) -> bool:
         s = str(q or "").strip()
@@ -1511,6 +1591,8 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
         if internal_noise_re.search(s):
             return False
         if user_confirmed_db and re.search(r"(SQLite.*迁移|补迁|保留\s*SQLite|PostgreSQL\s*连接适配|数据库切换)", s, re.I):
+            return False
+        if user_confirmed_local_or_pwd and re.search(r"(密码|口令|本地文件|文件存储|JSON)", s, re.I):
             return False
         return True
 
@@ -1713,6 +1795,31 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
 
     proposal["discovery_report"] = discovery_report
     proposal["transformation_report"] = transformation_report
+
+    # 4. Format proposal["summary"] so Step 1 is structured (not a single jammed paragraph)
+    #    and Round 2+ never repeats Step 1 discovery content after user confirmation.
+    raw_summary = str(proposal.get("summary") or "").strip()
+    revision = int(data.get("revision", 1) or 1)
+    if revision > 1 and feedback_text.strip() and (len(raw_summary) > 80 or "第一步" in raw_summary):
+        latest_fb = feedback_text.split("本次补充（有冲突时以本次为准）：")[-1].strip()
+        latest_fb_one_line = "；".join(ln.strip() for ln in latest_fb.splitlines() if ln.strip())[:120]
+        proposal["summary"] = (
+            f"【确认已生效】已按你的要求（{latest_fb_one_line}）更新改造方案，无需重复摸底分析。\n"
+            f"【改造结果】共新增 {len(added_files)} 个文件、修改 {len(modified_files)} 个文件（{discovery_report['foundation_and_container']['dockerfile_action']}）。\n"
+            f"【数据与技能】{transformation_report['storage_summary']}；已生成应用技能 app-{data.get('slug', '')}（收录 {len(existing_pages)} 个页面、{len(existing_apis)} 个后端接口）。"
+        )
+    elif len(raw_summary) > 80 and "\n" not in raw_summary:
+        purpose_short = (contract.get("description") or raw_summary.split("。")[0]).replace("第一步发现：", "").strip()
+        fw_txt = f"（{' + '.join(scan['runtime']['frameworks'])}）" if scan["runtime"]["frameworks"] else ""
+        proposal["summary"] = (
+            f"【应用定位】{purpose_short}\n"
+            f"【运行环境】{lang} {ver}{fw_txt} · 容器监听端口 {data.get('port', 8080)}\n"
+            f"【接口与页面】共识别 {len(existing_apis)} 个后端 API 接口、{len(existing_pages)} 个前端页面/业务视图\n"
+            f"【登录与鉴权】{discovery_report['auth_and_credentials']['page_auth']}；{discovery_report['auth_and_credentials']['api_auth']}\n"
+            f"【数据与存储】{discovery_report['storage_and_database']['storage_migration_plan']}\n"
+            f"【改造与技能】{discovery_report['foundation_and_container']['dockerfile_action']}（拟新增 {len(added_files)} 项、修改 {len(modified_files)} 项文件），全量生成 app-{data.get('slug', '')} 技能"
+        )
+
     return proposal
 
 
