@@ -584,11 +584,20 @@ def scan_app_routes_and_pages(source: Path) -> dict:
     # 2. Scan Python Pydantic models for request/response schemas
     pydantic_models = _scan_pydantic_models(source, source_files)
 
-    # 3. Scan backend API routes
+    # 3. Scan backend API routes across specs & frameworks
     apis: list[dict] = []
+    # 3.1 OpenAPI / Swagger specifications (highest fidelity)
+    apis.extend(_scan_openapi_specs(source, source_files))
+    # 3.2 Python routes (FastAPI, Flask, Django, DRF, Sanic, etc.)
     apis.extend(_scan_python_routes(source, source_files, pydantic_models))
+    # 3.3 Node.js / TypeScript routes (Express, Koa, Fastify, NestJS, Next.js, native HTTP)
     apis.extend(_scan_js_ts_routes(source, source_files))
+    # 3.4 Go routes (Gin, Echo, Chi, Fiber, standard net/http, table-driven)
     apis.extend(_scan_go_routes(source, source_files))
+    # 3.5 Java / Kotlin routes (Spring Boot, JAX-RS, JDK HttpServer)
+    apis.extend(_scan_java_routes(source, source_files))
+    # 3.6 C# / .NET routes (ASP.NET Core Minimal API, WebAPI Controllers)
+    apis.extend(_scan_dotnet_routes(source, source_files))
 
     # Deduplicate APIs by (method, path), keeping the richest entry
     dedup_apis: dict[tuple[str, str], dict] = {}
@@ -624,10 +633,19 @@ def scan_app_routes_and_pages(source: Path) -> dict:
 
 
 def _scan_runtime_info(source: Path, files: list[Path]) -> dict:
-    has_python = any(p.suffix == ".py" for p in files)
-    has_node = (source / "package.json").is_file()
-    has_go = (source / "go.mod").is_file()
+    has_root_node = (source / "package.json").is_file()
+    has_root_go = (source / "go.mod").is_file()
+    has_root_py = (source / "requirements.txt").is_file() or (source / "pyproject.toml").is_file() or (source / "Pipfile").is_file() or (source / "setup.py").is_file()
+    has_root_java = (source / "pom.xml").is_file() or (source / "build.gradle").is_file() or any(p.name.endswith(".java") and p.parent == source for p in files)
+    has_root_dotnet = any(p.suffix == ".csproj" for p in files)
     has_dockerfile = (source / "Dockerfile").is_file()
+
+    py_count = sum(1 for p in files if p.suffix == ".py")
+    js_ts_count = sum(1 for p in files if p.suffix in {".js", ".ts", ".mjs", ".cjs", ".vue", ".jsx", ".tsx"})
+    go_count = sum(1 for p in files if p.suffix == ".go")
+    java_count = sum(1 for p in files if p.suffix in {".java", ".kt"})
+    dotnet_count = sum(1 for p in files if p.suffix in {".cs", ".fs"})
+
     dockerfile_base = ""
     if has_dockerfile:
         try:
@@ -669,8 +687,27 @@ def _scan_runtime_info(source: Path, files: list[Path]) -> dict:
             if re.search(r"""\bfrom\s+['"]react['"]|\bReactDOM\b""", txt) and "React" not in frameworks:
                 frameworks.append("React")
 
-    language = "python" if has_python else ("nodejs" if has_node else ("golang" if has_go else "unknown"))
-    runtime_version = py_min_version if language == "python" else ("20" if language == "nodejs" else "1.22")
+    # Determine primary runtime language by weighted project artifacts rather than simple any()
+    if has_root_node and (not has_root_py or js_ts_count >= py_count):
+        language = "nodejs"
+    elif has_root_go or (go_count > 0 and go_count >= py_count and go_count >= js_ts_count):
+        language = "golang"
+    elif has_root_dotnet or dotnet_count > 5:
+        language = "dotnet"
+    elif has_root_java or java_count > 5:
+        language = "java"
+    elif has_root_py or (py_count > 0 and py_count >= js_ts_count):
+        language = "python"
+    elif js_ts_count > 0:
+        language = "nodejs"
+    elif py_count > 0:
+        language = "python"
+    elif go_count > 0:
+        language = "golang"
+    else:
+        language = "unknown"
+
+    runtime_version = py_min_version if language == "python" else ("20" if language == "nodejs" else ("1.22" if language == "golang" else ("21" if language == "java" else ("8.0" if language == "dotnet" else "unknown"))))
     return {
         "language": language,
         "runtime_version": runtime_version,
@@ -679,6 +716,92 @@ def _scan_runtime_info(source: Path, files: list[Path]) -> dict:
         "has_dockerfile": has_dockerfile,
         "dockerfile_base_image": dockerfile_base,
     }
+
+
+def _scan_openapi_specs(source: Path, files: list[Path]) -> list[dict]:
+    """Parse OpenAPI/Swagger JSON and YAML specs if present for highest fidelity API contracts."""
+    routes: list[dict] = []
+    spec_files: list[Path] = []
+    for p in files:
+        if p.suffix.lower() in {".json", ".yaml", ".yml"} and p.stat().st_size < 1_500_000:
+            name_lower = p.name.lower()
+            if any(name_lower.startswith(k) for k in ("swagger", "openapi")) or any(k in name_lower for k in ("swagger.", "openapi.")):
+                spec_files.append(p)
+
+    try:
+        import yaml
+    except Exception:
+        yaml = None
+
+    for p in spec_files:
+        rel = p.relative_to(source).as_posix()
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+            if p.suffix.lower() == ".json":
+                doc = json.loads(txt)
+            elif yaml is not None:
+                doc = yaml.safe_load(txt)
+            else:
+                continue
+        except Exception:
+            continue
+
+        if not isinstance(doc, dict):
+            continue
+        base_path = str(doc.get("basePath") or "").strip()
+        paths = doc.get("paths")
+        if not isinstance(paths, dict):
+            continue
+
+        for path_pattern, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+            full_path = _join_route_paths(base_path, path_pattern)
+            for mth in ("get", "post", "put", "patch", "delete"):
+                op = path_item.get(mth)
+                if not isinstance(op, dict):
+                    continue
+                mth_upper = mth.upper()
+                summary = str(op.get("summary") or op.get("description") or "").strip()
+                op_id = op.get("operationId") or ""
+                purpose = summary if summary else _humanize_identifier(op_id, mth_upper, full_path)
+                effect = "read" if mth_upper == "GET" else ("destructive" if mth_upper == "DELETE" else "write")
+                raw_id = re.sub(r"[^a-z0-9]+", "-", f"{mth}-{full_path.strip('/') or 'root'}").strip("-")
+                api_id = op_id if op_id and op_id[0].isalpha() else (raw_id if raw_id and raw_id[0].isalpha() else f"op-{raw_id or 'root'}")
+
+                params: list[dict] = []
+                for param in op.get("parameters") or []:
+                    if isinstance(param, dict) and param.get("name"):
+                        p_in = param.get("in", "query")
+                        params.append({
+                            "name": param["name"],
+                            "in": p_in,
+                            "type": param.get("type", "string"),
+                            "required": bool(param.get("required")),
+                            "description": param.get("description") or f"参数 {param['name']}",
+                            "schema": param.get("schema") or {"type": param.get("type", "string")},
+                        })
+
+                # Check security
+                sec = op.get("security") or doc.get("security")
+                is_admin = "/admin" in full_path or bool(sec)
+                auth_obj = {"type": "header", "header": "Authorization", "env": "BEARER_TOKEN"} if is_admin else {"type": "none"}
+
+                routes.append({
+                    "id": api_id,
+                    "method": mth_upper,
+                    "path": full_path,
+                    "handler": op_id or f"openapi_{p.stem}",
+                    "purpose": purpose,
+                    "evidence": [f"{rel}:1"],
+                    "parameters": params,
+                    "request_body": None,
+                    "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                    "auth": auth_obj,
+                    "effect": effect,
+                    "confirmation_required": effect != "read",
+                })
+    return routes
 
 
 def _scan_pydantic_models(source: Path, files: list[Path]) -> dict[str, dict]:
@@ -975,6 +1098,60 @@ def _scan_python_routes(source: Path, files: list[Path], pydantic_models: dict[s
                         "effect": effect,
                         "confirmation_required": effect in {"write", "destructive", "external"},
                     })
+
+    # Third pass: Django & Django REST Framework (urls.py)
+    django_url_re = re.compile(r"""(?:path|re_path)\(\s*['"]([a-zA-Z0-9_\-/{}\<\>: \^\$\*\+\.\?]+)['"]\s*,\s*([a-zA-Z0-9_.]+)""")
+    for rel, (_p, tree, text) in parsed_trees.items():
+        if not ("urls" in rel or "urlpatterns" in text):
+            continue
+        for idx, line in enumerate(text.splitlines(), start=1):
+            for m in django_url_re.finditer(line):
+                raw_path = m.group(1).lstrip("^").rstrip("$")
+                handler = m.group(2)
+                # Normalize django path params <int:id> or <slug> to {id} or {slug}
+                clean_path = "/" + re.sub(r"<(?:\w+:)?(\w+)>", r"{\1}", raw_path.strip("/"))
+                api_id = re.sub(r"[^a-z0-9]+", "-", f"get-{clean_path.strip('/') or 'root'}").strip("-")
+                routes.append({
+                    "id": api_id,
+                    "method": "GET",
+                    "path": clean_path,
+                    "handler": handler,
+                    "purpose": _humanize_identifier(handler.split(".")[-1], "GET", clean_path),
+                    "evidence": [f"{rel}:{idx}"],
+                    "parameters": [],
+                    "request_body": None,
+                    "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                    "auth": {"type": "none"},
+                    "effect": "read",
+                    "confirmation_required": False,
+                })
+
+    # Fourth pass: Python BaseHTTPRequestHandler (do_GET, do_POST)
+    for rel, (_p, tree, text) in parsed_trees.items():
+        if "BaseHTTPRequestHandler" not in text:
+            continue
+        for m in re.finditer(r"""def\s+(do_GET|do_POST|do_PUT|do_DELETE)\s*\(""", text):
+            mth = m.group(1).replace("do_", "").upper()
+            start_pos = m.start()
+            method_block = text[start_pos:start_pos+3000]
+            for pm in re.finditer(r"""(?:self\.path|url\.path)\s*==\s*['"](/[^'"]*)['"]""", method_block):
+                path = pm.group(1)
+                api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
+                routes.append({
+                    "id": api_id,
+                    "method": mth,
+                    "path": path,
+                    "handler": m.group(1),
+                    "purpose": _humanize_identifier("", mth, path),
+                    "evidence": [f"{rel}:1"],
+                    "parameters": [],
+                    "request_body": None,
+                    "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                    "auth": {"type": "none"},
+                    "effect": "read" if mth == "GET" else "write",
+                    "confirmation_required": mth != "GET",
+                })
+
     return routes
 
 
@@ -1033,6 +1210,10 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
             "confirmation_required": effect != "read",
         }
 
+    # NestJS Controller decorators
+    nest_controller_re = re.compile(r"""@Controller\(\s*['"]?([^'"]*?)['"]?\s*\)[\s\S]*?class\s+([A-Za-z0-9_]+)""")
+    nest_method_re = re.compile(r"""@(Get|Post|Put|Patch|Delete)\(\s*['"]?([^'"]*?)['"]?\s*\)[\s\S]*?(?:async\s+)?([a-zA-Z0-9_]+)\s*\(""")
+
     for p in files:
         if p.suffix not in {".js", ".ts", ".mjs", ".cjs"} or p.stat().st_size > 500_000:
             continue
@@ -1040,9 +1221,11 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
         if any(seg in rel for seg in ("static/", "public/", "dist/", "assets/", "components/", "miniprogram/")):
             continue
         try:
-            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            lines = content.splitlines()
         except Exception:
             continue
+
         for idx, line in enumerate(lines, start=1):
             for m in route_re.finditer(line):
                 routes.append(_make_js_route(m.group(1), m.group(2), rel, idx))
@@ -1052,6 +1235,11 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
                 mth = m.group(1) or m.group(4)
                 path = m.group(2) or m.group(3)
                 routes.append(_make_js_route(mth, path, rel, idx))
+            # Node native if (url.pathname === '/api/...') without explicit method => GET
+            if "return false" not in line and not native_exact_re.search(line):
+                m_exact_path = re.search(r"""(?:url\.)?pathname\s*===\s*['"](/api/[^'"]+)['"]""", line)
+                if m_exact_path:
+                    routes.append(_make_js_route("GET", m_exact_path.group(1), rel, idx))
             if "return false" not in line and "pathname.startsWith" in line:
                 m_mth = native_method_re.search(line)
                 m_st = native_starts_re.search(line)
@@ -1069,32 +1257,86 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
                     else:
                         synth_path = f"{prefix}/{{id}}"
                     routes.append(_make_js_route(mth, synth_path, rel, idx))
+
+        # Check NestJS
+        if "@Controller" in content:
+            m_ctrl = nest_controller_re.search(content)
+            ctrl_prefix = m_ctrl.group(1).strip("/") if m_ctrl else ""
+            for m in nest_method_re.finditer(content):
+                mth, sub, handler = m.group(1).upper(), m.group(2).strip("/"), m.group(3)
+                full = "/" + "/".join(p for p in (ctrl_prefix, sub) if p)
+                routes.append(_make_js_route(mth, full, rel, 1))
+
+    # Next.js App Router API routes (app/api/**/route.ts)
+    for p in files:
+        rel = p.relative_to(source).as_posix()
+        if ("app/api/" in rel or "src/app/api/" in rel) and p.stem == "route" and p.suffix in {".js", ".ts"}:
+            dir_path = p.parent.relative_to(source).as_posix()
+            api_path = "/" + dir_path.split("app/", 1)[-1]
+            try:
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+                for mth in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                    if re.search(rf"\bexport\s+(?:async\s+)?function\s+{mth}\b", txt):
+                        routes.append(_make_js_route(mth, api_path, rel, 1))
+            except Exception:
+                continue
+
     return routes
 
 
 def _scan_go_routes(source: Path, files: list[Path]) -> list[dict]:
     routes: list[dict] = []
-    route_re = re.compile(r"""\.\s*(GET|POST|PUT|PATCH|DELETE|HandleFunc)\(\s*"([^"]+)"\s*,\s*([a-zA-Z0-9_.]+)""")
+    # 1. Match direct router method calls (.GET, .POST, .Get, .Post, .HandleFunc)
+    route_re = re.compile(r"""([a-zA-Z0-9_.]*)\s*\.\s*(GET|POST|PUT|PATCH|DELETE|HandleFunc|Get|Post|Put|Patch|Delete)\(\s*"([^"]+)"\s*,\s*([a-zA-Z0-9_.]+)""")
+    # 2. Table-driven RouterEntry{Path: "...", Method: http.MethodPost, Handler: app.Run}
+    table_re = re.compile(r"""(?:AppendRouters|RouterEntry)\s*\(\s*(?:([a-zA-Z0-9_]+)\s*,\s*)?sdk\.RouterEntry\s*\{\s*Path:\s*"([^"]+)"\s*,\s*Method:\s*(?:http\.Method)?([A-Za-z]+)\s*,\s*Handler:\s*([a-zA-Z0-9_.]+)""")
+    # 3. Swaggo comments: // @Router /path [method]
+    swaggo_router_re = re.compile(r"""//\s*@Router\s+([^\s\[]+)\s*\[(get|post|put|patch|delete)\]""", re.I)
+    swaggo_summary_re = re.compile(r"""//\s*@Summary\s+(.+)""")
+
+    # Map Group variables to path prefixes: v1 := r.Group("/api/v1")
+    group_var_prefixes: dict[str, str] = {}
+    const_prefixes: dict[str, str] = {"V1": "/api/v1", "v1": "/api/v1"}
+
     for p in files:
         if p.suffix != ".go" or p.name.endswith("_test.go") or p.stat().st_size > 500_000:
             continue
         rel = p.relative_to(source).as_posix()
         try:
-            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            lines = content.splitlines()
         except Exception:
             continue
+
+        # Extract const string definitions like const V1 = "/api/v1"
+        for cm in re.finditer(r"""const\s*\(\s*([\s\S]*?)\)""", content):
+            for line in cm.group(1).splitlines():
+                m_kv = re.search(r"""([a-zA-Z0-9_]+)\s*=\s*"([^"]+)""", line)
+                if m_kv:
+                    const_prefixes[m_kv.group(1)] = m_kv.group(2)
+        for m_kv in re.finditer(r"""const\s+([a-zA-Z0-9_]+)\s*=\s*"([^"]+)""", content):
+            const_prefixes[m_kv.group(1)] = m_kv.group(2)
+
+        # Extract group definitions
+        for gm in re.finditer(r"""([a-zA-Z0-9_]+)\s*:=\s*([a-zA-Z0-9_.]*)\s*\.\s*Group\(\s*"([^"]+)"\s*\)""", content):
+            gvar, parent, gpath = gm.group(1), gm.group(2), gm.group(3)
+            pref = group_var_prefixes.get(parent, "")
+            group_var_prefixes[gvar] = _join_route_paths(pref, gpath)
+
         for idx, line in enumerate(lines, start=1):
             for m in route_re.finditer(line):
-                raw_mth, path, handler = m.group(1), m.group(2), m.group(3)
+                obj, raw_mth, path, handler = m.group(1), m.group(2), m.group(3), m.group(4)
                 mth = "GET" if raw_mth == "HandleFunc" else raw_mth.upper()
+                pref = group_var_prefixes.get(obj.split(".")[-1], "")
+                full_path = _join_route_paths(pref, path)
                 effect = "read" if mth == "GET" else ("destructive" if mth == "DELETE" else "write")
-                api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
+                api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{full_path.strip('/') or 'root'}").strip("-")
                 routes.append({
                     "id": api_id,
                     "method": mth,
-                    "path": path,
+                    "path": full_path,
                     "handler": handler,
-                    "purpose": _humanize_identifier(handler.split(".")[-1], mth, path),
+                    "purpose": _humanize_identifier(handler.split(".")[-1], mth, full_path),
                     "evidence": [f"{rel}:{idx}"],
                     "parameters": [],
                     "request_body": None,
@@ -1103,6 +1345,192 @@ def _scan_go_routes(source: Path, files: list[Path]) -> list[dict]:
                     "effect": effect,
                     "confirmation_required": effect != "read",
                 })
+
+            for m in table_re.finditer(line):
+                gconst, path, raw_mth, handler = m.group(1), m.group(2), m.group(3), m.group(4)
+                mth = raw_mth.upper()
+                pref = const_prefixes.get(gconst, "") if gconst else ""
+                full_path = _join_route_paths(pref, path)
+                effect = "read" if mth == "GET" else ("destructive" if mth == "DELETE" else "write")
+                api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{full_path.strip('/') or 'root'}").strip("-")
+                routes.append({
+                    "id": api_id,
+                    "method": mth,
+                    "path": full_path,
+                    "handler": handler,
+                    "purpose": _humanize_identifier(handler.split(".")[-1], mth, full_path),
+                    "evidence": [f"{rel}:{idx}"],
+                    "parameters": [],
+                    "request_body": None,
+                    "responses": {"200": {"type": "object", "required": [], "properties": {"code": {"type": "integer"}}}},
+                    "auth": {"type": "none"},
+                    "effect": effect,
+                    "confirmation_required": effect != "read",
+                })
+
+        # Scan swaggo comments
+        curr_summary = ""
+        for idx, line in enumerate(lines, start=1):
+            line_s = line.strip()
+            if line_s.startswith("//"):
+                sm = swaggo_summary_re.search(line_s)
+                if sm:
+                    curr_summary = sm.group(1).strip()
+                rm = swaggo_router_re.search(line_s)
+                if rm:
+                    path, mth = rm.group(1), rm.group(2).upper()
+                    effect = "read" if mth == "GET" else ("destructive" if mth == "DELETE" else "write")
+                    api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
+                    purpose = curr_summary if curr_summary else _humanize_identifier("", mth, path)
+                    routes.append({
+                        "id": api_id,
+                        "method": mth,
+                        "path": path,
+                        "handler": f"swaggo_{Path(rel).stem}",
+                        "purpose": purpose,
+                        "evidence": [f"{rel}:{idx}"],
+                        "parameters": [],
+                        "request_body": None,
+                        "responses": {"200": {"type": "object", "required": [], "properties": {"code": {"type": "integer"}}}},
+                        "auth": {"type": "none"},
+                        "effect": effect,
+                        "confirmation_required": effect != "read",
+                    })
+            else:
+                if not line_s.startswith("//") and line_s:
+                    curr_summary = ""
+
+    return routes
+
+
+def _scan_java_routes(source: Path, files: list[Path]) -> list[dict]:
+    """Scan Java / Kotlin Spring Boot, JAX-RS, and JDK HttpServer routes."""
+    routes: list[dict] = []
+    # Spring Boot @RequestMapping on class
+    spring_class_re = re.compile(r"""@(?:Rest)?Controller[\s\S]*?@RequestMapping\(\s*["']([^"']+)["']\s*\)[\s\S]*?class\s+([A-Za-z0-9_]+)""")
+    # Spring Boot methods @GetMapping, @PostMapping, etc.
+    spring_method_re = re.compile(r"""@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)(?:\(\s*(?:(?:value|path)\s*=\s*)?["']?([^"'\)]*)["']?\s*\))?[\s\S]*?(?:public|protected|private)?\s+[A-Za-z0-9_<>, \t\n\r]+\s+([A-Za-z0-9_]+)\s*\(""")
+    # JDK HttpServer createContext("/api/stock", ...)
+    jdk_context_re = re.compile(r"""\.createContext\(\s*["']([^"']+)["']""")
+
+    for p in files:
+        if p.suffix not in {".java", ".kt"} or p.stat().st_size > 500_000:
+            continue
+        rel = p.relative_to(source).as_posix()
+        try:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        class_prefix = ""
+        m_cls = spring_class_re.search(content)
+        if m_cls:
+            class_prefix = m_cls.group(1).strip()
+
+        for m in spring_method_re.finditer(content):
+            ann, sub, handler = m.group(1), m.group(2) or "", m.group(3)
+            mth = ann.replace("Mapping", "").upper()
+            full_path = _join_route_paths(class_prefix, sub)
+            api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{full_path.strip('/') or 'root'}").strip("-")
+            routes.append({
+                "id": api_id,
+                "method": mth,
+                "path": full_path,
+                "handler": handler,
+                "purpose": _humanize_identifier(handler, mth, full_path),
+                "evidence": [f"{rel}:1"],
+                "parameters": [],
+                "request_body": None,
+                "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                "auth": {"type": "none"},
+                "effect": "read" if mth == "GET" else "write",
+                "confirmation_required": mth != "GET",
+            })
+
+        for m in jdk_context_re.finditer(content):
+            path = m.group(1)
+            api_id = re.sub(r"[^a-z0-9]+", "-", f"get-{path.strip('/') or 'root'}").strip("-")
+            routes.append({
+                "id": api_id,
+                "method": "GET",
+                "path": path,
+                "handler": "createContext",
+                "purpose": _humanize_identifier("", "GET", path),
+                "evidence": [f"{rel}:1"],
+                "parameters": [],
+                "request_body": None,
+                "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                "auth": {"type": "none"},
+                "effect": "read",
+                "confirmation_required": False,
+            })
+
+    return routes
+
+
+def _scan_dotnet_routes(source: Path, files: list[Path]) -> list[dict]:
+    """Scan C# / .NET Minimal APIs and Controllers."""
+    routes: list[dict] = []
+    # Minimal API: app.MapGet("/api/products/{sku}", ...)
+    min_api_re = re.compile(r"""\.\s*Map(Get|Post|Put|Delete|Patch)\(\s*["']([^"']+)["']""")
+    # Controller: [HttpGet("...")], [HttpPost("...")]
+    controller_route_re = re.compile(r"""\[Route\(\s*["']([^"']+)["']\s*\)\][\s\S]*?class\s+([A-Za-z0-9_]+)""")
+    controller_method_re = re.compile(r"""\[Http(Get|Post|Put|Delete|Patch)(?:\(\s*["']?([^"'\)]*)["']?\s*\))?\][\s\S]*?(?:public|protected)?\s+[A-Za-z0-9_<>, \t\n\r]+\s+([A-Za-z0-9_]+)\s*\(""")
+
+    for p in files:
+        if p.suffix not in {".cs", ".fs"} or p.stat().st_size > 500_000:
+            continue
+        rel = p.relative_to(source).as_posix()
+        try:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        for m in min_api_re.finditer(content):
+            mth = m.group(1).upper()
+            path = m.group(2)
+            api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{path.strip('/') or 'root'}").strip("-")
+            routes.append({
+                "id": api_id,
+                "method": mth,
+                "path": path,
+                "handler": "MinimalApi",
+                "purpose": _humanize_identifier("", mth, path),
+                "evidence": [f"{rel}:1"],
+                "parameters": [],
+                "request_body": None,
+                "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                "auth": {"type": "none"},
+                "effect": "read" if mth == "GET" else "write",
+                "confirmation_required": mth != "GET",
+            })
+
+        ctrl_prefix = ""
+        m_ctrl = controller_route_re.search(content)
+        if m_ctrl:
+            raw_pref = m_ctrl.group(1)
+            cname = m_ctrl.group(2).replace("Controller", "")
+            ctrl_prefix = raw_pref.replace("[controller]", cname).replace("[action]", "")
+
+        for m in controller_method_re.finditer(content):
+            mth, sub, handler = m.group(1).upper(), m.group(2) or "", m.group(3)
+            full_path = _join_route_paths(ctrl_prefix, sub)
+            api_id = re.sub(r"[^a-z0-9]+", "-", f"{mth.lower()}-{full_path.strip('/') or 'root'}").strip("-")
+            routes.append({
+                "id": api_id,
+                "method": mth,
+                "path": full_path,
+                "handler": handler,
+                "purpose": _humanize_identifier(handler, mth, full_path),
+                "evidence": [f"{rel}:1"],
+                "parameters": [],
+                "request_body": None,
+                "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
+                "auth": {"type": "none"},
+                "effect": "read" if mth == "GET" else "write",
+                "confirmation_required": mth != "GET",
+            })
+
     return routes
 
 
@@ -1110,10 +1538,10 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
     pages: list[dict] = []
     seen_ids: set[str] = set()
 
-    # 1. Check index.html or root entry page
+    # 1. Check index.html or root entry page (deduplicate multiple index.html)
     for p in files:
         rel = p.relative_to(source).as_posix()
-        if p.name == "index.html":
+        if p.name == "index.html" and "index-page" not in seen_ids:
             title = "应用主界面"
             try:
                 html = p.read_text(encoding="utf-8", errors="ignore")
@@ -1131,14 +1559,95 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
                 "evidence": [f"{rel}:1"],
             })
             seen_ids.add("index-page")
+            break
 
-    # 2. Scan pages/, views/, and *-page.* / *-panel.* components
+    # 2. Scan SPA Nav groups, view metadata, and view section containers
+    # e.g. NAV_GROUPS = [{ items: [{ view: "dashboard", label: "审厂看板" }] }]
+    # VIEW_META = { dashboard: ["年度审厂看板", "..."] }
+    # <section id="dashboard" class="view">
+    for p in files:
+        if p.suffix not in {".js", ".ts", ".mjs", ".vue", ".jsx", ".tsx", ".html"} or p.stat().st_size > 500_000:
+            continue
+        rel = p.relative_to(source).as_posix()
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        # Match navigation items: view: "xxx", label: "yyy"
+        for m in re.finditer(r"""view:\s*['"]([a-zA-Z0-9_-]+)['"],\s*label:\s*['"]([^'"]+)['"]""", text):
+            vid, label = m.group(1), m.group(2).strip()
+            if vid not in seen_ids:
+                seen_ids.add(vid)
+                is_admin = "admin" in vid or "permission" in vid
+                pages.append({
+                    "id": vid,
+                    "path": f"/#/{vid}",
+                    "purpose": f"{label}（业务视图）",
+                    "actions": [f"查看或操作 {label}"],
+                    "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if is_admin else {"type": "none"},
+                    "evidence": [f"{rel}:1"],
+                })
+
+        # Match VIEW_META = { dashboard: ["title", "desc"] } (ensure it's in a view/meta context)
+        if "view_meta" in text.lower() or "nav_groups" in text.lower() or "viewmeta" in text.lower():
+            for m in re.finditer(r"""([a-zA-Z0-9_-]+)\s*:\s*\[\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\]""", text):
+                vid, title, desc = m.group(1), m.group(2).strip(), m.group(3).strip()
+                # Must be a Chinese or capitalized title, not code tokens like 'admin' / 'camera'
+                if vid not in seen_ids and any('\u4e00' <= ch <= '\u9fff' for ch in title) and len(title) <= 30:
+                    seen_ids.add(vid)
+                    pages.append({
+                        "id": vid,
+                        "path": f"/#/{vid}",
+                        "purpose": f"{title}（{desc[:35]}）" if desc else f"{title}（业务视图）",
+                        "actions": [f"查看或操作 {title}"],
+                        "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if "admin" in vid else {"type": "none"},
+                        "evidence": [f"{rel}:1"],
+                    })
+
+        # Match Vue / React Router configs: path: "/users", name: "...", meta: { title: "..." }
+        for m in re.finditer(r"""path:\s*['"](/[^'"]*)['"]""", text):
+            r_path = m.group(1)
+            if r_path == "/" and "index-page" in seen_ids:
+                continue
+            window = text[m.start():m.start() + 350]
+            m_name = re.search(r"""name:\s*['"]([^'"]+)['"]""", window)
+            m_title = re.search(r"""(?:title|label):\s*['"]([^'"]+)['"]""", window)
+            r_name = m_name.group(1) if m_name else r_path.strip("/").replace("/", "-") or "root"
+            r_title = m_title.group(1) if m_title else r_name
+            pid = re.sub(r"[^a-z0-9]+", "-", f"route-{r_name.lower()}").strip("-")
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                pages.append({
+                    "id": pid,
+                    "path": r_path,
+                    "purpose": f"{r_title}（前端路由视图）",
+                    "actions": [f"访问并操作 {r_title} 页面"],
+                    "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if "admin" in r_path else {"type": "none"},
+                    "evidence": [f"{rel}:1"],
+                })
+
+        # Match HTML <section id="xxx" class="view">
+        for m in re.finditer(r"""<section\s+id=['"]([a-zA-Z0-9_-]+)['"]\s+class=['"][^'"]*\bview\b[^'"]*['"]""", text):
+            vid = m.group(1)
+            if vid not in seen_ids:
+                seen_ids.add(vid)
+                pages.append({
+                    "id": vid,
+                    "path": f"/#/{vid}",
+                    "purpose": f"{vid} 业务视图",
+                    "actions": [f"查看或操作 {vid}"],
+                    "auth": {"type": "none"},
+                    "evidence": [f"{rel}:1"],
+                })
+
+    # 3. Scan pages/, views/, and *-page.* / *-panel.* components
     for p in files:
         if p.suffix not in {".js", ".ts", ".vue", ".jsx", ".tsx", ".html"} or p.stat().st_size > 500_000:
             continue
         rel = p.relative_to(source).as_posix()
         stem = p.stem.lower()
-        is_page_dir = any(part in {"pages", "views"} for part in p.relative_to(source).parts)
+        is_page_dir = any(part in {"pages", "views", "screens", "panels"} for part in p.relative_to(source).parts)
         is_panel_or_page = stem.endswith("-page") or stem.endswith("-panel") or stem.endswith("page") or stem.endswith("view")
         if not (is_page_dir or is_panel_or_page):
             continue
