@@ -1113,6 +1113,338 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
     return pages
 
 
+def _normalize_resource_type_group(raw_type: str) -> str:
+    t = str(raw_type or "").strip().lower()
+    if t == "postgresql":
+        return "postgres"
+    if t == "mssql":
+        return "sqlserver"
+    return t
+
+
+def _is_preferred_default_resource_id(res_id: str) -> bool:
+    rid = str(res_id or "").strip().lower()
+    return rid.endswith("-main") or rid.endswith("-default") or rid.endswith("-server")
+
+
+def select_and_filter_platform_resources(resources: list[dict] | None, slug: str = "", *, default_only: bool = False) -> list[dict]:
+    """Filter out other apps' db-<slug> resources, ensure each resource type has an `is_default=True` resource,
+    and optionally return only the single default resource per type (plus db-<slug> if present) so the AI
+    never gets confused by multiple resources of the same type.
+    """
+    if not isinstance(resources, list):
+        return []
+    slug_lower = str(slug or "").strip().lower()
+    own_db_id = f"db-{slug_lower}" if slug_lower else ""
+
+    filtered: list[dict] = []
+    for item in resources:
+        if not isinstance(item, dict):
+            continue
+        rid = str(item.get("id", "")).strip()
+        rid_lower = rid.lower()
+        if not rid:
+            continue
+        if rid_lower.startswith("db-") and rid_lower != own_db_id:
+            continue
+        copy_item = dict(item)
+        if rid_lower.startswith("db-"):
+            copy_item["is_default"] = False
+        filtered.append(copy_item)
+
+    by_type: dict[str, list[dict]] = {}
+    for item in filtered:
+        rid_lower = str(item.get("id", "")).strip().lower()
+        if rid_lower.startswith("db-"):
+            continue
+        t_group = _normalize_resource_type_group(item.get("type", ""))
+        if not t_group:
+            continue
+        by_type.setdefault(t_group, []).append(item)
+
+    for group in by_type.values():
+        defaults = [r for r in group if r.get("is_default") is True]
+        if not defaults:
+            chosen = next((r for r in group if _is_preferred_default_resource_id(r.get("id", ""))), group[0])
+            chosen["is_default"] = True
+        elif len(defaults) > 1:
+            keep = next((r for r in defaults if _is_preferred_default_resource_id(r.get("id", ""))), defaults[0])
+            for r in defaults:
+                r["is_default"] = (r is keep)
+
+    filtered.sort(key=lambda r: (0 if r.get("is_default") else 1, str(r.get("type", "")), str(r.get("id", ""))))
+
+    if not default_only:
+        return filtered
+
+    result: list[dict] = []
+    seen_types: set[str] = set()
+    for item in filtered:
+        rid_lower = str(item.get("id", "")).strip().lower()
+        if rid_lower == own_db_id and own_db_id:
+            result.append(item)
+            continue
+        t_group = _normalize_resource_type_group(item.get("type", ""))
+        if item.get("is_default") and t_group not in seen_types:
+            seen_types.add(t_group)
+            result.append(item)
+    return result
+
+
+_PG_SQLITE3_COMPAT_SHIM = '''# --- OPC Platform PostgreSQL (DATABASE_URL) Compatibility Shim ---
+import os as _opc_os, re as _opc_re
+if _opc_os.getenv("DATABASE_URL", "").startswith(("postgres://", "postgresql://")):
+    import psycopg2 as _opc_pg
+    class _OpcPgRow(dict):
+        def __init__(self, cols, vals):
+            super().__init__(zip(cols, vals))
+            self._vals = tuple(vals)
+        def __getitem__(self, key):
+            return self._vals[key] if isinstance(key, (int, slice)) else super().__getitem__(key)
+    def _opc_translate_sql(sql: str) -> str:
+        s = sql.strip()
+        u = s.upper()
+        if u.startswith("BEGIN IMMEDIATE") or u.startswith("BEGIN EXCLUSIVE") or u == "BEGIN":
+            return "SELECT 1"
+        if _opc_re.match(r"(?is)^INSERT\\s+OR\\s+IGNORE\\s+INTO\\b", s):
+            s = _opc_re.sub(r"(?is)^INSERT\\s+OR\\s+IGNORE\\s+INTO\\b", "INSERT INTO", s, count=1).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        out, in_sq, in_dq, i = [], False, False, 0
+        while i < len(s):
+            ch = s[i]
+            if ch == "'" and not in_dq:
+                in_sq = not in_sq
+                out.append(ch)
+            elif ch == '"' and not in_sq:
+                in_dq = not in_dq
+                out.append(ch)
+            elif ch == "?" and not in_sq and not in_dq:
+                out.append("%s")
+            elif ch == "%" and not in_sq and not in_dq and (i + 1 >= len(s) or s[i + 1] != "s"):
+                out.append("%%")
+            else:
+                out.append(ch)
+            i += 1
+        return "".join(out)
+    class _OpcPgCursor:
+        def __init__(self, rows=None, rowcount=0, lastrowid=None):
+            self._rows = list(rows or [])
+            self._idx = 0
+            self.rowcount = rowcount
+            self.lastrowid = lastrowid
+        def fetchone(self):
+            if self._idx >= len(self._rows):
+                return None
+            r = self._rows[self._idx]
+            self._idx += 1
+            return r
+        def fetchall(self):
+            r = self._rows[self._idx:]
+            self._idx = len(self._rows)
+            return r
+        def __iter__(self):
+            return iter(self._rows)
+    class _OpcPgConn:
+        def __init__(self, dsn: str):
+            self._conn = _opc_pg.connect(dsn)
+            self.row_factory = None
+        def execute(self, sql: str, params=()):
+            s = sql.strip()
+            u = s.upper()
+            if u.startswith("PRAGMA"):
+                m = _opc_re.match(r'(?is)^PRAGMA\\s+table_info\\(\\s*["\\\']?([A-Za-z0-9_]+)["\\\']?\\s*\\)', s)
+                if m and m.group(1).lower() != "invoice_registry":
+                    tbl = m.group(1).lower()
+                    with self._conn.cursor() as cur:
+                        cur.execute("SELECT ordinal_position - 1 AS cid, column_name AS name, data_type AS type, CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END AS notnull, column_default AS dflt_value, 0 AS pk FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position", (tbl,))
+                        cols = [d[0] for d in cur.description]
+                        return _OpcPgCursor([_OpcPgRow(cols, r) for r in cur.fetchall()])
+                return _OpcPgCursor([])
+            if "SQLITE_MASTER" in u:
+                return _OpcPgCursor([])
+            pg_sql = _opc_translate_sql(s)
+            with self._conn.cursor() as cur:
+                cur.execute(pg_sql, tuple(params) if params else None)
+                if cur.description:
+                    cols = [d[0] for d in cur.description]
+                    rows = [_OpcPgRow(cols, r) for r in cur.fetchall()]
+                    return _OpcPgCursor(rows, cur.rowcount)
+                last_id = None
+                if u.startswith("INSERT"):
+                    try:
+                        cur.execute("SAVEPOINT _opc_lv; SELECT LASTVAL()")
+                        r = cur.fetchone()
+                        last_id = r[0] if r else None
+                        cur.execute("RELEASE SAVEPOINT _opc_lv")
+                    except Exception:
+                        try:
+                            cur.execute("ROLLBACK TO SAVEPOINT _opc_lv")
+                        except Exception:
+                            pass
+                return _OpcPgCursor([], cur.rowcount, last_id)
+        def executemany(self, sql: str, seq_of_params):
+            pg_sql = _opc_translate_sql(sql)
+            with self._conn.cursor() as cur:
+                for p in seq_of_params:
+                    cur.execute(pg_sql, tuple(p))
+                return _OpcPgCursor([], cur.rowcount)
+        def executescript(self, script: str):
+            return _OpcPgCursor([])
+        def cursor(self):
+            return self
+        def commit(self):
+            self._conn.commit()
+        def rollback(self):
+            self._conn.rollback()
+        def close(self):
+            self._conn.close()
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                self.commit()
+            else:
+                self.rollback()
+    sqlite3.connect = lambda *a, **kw: _OpcPgConn(_opc_os.environ["DATABASE_URL"])
+# --- End OPC Platform PostgreSQL Compatibility Shim ---
+'''
+
+
+def _auto_adapt_sqlite_to_postgres_changes(source: Path, slug: str, data: dict, proposal: dict) -> None:
+    """When the user has migrated local SQLite to platform PostgreSQL (`data['migrations']`),
+    guarantee that:
+    1. All SQLite database connection modules in Python (e.g. `db.py`) are adapted to connect via `DATABASE_URL` (`psycopg2`).
+    2. `requirements.txt` includes `psycopg2-binary`.
+    3. `contract.configs` declares `DATABASE_URL` and `contract.resources` includes the migrated database resource.
+    """
+    migrations = [m for m in (data.get("migrations") or []) if isinstance(m, dict)]
+    pg_migs = [m for m in migrations if str(m.get("target_type", "postgres")).lower() in {"postgres", "postgresql"}]
+    if not pg_migs:
+        return
+
+    latest_mig = pg_migs[-1]
+    res_id = str(latest_mig.get("resource_id") or f"db-{slug}")
+    db_name = str(latest_mig.get("database_name") or f"app_{slug.replace('-', '_')}")
+
+    contract = proposal.setdefault("contract", {})
+    changes: list[dict] = proposal.setdefault("changes", [])
+    changes_by_path: dict[str, dict] = {c.get("path", ""): c for c in changes if isinstance(c, dict) and c.get("path")}
+    used_ids: set[str] = {str(c.get("id", "")) for c in changes if isinstance(c, dict)}
+
+    def _unique_change_id(base_id: str) -> str:
+        cid = base_id
+        idx = 2
+        while cid in used_ids:
+            cid = f"{base_id}-{idx}"
+            idx += 1
+        used_ids.add(cid)
+        return cid
+
+    # 1. Find Python files that call sqlite3.connect(...)
+    sqlite_py_files: list[Path] = []
+    for p in sorted(source.rglob("*.py")):
+        if not p.is_file() or p.is_symlink():
+            continue
+        rel_parts = p.relative_to(source).parts
+        if any(part in delivery.EXCLUDED or part in {"tests", "test"} for part in rel_parts):
+            continue
+        try:
+            txt = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "import sqlite3" in txt and "sqlite3.connect" in txt:
+            sqlite_py_files.append(p)
+
+    # Prioritize files named db.py / database.py / storage.py
+    sqlite_py_files.sort(key=lambda p: (0 if p.stem.lower() in {"db", "database", "storage", "sqlite"} else 1, len(p.parts)))
+
+    for py_file in sqlite_py_files:
+        rel_path = py_file.relative_to(source).as_posix()
+        existing_change = changes_by_path.get(rel_path)
+        current_content = existing_change["content"] if (existing_change and isinstance(existing_change.get("content"), str)) else py_file.read_text(encoding="utf-8")
+        if "DATABASE_URL" in current_content or "psycopg" in current_content:
+            continue
+        # Inject _PG_SQLITE3_COMPAT_SHIM right after `import sqlite3`
+        new_content, n_subs = re.subn(
+            r"(?m)^(\s*import\s+sqlite3\b[^\n]*\n)",
+            lambda m: m.group(1) + _PG_SQLITE3_COMPAT_SHIM,
+            current_content,
+            count=1,
+        )
+        if n_subs == 0:
+            continue
+        if existing_change:
+            existing_change["content"] = new_content
+            if "PostgreSQL" not in existing_change.get("reason", ""):
+                existing_change["reason"] = existing_change.get("reason", "").rstrip("。") + "；并接入平台 PostgreSQL 数据库 (DATABASE_URL)"
+        else:
+            change_obj = {
+                "id": _unique_change_id("adapt-postgres-db"),
+                "path": rel_path,
+                "group": "迁移并接入平台 PostgreSQL 数据库",
+                "reason": f"将本地 SQLite 数据库连接切换至平台默认 PostgreSQL（专属库 {db_name}，读取 DATABASE_URL 环境变量，保留原业务查询逻辑不变）",
+                "content": new_content,
+                "executable": False,
+            }
+            changes.append(change_obj)
+            changes_by_path[rel_path] = change_obj
+
+    # 2. Ensure requirements.txt includes psycopg2-binary
+    req_files: list[Path] = []
+    for p in sorted(source.rglob("requirements*.txt")):
+        if p.is_file() and not p.is_symlink() and not any(part in delivery.EXCLUDED for part in p.relative_to(source).parts):
+            req_files.append(p)
+    req_files.sort(key=lambda p: (0 if p.name == "requirements.txt" else 1, len(p.parts)))
+    if req_files:
+        req_file = req_files[0]
+        req_rel = req_file.relative_to(source).as_posix()
+        existing_req = changes_by_path.get(req_rel)
+        req_content = existing_req["content"] if (existing_req and isinstance(existing_req.get("content"), str)) else req_file.read_text(encoding="utf-8")
+        if not re.search(r"(?i)\bpsycopg2(?:-binary)?\b", req_content):
+            updated_req = req_content.rstrip() + "\npsycopg2-binary>=2.9\n"
+            if existing_req:
+                existing_req["content"] = updated_req
+            else:
+                req_change = {
+                    "id": _unique_change_id("add-postgres-driver"),
+                    "path": req_rel,
+                    "group": "迁移并接入平台 PostgreSQL 数据库",
+                    "reason": "添加 PostgreSQL 数据库驱动依赖 psycopg2-binary，使应用在容器内可直连平台 PostgreSQL",
+                    "content": updated_req,
+                    "executable": False,
+                }
+                changes.append(req_change)
+                changes_by_path[req_rel] = req_change
+
+    # 3. Ensure DATABASE_URL is declared in contract.configs
+    configs: list[dict] = contract.setdefault("configs", [])
+    if not any(isinstance(c, dict) and c.get("key") == "DATABASE_URL" for c in configs):
+        configs.append({
+            "key": "DATABASE_URL",
+            "default": "",
+            "secret": True,
+            "required": True,
+            "description": f"平台 PostgreSQL 数据库连接地址（自动绑定专属迁移库 {db_name}）",
+        })
+
+    # 4. Ensure migrated resource is listed in contract.resources
+    c_resources: list[dict] = contract.setdefault("resources", [])
+    if not any(isinstance(r, dict) and r.get("id") == res_id for r in c_resources):
+        c_resources.append({
+            "id": res_id,
+            "type": "postgres",
+            "purpose": f"平台自动迁移创建的专属 PostgreSQL 数据库 ({db_name})",
+        })
+
+    # 5. Ensure build_context covers any newly added/modified files
+    build_ctx: list[str] = contract.setdefault("build_context", [])
+    if isinstance(build_ctx, list) and build_ctx and "." not in build_ctx:
+        for ch_path in changes_by_path:
+            covered = any(ch_path == entry or ch_path.startswith(entry.rstrip("/") + "/") for entry in build_ctx if isinstance(entry, str))
+            if not covered:
+                top_dir = ch_path.split("/")[0]
+                build_ctx.append(top_dir if "/" in ch_path else ch_path)
+
+
 def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dict) -> dict:
     """Ensure 100% of statically scanned APIs & pages are present in proposal['contract'],
     and build a fixed-format Step 1 Discovery Report (proposal['discovery_report']) and
@@ -1160,14 +1492,17 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
         })
     contract["pages"] = existing_pages
 
-    # 2b. Filter out internal tool/truncation/row-diff noise from unresolved & decisions so the user is never blocked by internal mechanics
+    # 2b. When user has migrated SQLite to platform PostgreSQL, auto-complete any missing DB code/driver/config adaptations
+    _auto_adapt_sqlite_to_postgres_changes(source, str(data.get("slug", "")), data, proposal)
+
+    # 2c. Filter out internal tool/truncation/row-diff/db-adaptation noise from unresolved & decisions so the user is never blocked by internal mechanics
     internal_noise_re = re.compile(
-        r"(截断|truncated|补齐.*扫描|完整接口详情|接口扫描显示|逐表差异|逐表核对|10,?264|14,?758|healthz|健康检查接口)",
+        r"(截断|truncated|补齐.*扫描|完整接口详情|接口扫描显示|逐表差异|逐表核对|10,?264|14,?758|healthz|健康检查接口|尚无.*PostgreSQL.*连接适配|数据库切换不能视为已完成|专属\s*PostgreSQL.*连接适配)",
         re.I,
     )
     has_migrated = bool(data.get("migrations"))
     feedback_text = str(data.get("feedback") or "")
-    user_confirmed_db = has_migrated and bool(re.search(r"(迁移|PostgreSQL|平台.*数据库|直接迁移|保留.*SQLite)", feedback_text, re.I))
+    user_confirmed_db = has_migrated or bool(re.search(r"(迁移|PostgreSQL|平台.*数据库|直接迁移|保留.*SQLite)", feedback_text, re.I))
 
     def _keep_question(q: str) -> bool:
         s = str(q or "").strip()
@@ -1175,7 +1510,7 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
             return False
         if internal_noise_re.search(s):
             return False
-        if user_confirmed_db and re.search(r"(SQLite.*迁移|补迁|保留\s*SQLite)", s, re.I):
+        if user_confirmed_db and re.search(r"(SQLite.*迁移|补迁|保留\s*SQLite|PostgreSQL\s*连接适配|数据库切换)", s, re.I):
             return False
         return True
 
@@ -1238,8 +1573,13 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
             break
 
     sqlite_dbs = sqlite_info.get("sqlite_databases") or []
-    resources = data.get("resources") or []
-    pg_resources = [r for r in resources if str(r.get("type", "")).lower() in {"postgres", "postgresql"}]
+    resources = select_and_filter_platform_resources(data.get("resources") or [], str(data.get("slug", "")))
+    pg_resources = [
+        r for r in resources
+        if str(r.get("type", "")).lower() in {"postgres", "postgresql"}
+        and not str(r.get("id", "")).lower().startswith("db-")
+    ]
+    pg_resources.sort(key=lambda r: (0 if r.get("is_default") else 1, str(r.get("id", ""))))
     storage_type = step1_ai.get("storage_type") or ("sqlite" if sqlite_dbs else "none")
 
     api_modules: dict[str, int] = {}

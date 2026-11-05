@@ -24,6 +24,7 @@ from .app_delivery_migration import (
     inspect_local_sqlite_files,
     migrate_local_data_to_platform,
     scan_app_routes_and_pages,
+    select_and_filter_platform_resources,
 )
 from .app_delivery_sources import dependency_path
 from .engine import TurnEngine
@@ -114,40 +115,53 @@ class AppDelivery:
         import copy as _copy
         data = self.load(job_id)
         result = {k: data.get(k) for k in ("id", "slug", "name", "description", "port", "app_url", "model", "reasoning_effort", "thinking", "status", "error", "events", "proposal_hash", "artifact_hash", "manifest", "verification", "approved_changes", "published", "published_version", "version_note", "resources", "revision", "conversation", "config_draft", "preparation_checks", "migrations")}
+        result["resources"] = select_and_filter_platform_resources(data.get("resources") or [], data.get("slug", ""))
         proposal = data.get("proposal")
         if proposal:
             source = self.path(job_id) / "review/source"
             enriched = enrich_contract_and_discovery_report(source, data, _copy.deepcopy(proposal))
             changes = []
-            for change in proposal["changes"]:
+            for change in enriched["changes"]:
                 path = delivery.relative(source, change["path"])
                 old = redacted(path.read_text(), change["path"]) if path.exists() else ""
                 applied = delivery.relative(self.path(job_id) / "approved/source", change["path"])
                 new = redacted(applied.read_text() if data["status"] == "ready" and applied.is_file() else change["content"], change["path"])
                 changes.append({"id": change["id"], "path": change["path"], "reason": change["reason"], "group": change.get("group", ""), "diff": "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=change["path"] + " (原始)", tofile=change["path"] + " (建议)"))})
-            configs = [{**c, "has_original_value": bool(original_value(source, c["source"])) if c.get("source") else False} for c in proposal["contract"].get("configs", [])]
+            configs = [{**c, "has_original_value": bool(original_value(source, c["source"])) if c.get("source") else False} for c in enriched["contract"].get("configs", [])]
             result["proposal"] = {
                 "summary": proposal["summary"],
                 "issues": proposal["issues"],
-                "unresolved": list(dict.fromkeys(proposal.get("unresolved", []) + proposal["contract"].get("unresolved", []))),
+                "unresolved": list(dict.fromkeys(enriched.get("unresolved", []) + enriched["contract"].get("unresolved", []))),
                 "changes": changes,
                 "configs": configs,
-                "detected_resources": proposal["contract"].get("resources", []),
+                "detected_resources": enriched["contract"].get("resources", []),
                 "apis": enriched["contract"].get("apis", []),
                 "pages": enriched["contract"].get("pages", []),
-                "health_path": proposal["contract"].get("health", {}).get("path"),
-                "verification_plan": proposal["contract"].get("verification", {}),
+                "health_path": enriched["contract"].get("health", {}).get("path"),
+                "verification_plan": enriched["contract"].get("verification", {}),
                 "four_step_report": proposal.get("four_step_report", {}),
-                "auth_profile": proposal["contract"].get("auth_profile", {}),
+                "auth_profile": enriched["contract"].get("auth_profile", {}),
                 "discovery_report": enriched.get("discovery_report", {}),
                 "transformation_report": enriched.get("transformation_report", {}),
             }
-            result["proposal"]["decisions"] = proposal.get("decisions", [])
+            result["proposal"]["decisions"] = enriched.get("decisions", [])
             # This authenticated local UI response is separate from the exported manifest/skill.
             # Original credentials remain in the local source and are only sent as runtime inputs
             # after the user confirms the final configuration, never to the analysis model.
             if data["status"] == "ready":
-                result["runtime_configs"] = runtime_configs(source, proposal["contract"].get("configs", []))
+                rt_configs = runtime_configs(source, enriched["contract"].get("configs", []))
+                mig_res_ids = [m.get("resource_id") for m in (data.get("migrations") or []) if isinstance(m, dict) and m.get("resource_id")]
+                if mig_res_ids:
+                    res_by_id = {r["id"]: r for r in (result.get("resources") or []) if isinstance(r, dict) and r.get("id")}
+                    for item in rt_configs:
+                        if not item.get("value") and not item.get("resource_id"):
+                            for rid in mig_res_ids:
+                                r_obj = res_by_id.get(rid)
+                                if r_obj and item["key"] in (r_obj.get("env_keys") or []):
+                                    item["resource_id"] = rid
+                                    item["value_source"] = "resource"
+                                    break
+                result["runtime_configs"] = rt_configs
                 draft = data.get("config_draft", {})
                 effective = draft["configs"] if draft.get("artifact_hash") == data.get("artifact_hash") else result["runtime_configs"]
                 result["configuration_problems"] = self.configuration_problems(data, effective)
@@ -219,7 +233,7 @@ class AppDelivery:
             "thinking": payload.get("thinking"),
             "status": "created",
             "events": [],
-            "resources": payload.get("resources", []),
+            "resources": select_and_filter_platform_resources(payload.get("resources", []), payload["slug"]),
         }
         if previous:
             data["previous_job_id"] = previous["id"]
@@ -508,7 +522,19 @@ class AppDelivery:
                         change = {**staged, **change}
                     resolved.append(change)
                 candidate["changes"] = resolved
-                # Auto-merge any missing statically scanned APIs & pages so 0 routes/pages are omitted in the generated skill
+                # Auto-trigger SQLite->PostgreSQL migration if user explicitly confirmed migrating to platform DB and AI forgot to call the tool
+                fb_txt = str(data.get("feedback") or "")
+                if (
+                    not data.get("migrations")
+                    and re.search(r"(使用平台\s*PostgreSQL|迁移.*PostgreSQL|迁移.*平台.*数据库|直接迁移所有表和数据)", fb_txt, re.I)
+                    and not re.search(r"保留.*SQLite", fb_txt, re.I)
+                    and inspect_local_sqlite_files(source).get("sqlite_databases")
+                ):
+                    try:
+                        migrate_storage_to_platform(source_type="sqlite", target_type="postgres")
+                    except Exception:
+                        pass
+                # Auto-merge any missing statically scanned APIs & pages and auto-complete DB code adaptation if migrated
                 if isinstance(candidate.get("contract"), dict):
                     enrich_contract_and_discovery_report(source, data, candidate)
                     candidate.pop("discovery_report", None)
@@ -655,7 +681,8 @@ proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.
 IMPORTANT ANTI-LOOP RULES:
 1. NEVER put internal technical/tool mechanics (such as "接口扫描被截断", "补齐完整扫描结果", "核对数据库行数差异", "添加 /healthz", "创建 Dockerfile") into `unresolved` or `decisions`.
 2. `scan_routes_and_pages` automatically caches 100% of APIs and pages in the backend and auto-merges them into `contract.apis` and `contract.pages` inside `submit_proposal`. When an app has many APIs, you do NOT need to manually re-type all 60+ API objects in `submit_proposal` — you can pass `contract.apis=[]` (or only a few customized APIs) and the backend will deterministically populate all scanned APIs and pages with zero omissions.
-3. When the user's feedback asks to migrate SQLite to platform PostgreSQL (or confirms database migration), immediately call `migrate_storage_to_platform`, propose the necessary database connection adaptation and Dockerfile via `propose_file_change`, and call `submit_proposal` with `unresolved=[]`.
+3. When the user's feedback asks to migrate SQLite to platform PostgreSQL (or confirms database migration), that selection IS full authorization to modify all involved database connection code and dependencies. Immediately call `migrate_storage_to_platform`, propose the necessary database connection adaptation (`db.py` + `psycopg2-binary` in `requirements.txt`) and Dockerfile via `propose_file_change`, and call `submit_proposal` with `unresolved=[]`. NEVER put "尚无经过核实的 PostgreSQL 连接适配实现" or "数据库切换不能视为已完成" into `unresolved`.
+4. When multiple platform resources exist, `available_resource_metadata` already provides the `is_default: true` default resource for each type (`postgres`, `redis`, `s3`, etc.). Always use the default resource of the matching type without asking the user which resource of the same type to pick.
 """
         model_settings: dict[str, Any] = {"max_tokens": 32000}
         effort = data.get("reasoning_effort")
@@ -665,7 +692,8 @@ IMPORTANT ANTI-LOOP RULES:
         if thinking is not None:
             model_settings["extra_body"] = {"think": bool(thinking)}
         engine = TurnEngine(provider=self.manager.provider, registry=registry, permissions=PermissionEngine(source, mode=Mode.DISCUSS), model=data["model"], instructions=instructions, max_iterations=100, model_settings=model_settings, tool_result_max_bytes=0)
-        prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": data["resources"], "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范生成分析与改造方案。"}, ensure_ascii=False)
+        ai_resources = select_and_filter_platform_resources(data.get("resources") or [], data["slug"], default_only=True)
+        prompt = json.dumps({"name": data["name"], "description": data["description"], "slug": data["slug"], "base_url": data["app_url"], "container_port": data["port"], "available_resource_metadata": ai_resources, "user_answers": data.get("feedback", ""), "previous_plan": self.previous_plan(job_id), "task": "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范生成分析与改造方案。"}, ensure_ascii=False)
         async def run_analysis():
             request = prompt
             for attempt in range(3):
@@ -835,9 +863,13 @@ IMPORTANT ANTI-LOOP RULES:
         proposal = data["proposal"]
         if technical_preparation and data.get("preparation_policy") != "technical-preparation-v1":
             raise ValueError("旧方案需按新的自动技术准备规则重新分析")
+        work = self.path(job_id) / "review"
+        if data.get("migrations"):
+            enrich_contract_and_discovery_report(work / "source", data, proposal)
+            proposal.pop("discovery_report", None)
+            proposal.pop("transformation_report", None)
         if proposal.get("unresolved") or proposal.get("contract", {}).get("unresolved"):
             raise ValueError("请先回答所有待确认问题")
-        work = self.path(job_id) / "review"
         current, _ = delivery.inspect_source(work / "source")
         if current != delivery.load(work / "inventory.json")["files"]:
             raise ValueError("原始源码在分析后发生变化，请重新选择源码并确认新提案")

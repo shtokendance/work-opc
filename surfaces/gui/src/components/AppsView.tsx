@@ -349,8 +349,9 @@ export function AppsView({ onBack }: Props) {
     setDeliveryJob(job);
     if (readyArtifact.current === job.artifact_hash) return;
     readyArtifact.current = job.artifact_hash || "";
-    setConfigs((job.config_draft && job.config_draft.artifact_hash === job.artifact_hash ? job.config_draft.configs : job.runtime_configs || job.manifest?.configs || []).map(c => ({ ...c, secret: !!job.proposal?.configs.find(p => p.key === c.key)?.secret, value_source: c.value_source || "manual" })));
-    setSelectedResourceIds([...new Set((job.config_draft && job.config_draft.artifact_hash === job.artifact_hash ? job.config_draft.configs : []).map(c => c.resource_id).filter((id): id is string => !!id))]);
+    const initialConfigs = job.config_draft && job.config_draft.artifact_hash === job.artifact_hash ? job.config_draft.configs : job.runtime_configs || job.manifest?.configs || [];
+    setConfigs(initialConfigs.map(c => ({ ...c, secret: !!job.proposal?.configs.find(p => p.key === c.key)?.secret, value_source: c.value_source || "manual" })));
+    setSelectedResourceIds([...new Set(initialConfigs.map(c => c.resource_id).filter((id): id is string => !!id))]);
     if (job.manifest?.container_port) setContainerPort(job.manifest.container_port);
   };
 
@@ -1332,7 +1333,7 @@ export function AppsView({ onBack }: Props) {
                       <AppDeliveryConfig
                         configs={configs}
                         originals={deliveryJob?.runtime_configs || []}
-                        resources={onlineResources}
+                        resources={[...new Map([...onlineResources, ...(deliveryJob?.resources || [])].map(r => [r.id, r])).values()]}
                         onChange={changeConfigs}
                       />
                     </section>

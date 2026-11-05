@@ -72,7 +72,7 @@ python3 scripts/delivery.py smoke /tmp/app-review --image opc-adapter/stock-demo
 
 现版 smoke 仅处理本机 Docker：URL 必须是该容器的 OrbStack 域名，或事先固定的回环端口。它从实际生成的 app.tar 解包构建，而非另做不同权限的构建目录；创建无外网的专用运行网络、只读文件系统和 /tmp 临时盘，验证真实健康身份和业务 JSON。app.tar 与业务技能 ZIP 规范化时间/权限，避免文件时间或 Python 版本使摘要漂移。构建阶段可能下载应用依赖；它不配置 DNS、Nginx、证书、外部数据库或连接生产服务。
 
-有数据库等依赖的应用，保持原依赖并报告阻塞，另在用户授权的独立测试网络验证，不自动换库。`--env-file <path>` 只接收 chmod 600 的用户指定文件，语法为 Docker 的 KEY=value，不支持 shell 展开或仅 KEY 的宿主环境继承。非秘密默认值传入容器，env-file 优先；必填值与 PORT 一致性预先检查。API auth.env 可从同一文件用于本次只读探针，不写入持久报告。已有同名容器不会覆盖。`--keep` 留给手测；`delivery.py cleanup <工作目录>` 仅删除本次所有权标记匹配的容器/网络。
+当用户选择将本地 SQLite（或本地数据库）迁移到平台提供的默认数据库资源时，**即代表用户已完整确认并授权修改所有涉及数据库连接、驱动依赖（如 `psycopg2-binary`）与 `DATABASE_URL` 环境变量配置的代码**；AI 必须在同一轮调用 `migrate_storage_to_platform` 迁移表结构与存量数据，并通过 `propose_file_change` 完成数据库连接代码的改造（严禁以「尚无 PostgreSQL 连接适配实现」或「数据库切换不能视为已完成」为由写入 `unresolved` 阻塞用户）。当用户选择保留原本地数据库或原依赖时，保持原依赖不变。`--env-file <path>` 只接收 chmod 600 的用户指定文件，语法为 Docker 的 KEY=value，不支持 shell 展开或仅 KEY 的宿主环境继承。非秘密默认值传入容器，env-file 优先；必填值与 PORT 一致性预先检查。API auth.env 可从同一文件用于本次只读探针，不写入持久报告。已有同名容器不会覆盖。`--keep` 留给手测；`delivery.py cleanup <工作目录>` 仅删除本次所有权标记匹配的容器/网络。
 
 业务技能使用：
 

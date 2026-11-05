@@ -49,11 +49,15 @@ metadata:
    - 先调用 `fetch_dockerfile_template(language, version)` 从 `platform-opc`（`deploy-opc` 数据库）获取同语言、同版本的标准 `Dockerfile` 模板与基础镜像。
    - **若原应用已有 `Dockerfile`**：检查其端口、监听地址（`0.0.0.0`）、构建依赖与国内镜像源是否需要改造；需要则提交修改。
    - **若原应用没有 `Dockerfile`**：基于 `platform-opc` 返回的基础镜像与模板，结合当前应用的真实入口与依赖文件生成完整 `Dockerfile`（配置国内镜像加速如阿里云 pip / npmmirror / goproxy.cn，并补齐 `/healthz` 健康检查）。
-2. **数据存储调整与自动迁移**：
+2. **数据存储调整与自动迁移（用户选择迁移即代表授权修改全部涉及代码）**：
+   - **默认资源自动选用**：`platform-opc` 的每种基础服务资源类型（`postgres`、`mysql`、`redis`、`s3` 等）均标记了 `is_default: true` 的默认共享资源。存在多个同类型资源时，**自动优先选用 `is_default: true` 的默认资源**，严禁因为同类型有多个资源而向用户提问如何选择。
    - **本地文件或 JSON**：**不用改动任何代码或配置**，将本地文件或 JSON 保持原样列入 `build_context` 打入容器镜像内，继续按原路径作为本地数据存储使用。
-   - **本地 SQLite 等嵌入式数据库**：当平台提供服务端数据库资源且需要将 SQLite 迁移至服务端数据库时，调用 `inspect_local_storage` 读取表结构与数据，并通过 `migrate_storage_to_platform(source_type="sqlite", ...)` 将表结构及存量数据自动迁移到 `platform-opc` 提供的服务端数据库（自动创建独立库 `app_<slug>`），同时改造应用的数据库连接代码与配置，使其连接到服务端数据库。（若无需切换或测试环境指定保留原样，则保留原文件打入镜像）。
+   - **本地 SQLite 等嵌入式数据库**：当用户选择或确认将 SQLite 迁移至平台提供的默认数据库时，**即代表用户已确认授权修改所有涉及数据库连接的代码与依赖**。你必须在同一轮内：
+     1. 调用 `inspect_local_storage` 读取表结构与数据，并通过 `migrate_storage_to_platform(source_type="sqlite", ...)` 将全部表结构及存量数据自动迁移到 `platform-opc` 默认服务端数据库（自动创建独立库 `app_<slug>`）；
+     2. 调用 `propose_file_change` 同步改造应用的数据库连接代码（如 `db.py` 优先读取 `DATABASE_URL` 连接 PostgreSQL）与依赖文件（如 `requirements.txt` 增加 `psycopg2-binary`），并在 `contract.configs` 中声明 `DATABASE_URL`；
+     3. **严禁**将“尚无经过核实的 PostgreSQL 连接适配实现”或“数据库切换不能视为已完成”作为 `unresolved` 问题抛回给用户！（若用户选择保留原 SQLite，则保留原文件打入镜像，不改数据库代码）。
    - **远端数据库实例**：默认服务器端能够连接，保留原连接配置，**不用改造**。
-   - **本地数据库实例（如 `127.0.0.1` 的 MySQL / PostgreSQL / SQLServer）**：匹配 `platform-opc` 接口获取到的同类型服务端数据库资源（MySQL 对 MySQL、PostgreSQL 对 PostgreSQL、SQLServer 对 SQLServer），通过应用代码内的配置读取当前数据库的所有表结构与数据，调用 `migrate_storage_to_platform` 迁移至服务端数据库，并调整应用配置直接使用服务端数据库。
+   - **本地数据库实例（如 `127.0.0.1` 的 MySQL / PostgreSQL / SQLServer）**：匹配 `platform-opc` 接口获取到的同类型默认服务端数据库资源（`is_default: true`），通过应用代码内的配置读取当前数据库的所有表结构与数据，调用 `migrate_storage_to_platform` 迁移至服务端数据库，并调整应用配置直接使用服务端数据库。
 3. **外部不可达接口识别与本地 AI 改造提示词**：
    - 检查应用调用的外部 HTTP/RPC 接口。若有指向 `127.0.0.1` / `localhost` 的外部第三方服务接口（在服务器上必定调不通），在 `four_step_report.step2_transformation.unreachable_external_apis` 中明确列出，并生成一段**可直接复制给用户本地 AI 的改造提示词**（指导用户如何将其改造成可配置地址或将相关依赖服务一并部署）。
 4. **基础服务（Redis、MQ 等）本地实例迁移**：
