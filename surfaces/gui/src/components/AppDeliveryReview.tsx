@@ -1,7 +1,80 @@
 import { useEffect, useRef, useState } from "react";
 import { appDeliveryRequest, getAppDeliveryJob, type AppDeliveryJob, type AppConfigItem, type ResourceSummary } from "../api";
 import { AppDeliveryConfig, needsConnectionDecision } from "./AppDeliveryConfig";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
+
+type DimensionMeta = {
+  label: string;
+  subTitle: string;
+  icon: IconName;
+  badgeClass: string;
+};
+
+function getDimensionMeta(tag: string): DimensionMeta {
+  const t = tag.trim();
+  if (/应用定位|业务用途|项目用途|定位/.test(t)) {
+    return {
+      label: "应用定位",
+      subTitle: "业务用途与定位",
+      icon: "sparkle",
+      badgeClass: "bg-accentSoft text-accent border border-accent/25",
+    };
+  }
+  if (/运行环境|技术栈|开发语言|运行时|环境/.test(t)) {
+    return {
+      label: "运行环境",
+      subTitle: "开发语言与技术栈",
+      icon: "code",
+      badgeClass: "bg-tealSoft text-tealInk border border-tealLine/30",
+    };
+  }
+  if (/接口与页面|页面与接口|页面与业务视图|视图与路由/.test(t)) {
+    return {
+      label: "接口与页面",
+      subTitle: "全景契约与视图",
+      icon: "table",
+      badgeClass: "bg-warnSoft text-warnInk border border-warnInk/25",
+    };
+  }
+  if (/后端\s*API|API\s*接口|服务接口|接口清单/.test(t)) {
+    return {
+      label: "后端接口",
+      subTitle: "API 接口全景",
+      icon: "plug",
+      badgeClass: "bg-accentSoft text-accent border border-accent/25",
+    };
+  }
+  if (/页面与视图|页面清单|业务视图/.test(t)) {
+    return {
+      label: "页面视图",
+      subTitle: "业务视图全景",
+      icon: "table",
+      badgeClass: "bg-warnSoft text-warnInk border border-warnInk/25",
+    };
+  }
+  if (/登录与鉴权|鉴权与安全|安全凭据|权限与凭据/.test(t)) {
+    return {
+      label: "登录与鉴权",
+      subTitle: "权限与安全策略",
+      icon: "shield",
+      badgeClass: "bg-okSoft text-ok border border-okLine/40",
+    };
+  }
+  if (/数据与存储|存储与数据库|持久化|数据库/.test(t)) {
+    return {
+      label: "数据与存储",
+      subTitle: "数据存储与持久化",
+      icon: "archive",
+      badgeClass: "bg-panel text-ink border border-lineStrong/40",
+    };
+  }
+  return {
+    label: t,
+    subTitle: "分析明细",
+    icon: "diamond",
+    badgeClass: "bg-panel text-muted border border-line",
+  };
+}
 
 function renderFormattedSummary(rawText: string) {
   const trimmed = (rawText || "").trim();
@@ -60,35 +133,90 @@ function renderFormattedSummary(rawText: string) {
     return <span>{trimmed}</span>;
   }
 
+  // Group items into blocks: structured bracket cards vs normal text/step items
+  type Block =
+    | { type: "cards"; items: { tag: string; content: string }[] }
+    | { type: "step"; label: string; text: string }
+    | { type: "bullet"; text: string };
+
+  const blocks: Block[] = [];
+  let pendingCards: { tag: string; content: string }[] = [];
+
+  const flushCards = () => {
+    if (pendingCards.length > 0) {
+      blocks.push({ type: "cards", items: pendingCards });
+      pendingCards = [];
+    }
+  };
+
+  for (const seg of segments) {
+    const bracketMatch = seg.match(/^【([^】]+)】\s*(.*)$/);
+    if (bracketMatch) {
+      pendingCards.push({ tag: bracketMatch[1], content: bracketMatch[2] });
+      continue;
+    }
+    flushCards();
+
+    const stepMatch = seg.match(/^(第[一二三四]步[^：:，。]{0,6}|请确认)[：:]?\s*(.*)$/);
+    if (stepMatch && stepMatch[2]) {
+      blocks.push({ type: "step", label: stepMatch[1], text: stepMatch[2] });
+      continue;
+    }
+    blocks.push({ type: "bullet", text: seg.replace(/^[•\-*]\s*/, "") });
+  }
+  flushCards();
+
   return (
-    <div className="space-y-2 text-xs sm:text-sm leading-relaxed">
-      {segments.map((seg, idx) => {
-        const bracketMatch = seg.match(/^【([^】]+)】\s*(.*)$/);
-        if (bracketMatch) {
+    <div className="space-y-3 text-xs leading-relaxed">
+      {blocks.map((block, bIdx) => {
+        if (block.type === "cards") {
           return (
-            <div key={idx} className="flex items-start gap-2 rounded-lg bg-panel/45 border border-line/60 px-2.5 py-1.5">
-              <span className="shrink-0 px-1.5 py-0.5 rounded bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
-                {bracketMatch[1]}
-              </span>
-              <span className="text-ink flex-1">{bracketMatch[2]}</span>
+            <div key={bIdx} className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              {block.items.map((item, itemIdx) => {
+                const meta = getDimensionMeta(item.tag);
+                const isWide = item.content.length > 110 || (block.items.length % 2 !== 0 && itemIdx === block.items.length - 1);
+                return (
+                  <div
+                    key={itemIdx}
+                    className={`rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2 flex flex-col justify-between ${
+                      isWide ? "sm:col-span-2" : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] ${meta.badgeClass}`}>
+                          <Icon name={meta.icon} size={12} />
+                          <span>{meta.label}</span>
+                        </span>
+                        <span className="font-semibold text-xs text-ink">{meta.subTitle}</span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-ink/90 leading-relaxed font-normal whitespace-pre-wrap">
+                      {item.content}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           );
         }
-        const stepMatch = seg.match(/^(第[一二三四]步[^：:，。]{0,6}|请确认)[：:]?\s*(.*)$/);
-        if (stepMatch && stepMatch[2]) {
+
+        if (block.type === "step") {
           return (
-            <div key={idx} className="flex items-start gap-2 rounded-lg bg-panel/45 border border-line/60 px-2.5 py-1.5">
-              <span className="shrink-0 px-1.5 py-0.5 rounded bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
-                {stepMatch[1]}
+            <div key={bIdx} className="flex items-start gap-2.5 rounded-xl bg-paper/90 border border-line/70 p-3 shadow-2xs">
+              <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
+                <Icon name="sparkle" size={11} />
+                <span>{block.label}</span>
               </span>
-              <span className="text-ink flex-1">{stepMatch[2]}</span>
+              <span className="text-ink flex-1 leading-relaxed">{block.text}</span>
             </div>
           );
         }
+
         return (
-          <div key={idx} className="flex items-start gap-2 pl-1">
+          <div key={bIdx} className="flex items-start gap-2 pl-1">
             <span className="text-accent font-bold shrink-0 mt-0.5">•</span>
-            <span className="text-ink flex-1">{seg.replace(/^[•\-*]\s*/, "")}</span>
+            <span className="text-ink flex-1 leading-relaxed">{block.text}</span>
           </div>
         );
       })}
@@ -439,42 +567,64 @@ export function AppDeliveryReview({
         {(discovery || (plan && (plan.four_step_report || plan.auth_profile || plan.apis?.length || plan.pages?.length))) && (
           <section
             aria-label="第一步：AI 深度分析结果"
-            className="rounded-2xl border border-accent/30 bg-paper/90 p-4 space-y-3 text-xs shadow-xs"
+            className="rounded-2xl border border-line bg-paper/95 p-4 sm:p-5 space-y-3.5 text-xs shadow-xs"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-line/70">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded-md bg-accentSoft text-accent font-semibold text-[11px] border border-accent/20">
-                  第一步 · 应用深度分析报告
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line/70">
+              <div className="flex items-center gap-2.5">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-accentSoft text-accent font-semibold text-xs border border-accent/25">
+                  <Icon name="sparkle" size={13} />
+                  <span>第一步 · 应用深度分析报告</span>
                 </span>
-                <span className="font-semibold text-sm text-ink">
+                <span className="font-semibold text-sm text-ink tracking-tight">
                   {job?.name || job?.slug} 全景摸底结果
                 </span>
               </div>
-              <span className="text-[11px] text-muted font-mono">
-                页面 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个 · 接口 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个
-              </span>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded-md bg-panel border border-line font-mono text-muted text-[11px]">
+                  页面 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个
+                </span>
+                <span className="px-2 py-0.5 rounded-md bg-panel border border-line font-mono text-muted text-[11px]">
+                  接口 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {/* 1. 项目定位 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
-                <div className="font-semibold text-ink">1. 应用定位与业务用途</div>
-                <p className="text-muted leading-relaxed">
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-accentSoft text-accent border border-accent/25">
+                      <Icon name="sparkle" size={12} />
+                      <span>应用定位</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">业务用途与定位</span>
+                  </div>
+                </div>
+                <p className="text-muted leading-relaxed text-xs">
                   {discovery?.project_purpose || plan?.summary || "已完成应用源码结构与核心业务分析"}
                 </p>
               </div>
 
               {/* 2. 语言版本与技术栈 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
-                <div className="font-semibold text-ink">2. 开发语言、版本与技术栈</div>
-                <div className="text-muted space-y-0.5">
-                  <div>
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-tealSoft text-tealInk border border-tealLine/30">
+                      <Icon name="code" size={12} />
+                      <span>运行环境</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">开发语言与技术栈</span>
+                  </div>
+                </div>
+                <div className="text-muted space-y-1.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-ink font-medium">运行时：</span>
-                    <span className="font-mono text-ink">
+                    <span className="font-mono text-ink px-1.5 py-0.5 rounded bg-panel border border-line text-[11px]">
                       {discovery?.tech_stack?.language || plan?.four_step_report?.step1_discovery?.language || "自动识别"}{" "}
                       {discovery?.tech_stack?.runtime_version || plan?.four_step_report?.step1_discovery?.runtime_version || ""}
                     </span>
-                    <span className="ml-2 text-muted">（容器端口 {discovery?.tech_stack?.container_port || job?.port || 8080}）</span>
+                    <span className="text-muted text-[11px]">（容器端口 {discovery?.tech_stack?.container_port || job?.port || 8080}）</span>
                   </div>
                   {!!discovery?.tech_stack?.frameworks?.length && (
                     <div>
@@ -492,38 +642,50 @@ export function AppDeliveryReview({
               </div>
 
               {/* 3. 页面与功能视图全景 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-ink">
-                    3. 页面与业务视图（共 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个）
-                  </span>
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-warnSoft text-warnInk border border-warnInk/25">
+                      <Icon name="table" size={12} />
+                      <span>页面视图</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">
+                      业务视图（共 {discovery?.pages_overview?.total ?? plan?.pages?.length ?? 0} 个）
+                    </span>
+                  </div>
                 </div>
                 {(discovery?.pages_overview?.items || plan?.pages || []).length > 0 ? (
-                  <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                     {(discovery?.pages_overview?.items || plan?.pages || []).map((pg, idx) => (
                       <div key={`${pg.path}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
-                        <span className="font-mono px-1.5 py-0.2 rounded bg-paper border border-line text-ink shrink-0">
+                        <span className="font-mono px-1.5 py-0.5 rounded bg-panel border border-line text-ink shrink-0">
                           {pg.path}
                         </span>
-                        <span className="text-muted truncate" title={pg.purpose}>
+                        <span className="text-muted truncate pt-0.5" title={pg.purpose}>
                           {pg.purpose}
                         </span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-muted">纯后端 API 服务（无独立前端页面）</p>
+                  <p className="text-muted text-xs">纯后端 API 服务（无独立前端页面）</p>
                 )}
               </div>
 
               {/* 4. API 接口全景统计 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-ink">
-                    4. 后端 API 接口（共 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个）
-                  </span>
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-accentSoft text-accent border border-accent/25">
+                      <Icon name="plug" size={12} />
+                      <span>后端接口</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">
+                      API 接口全景（共 {discovery?.apis_overview?.total ?? plan?.apis?.length ?? 0} 个）
+                    </span>
+                  </div>
                   {discovery?.apis_overview && (
-                    <span className="text-[11px] text-muted">
+                    <span className="text-[11px] font-mono text-muted">
                       只读 {discovery.apis_overview.read_count ?? 0} · 写操作 {discovery.apis_overview.write_count ?? 0}
                     </span>
                   )}
@@ -531,7 +693,7 @@ export function AppDeliveryReview({
                 {discovery?.apis_overview?.modules && Object.keys(discovery.apis_overview.modules).length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {Object.entries(discovery.apis_overview.modules).map(([mod, cnt]) => (
-                      <span key={mod} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-[11px] text-ink">
+                      <span key={mod} className="px-1.5 py-0.5 rounded bg-panel border border-line font-mono text-[11px] text-ink">
                         {mod}: {cnt}
                       </span>
                     ))}
@@ -539,17 +701,17 @@ export function AppDeliveryReview({
                 )}
                 {(discovery?.apis_overview?.items || plan?.apis || []).length > 0 && (
                   <details className="pt-1">
-                    <summary className="cursor-pointer text-accent hover:underline select-none">
+                    <summary className="cursor-pointer text-accent hover:underline select-none text-xs font-medium">
                       展开查看全部 {(discovery?.apis_overview?.items || plan?.apis || []).length} 个接口清单
                     </summary>
                     <div className="mt-1.5 space-y-1 max-h-44 overflow-y-auto pr-1 border-t border-line/50 pt-1.5">
                       {(discovery?.apis_overview?.items || plan?.apis || []).map((api, idx) => (
                         <div key={`${api.id}-${idx}`} className="flex items-start gap-1.5 text-[11px]">
-                          <span className="font-mono font-semibold px-1 rounded bg-paper border border-line text-ink shrink-0">
+                          <span className="font-mono font-semibold px-1 rounded bg-panel border border-line text-ink shrink-0">
                             {api.method}
                           </span>
                           <span className="font-mono text-ink shrink-0">{api.path}</span>
-                          <span className="text-muted truncate" title={api.purpose}>
+                          <span className="text-muted truncate pt-0.5" title={api.purpose}>
                             · {api.purpose}
                           </span>
                         </div>
@@ -560,17 +722,25 @@ export function AppDeliveryReview({
               </div>
 
               {/* 5. 数据存储与数据库 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
-                <div className="font-semibold text-ink">5. 数据存储与平台数据库</div>
-                <div className="text-muted space-y-1">
-                  <div>
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-panel text-ink border border-lineStrong/40">
+                      <Icon name="archive" size={12} />
+                      <span>数据存储</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">数据存储与持久化</span>
+                  </div>
+                </div>
+                <div className="text-muted space-y-1.5 text-xs">
+                  <div className="flex items-center gap-1.5">
                     <span className="text-ink font-medium">存储类型：</span>
-                    <span className="font-mono text-ink">
+                    <span className="font-mono text-ink px-1.5 py-0.5 rounded bg-panel border border-line text-[11px]">
                       {discovery?.storage_and_database?.storage_type || plan?.four_step_report?.step1_discovery?.storage_type || "本地/内置存储"}
                     </span>
                   </div>
                   {discovery?.storage_and_database?.sqlite_databases?.map(db => (
-                    <div key={db.path} className="text-[11px] bg-paper/80 rounded-lg p-2 border border-line/60 space-y-1">
+                    <div key={db.path} className="text-[11px] bg-panel/60 rounded-lg p-2 border border-line/60 space-y-1">
                       <div className="font-mono text-ink">
                         {db.path} ({db.size_mb} MB · {db.table_count} 张表 · {db.total_rows} 条记录)
                       </div>
@@ -585,7 +755,7 @@ export function AppDeliveryReview({
                           ).map(t => (
                             <span
                               key={t.name}
-                              className="px-1.5 py-0.5 rounded bg-panel border border-line/70 font-mono text-[10px] text-ink"
+                              className="px-1.5 py-0.5 rounded bg-paper border border-line/70 font-mono text-[10px] text-ink"
                             >
                               {t.name}
                               {typeof t.row_count === "number" ? ` (${t.row_count}行)` : ""}
@@ -601,7 +771,7 @@ export function AppDeliveryReview({
                         <span
                           key={m.container_path}
                           title={m.purpose || m.container_path}
-                          className="rounded border border-brand/25 bg-brand/5 px-1.5 py-0.5 font-mono text-[11px] text-ink"
+                          className="rounded border border-accent/25 bg-accentSoft/30 px-1.5 py-0.5 font-mono text-[11px] text-ink"
                         >
                           📁 {m.container_path} → {m.volume_name || m.name}
                           {typeof m.seed_files_count === "number" && m.seed_files_count > 0 ? ` (种子文件:${m.seed_files_count})` : ""}
@@ -614,9 +784,17 @@ export function AppDeliveryReview({
               </div>
 
               {/* 6. 权限验证与容器化现状 */}
-              <div className="rounded-xl border border-line/70 bg-panel/30 p-3 space-y-1">
-                <div className="font-semibold text-ink">6. 登录鉴权与容器化现状</div>
-                <div className="text-muted space-y-0.5">
+              <div className="rounded-xl border border-line/75 bg-paper/95 p-3.5 shadow-2xs hover:border-lineStrong/50 hover:shadow-xs transition-all space-y-2">
+                <div className="flex items-center justify-between pb-1.5 border-b border-line/50">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-semibold text-[11px] bg-okSoft text-ok border border-okLine/40">
+                      <Icon name="shield" size={12} />
+                      <span>登录鉴权</span>
+                    </span>
+                    <span className="font-semibold text-xs text-ink">权限与安全策略</span>
+                  </div>
+                </div>
+                <div className="text-muted space-y-1.5 text-xs">
                   <div>
                     <span className="text-ink font-medium">页面/接口鉴权：</span>
                     <span>
@@ -624,7 +802,7 @@ export function AppDeliveryReview({
                     </span>
                   </div>
                   {plan?.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
-                    <div className="text-ok font-mono">
+                    <div className="text-ok font-mono bg-okSoft/40 border border-okLine/30 px-2 py-1 rounded-md">
                       已提取内置凭据：{plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
                       {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
                       {plan.auth_profile.token ? ` Token已就绪` : ""}
@@ -640,8 +818,11 @@ export function AppDeliveryReview({
 
             {/* 拟执行改造动作预览 */}
             {!!discovery?.planned_adaptations?.length && (
-              <div className="rounded-xl border border-line/70 bg-panel/20 px-3 py-2 space-y-1">
-                <div className="font-semibold text-ink">第二步拟执行的改造项：</div>
+              <div className="rounded-xl border border-line/70 bg-panel/30 px-3.5 py-2.5 space-y-1.5">
+                <div className="font-semibold text-ink flex items-center gap-1.5">
+                  <Icon name="sparkle" size={12} className="text-accent" />
+                  <span>第二步拟执行的改造项：</span>
+                </div>
                 <ul className="list-disc list-inside text-muted space-y-0.5">
                   {discovery.planned_adaptations.map((act, idx) => (
                     <li key={idx}>{act}</li>
