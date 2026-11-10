@@ -1845,23 +1845,31 @@ export function AppsView({ onBack }: Props) {
             )}
 
             {/* Top Quick Info Card */}
-            <div className="px-6 py-3.5 bg-paper/50 border-b border-line shrink-0">
-              <div className="grid grid-cols-2 gap-3 text-meta">
-                <div className="p-2.5 rounded-lg bg-panel border border-line/80 flex flex-col justify-between">
-                  <span className="text-label text-muted">内网直连地址</span>
-                  <div className="flex items-center justify-between gap-1.5 mt-1 font-mono">
+            <div className="px-6 py-3.5 bg-paper/60 border-b border-line shrink-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-meta">
+                <div className="p-3 rounded-xl bg-paper border border-line/80 shadow-2xs hover:border-lineStrong/60 transition-all flex flex-col justify-between space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
+                      <Icon name="monitor" size={13} className="text-accent" />
+                      <span>内网直连地址</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-accentSoft text-accent border border-accent/20">
+                      HTTP 入口
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 font-mono bg-panel/60 p-2 rounded-lg border border-line/50">
                     <a
                       href={selectedApp.app_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-accent hover:underline truncate text-label"
+                      className="text-accent hover:underline truncate text-xs font-medium"
                       title={selectedApp.app_url}
                     >
                       {selectedApp.app_url}
                     </a>
                     <button
                       onClick={() => copyToClipboard(selectedApp.app_url, "内网直连地址")}
-                      className="text-muted hover:text-ink p-1 rounded hover:bg-paper"
+                      className="text-muted hover:text-ink p-1 rounded hover:bg-paper transition-colors shrink-0"
                       title="复制地址"
                     >
                       <Icon name="copy" size={13} />
@@ -1869,15 +1877,23 @@ export function AppsView({ onBack }: Props) {
                   </div>
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-panel border border-line/80 flex flex-col justify-between">
-                  <span className="text-label text-muted">对应本地技能</span>
-                  <div className="flex items-center justify-between gap-1.5 mt-1 font-mono">
-                    <span className="text-ink truncate font-medium text-label">
+                <div className="p-3 rounded-xl bg-paper border border-line/80 shadow-2xs hover:border-lineStrong/60 transition-all flex flex-col justify-between space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
+                      <Icon name="sparkle" size={13} className="text-accent" />
+                      <span>对应本地技能</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-okSoft text-ok border border-okLine/30">
+                      OpenAPI 契约
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 font-mono bg-panel/60 p-2 rounded-lg border border-line/50">
+                    <span className="text-ink truncate font-semibold text-xs">
                       {selectedApp.skill_name || `app-${selectedApp.slug}`}
                     </span>
                     <button
                       onClick={() => copyToClipboard(selectedApp.skill_name || `app-${selectedApp.slug}`, "技能名称")}
-                      className="text-muted hover:text-ink p-1 rounded hover:bg-paper"
+                      className="text-muted hover:text-ink p-1 rounded hover:bg-paper transition-colors shrink-0"
                       title="复制技能名"
                     >
                       <Icon name="copy" size={13} />
