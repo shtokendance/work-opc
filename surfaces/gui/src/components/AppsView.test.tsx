@@ -127,7 +127,7 @@ describe("AppsView Component", () => {
     fireEvent.change(textboxes.find(e => e.getAttribute("placeholder")?.includes("devops-aly"))!, { target: { value: "stock" } });
     fireEvent.change(screen.getByLabelText("或输入源码文件夹 / ZIP 的完整路径"), { target: { value: "/tmp/stock.zip" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步 (AI 改造)" }));
-    fireEvent.click(await screen.findByRole("button", { name: /下一步：核对部署内容/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /下一步.*核对部署内容/ }));
     const value = await screen.findByLabelText("DATABASE_URL 配置值") as HTMLInputElement;
     expect(value.value).toBe("OPC_TEST_KEEP_ORIGINAL");
     expect(screen.getByLabelText("DATABASE_URL 原始值").getAttribute("readonly")).not.toBeNull();

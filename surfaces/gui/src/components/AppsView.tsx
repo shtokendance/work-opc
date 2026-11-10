@@ -19,12 +19,17 @@ import {
   transformApp,
   updateDeployedAppConfig,
   updatePlatformConfig,
+  getAppStorageDetails,
+  getGlobalStorageSummary,
+  getAppStorageBackupUrl,
   type AppConfigItem,
   type AppVersionItem,
   type DeployedApp,
   type ModelControls,
   type PlatformResourceApiConfig,
   type ResourceSummary,
+  type AppStorageOverview,
+  type GlobalStorageSummary,
 } from "../api";
 import { Icon } from "./Icon";
 import { AppDeliveryConfig, configName, needsConnectionDecision } from "./AppDeliveryConfig";
@@ -107,7 +112,7 @@ export function AppsView({ onBack }: Props) {
   const [drawerConfigs, setDrawerConfigs] = useState<AppConfigItem[]>([]);
   const [drawerResourceIds, setDrawerResourceIds] = useState<string[]>([]);
   const [savingConfig, setSavingConfig] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "logs" | "versions">("configs");
+  const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "storage" | "logs" | "versions">("configs");
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<{ [key: string]: boolean }>({});
   const [runtimeLogs, setRuntimeLogs] = useState<string>("");
@@ -117,6 +122,11 @@ export function AppsView({ onBack }: Props) {
   const [loadingVersions, setLoadingVersions] = useState<boolean>(false);
   const [rollingBackVersion, setRollingBackVersion] = useState<number | null>(null);
   const [recheckingSlug, setRecheckingSlug] = useState<string | null>(null);
+  const [isGlobalStorageOpen, setIsGlobalStorageOpen] = useState(false);
+  const [loadingGlobalStorage, setLoadingGlobalStorage] = useState(false);
+  const [globalStorageSummary, setGlobalStorageSummary] = useState<GlobalStorageSummary | null>(null);
+  const [appStorageOverview, setAppStorageOverview] = useState<AppStorageOverview | null>(null);
+  const [loadingAppStorage, setLoadingAppStorage] = useState(false);
   const [step2CanContinue, setStep2CanContinue] = useState(false);
   const [step2Running, setStep2Running] = useState(false);
   const step2NextRef = useRef<(() => void) | null>(null);
@@ -137,6 +147,32 @@ export function AppsView({ onBack }: Props) {
       setAppVersions([]);
     } finally {
       setLoadingVersions(false);
+    }
+  };
+
+  const loadAppStorage = async (appSlug: string) => {
+    if (!appSlug) return;
+    setLoadingAppStorage(true);
+    try {
+      const data = await getAppStorageDetails(appSlug);
+      setAppStorageOverview(data);
+    } catch {
+      setAppStorageOverview(null);
+    } finally {
+      setLoadingAppStorage(false);
+    }
+  };
+
+  const openGlobalStorage = async () => {
+    setIsGlobalStorageOpen(true);
+    setLoadingGlobalStorage(true);
+    try {
+      const data = await getGlobalStorageSummary();
+      setGlobalStorageSummary(data);
+    } catch (err: any) {
+      alert(`加载全局存储大盘失败: ${err?.message || String(err)}`);
+    } finally {
+      setLoadingGlobalStorage(false);
     }
   };
 
@@ -524,7 +560,7 @@ export function AppsView({ onBack }: Props) {
   };
 
   // Drawer handlers
-  const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "logs" | "versions" = "configs") => {
+  const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "storage" | "logs" | "versions" = "configs") => {
     setSelectedApp(app);
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
@@ -532,6 +568,7 @@ export function AppsView({ onBack }: Props) {
     setRuntimeLogs("");
     void loadRuntimeLogs(app.slug);
     void loadAppVersions(app.slug);
+    void loadAppStorage(app.slug);
   };
 
   const resumeDraft = (job: AppDeliveryJob) => {
@@ -648,6 +685,14 @@ export function AppsView({ onBack }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => void openGlobalStorage()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors cursor-pointer"
+            title="查看宿主机磁盘空间水位与所有应用的持久化卷"
+          >
+            <Icon name="folder" size={13} />
+            存储管理中心
+          </button>
           <button
             onClick={() => {
               setPlatformUrlInput(platformBase());
@@ -1876,6 +1921,26 @@ export function AppsView({ onBack }: Props) {
 
               <button
                 onClick={() => {
+                  setDrawerTab("storage");
+                  void loadAppStorage(selectedApp.slug);
+                }}
+                className={`py-3 px-3 text-ui font-medium border-b-2 transition-colors flex items-center gap-2 ${
+                  drawerTab === "storage"
+                    ? "border-accent text-accent"
+                    : "border-transparent text-muted hover:text-ink"
+                }`}
+              >
+                <Icon name="folder" size={14} />
+                <span>持久化存储与卷</span>
+                {selectedApp.storage_mounts && selectedApp.storage_mounts.length > 0 && (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-accentSoft text-accent font-semibold">
+                    {selectedApp.storage_mounts.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
                   setDrawerTab("versions");
                   void loadAppVersions(selectedApp.slug);
                 }}
@@ -2166,6 +2231,116 @@ export function AppsView({ onBack }: Props) {
                 </div>
               )}
 
+              {/* TAB 3: 持久化存储与卷 */}
+              {drawerTab === "storage" && (
+                <div className="space-y-4">
+                  <div className="p-3.5 rounded-xl bg-paper/80 border border-line flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="font-semibold text-ui text-ink flex items-center gap-2">
+                        <span>应用持久化存储挂载 (Docker Volume / 外部存储)</span>
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-okSoft text-ok font-semibold border border-okLine">
+                          种子数据保护已生效
+                        </span>
+                      </div>
+                      <p className="text-label text-muted mt-0.5">
+                        由 AI 改造阶段自动识别的本地数据、上传目录与导出文件。每次版本升级或重启，卷内业务数据永久保留不丢失。
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => void loadAppStorage(selectedApp.slug)}
+                        disabled={loadingAppStorage}
+                        className="px-2.5 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors cursor-pointer"
+                      >
+                        {loadingAppStorage ? "正在刷新..." : "刷新卷容量"}
+                      </button>
+                      <a
+                        href={getAppStorageBackupUrl(selectedApp.slug)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-label font-medium transition-opacity flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Icon name="archive" size={13} />
+                        一键下载备份 (.tar)
+                      </a>
+                    </div>
+                  </div>
+
+                  {loadingAppStorage ? (
+                    <div className="text-center py-8 text-muted text-meta">正在探测底层 Docker 卷容量与文件清单...</div>
+                  ) : !appStorageOverview || appStorageOverview.mounts.length === 0 ? (
+                    <div className="text-center py-10 border border-dashed border-line rounded-xl text-muted text-meta">
+                      该应用未声明或未挂载持久化存储卷（纯无状态服务或全部接入外部数据库）
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {/* 容量总计卡片 */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="p-3.5 rounded-xl bg-panel border border-line">
+                          <div className="text-meta text-muted">挂载卷数量</div>
+                          <div className="text-xl font-bold font-mono text-ink mt-1">{appStorageOverview.mounts_count} 个目录</div>
+                        </div>
+                        <div className="p-3.5 rounded-xl bg-panel border border-line">
+                          <div className="text-meta text-muted">数据总占用容量</div>
+                          <div className="text-xl font-bold font-mono text-ink mt-1">{appStorageOverview.total_human}</div>
+                        </div>
+                        <div className="p-3.5 rounded-xl bg-panel border border-line">
+                          <div className="text-meta text-muted">持久化文件总数</div>
+                          <div className="text-xl font-bold font-mono text-ink mt-1">{appStorageOverview.total_files} 个文件</div>
+                        </div>
+                      </div>
+
+                      {/* 各挂载点明细列表 */}
+                      {appStorageOverview.mounts.map((m) => (
+                        <div key={m.name} className="p-4 rounded-xl border border-line bg-paper/60 space-y-2.5">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-bold text-ui text-accent bg-accentSoft/30 px-2 py-0.5 rounded border border-accent/20">
+                                {m.container_path}
+                              </span>
+                              <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-mono">
+                                卷名: {m.volume_name || `opc-vol-${selectedApp.slug}-${m.name}`}
+                              </span>
+                              {m.seed_protected && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-okSoft text-ok font-semibold border border-okLine">
+                                  ✓ 种子数据已保护 (升级不覆盖)
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-ui font-mono font-bold text-ink">{m.size_human}</span>
+                              <span className="text-label text-muted">({m.file_count} 文件)</span>
+                              <a
+                                href={getAppStorageBackupUrl(selectedApp.slug, m.container_path)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2.5 py-1 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <Icon name="archive" size={11} />
+                                备份
+                              </a>
+                            </div>
+                          </div>
+                          <div className="text-label text-muted">{m.purpose || "应用持久化存储目录"}</div>
+                          {m.sample_files && m.sample_files.length > 0 && (
+                            <div className="pt-2 border-t border-line/60">
+                              <div className="text-[11px] text-muted mb-1">目录内文件清单预览:</div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {m.sample_files.map((file, idx) => (
+                                  <span key={idx} className="font-mono text-[11px] px-2 py-0.5 rounded bg-panel border border-line text-ink">
+                                    📄 {file}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* TAB 3: 运行与部署日志 */}
               {drawerTab === "logs" && (
                 <div className="space-y-4">
@@ -2347,6 +2522,143 @@ export function AppsView({ onBack }: Props) {
                 className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-xs font-medium shadow-xs disabled:opacity-50"
               >
                 {savingPlatformConfig ? "正在保存并同步..." : "保存并同步资源"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Storage Center Modal */}
+      {isGlobalStorageOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="w-full max-w-4xl bg-panel rounded-2xl shadow-xl border border-line overflow-hidden flex flex-col max-h-[88vh]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
+              <div className="flex items-center gap-2">
+                <Icon name="folder" size={18} className="text-accent" />
+                <h3 className="font-semibold text-ui text-ink">全局存储管理中心 (宿主机磁盘与持久化卷大盘)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsGlobalStorageOpen(false)}
+                className="text-muted hover:text-ink text-meta p-1 rounded-lg hover:bg-paper cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6 overflow-y-auto flex-1">
+              {loadingGlobalStorage ? (
+                <div className="text-center py-16 text-muted text-meta">正在统计底层宿主机磁盘水位与全量应用卷...</div>
+              ) : !globalStorageSummary ? (
+                <div className="text-center py-12 text-muted">未能获取到全局存储统计信息</div>
+              ) : (
+                <>
+                  {/* 宿主机底层磁盘水位 */}
+                  <div className="p-4 rounded-xl bg-paper/70 border border-line space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-ui text-ink flex items-center gap-2">
+                        <span>宿主机文件系统磁盘水位</span>
+                        <span className="text-muted font-mono text-label">({globalStorageSummary.server_disk.path})</span>
+                      </span>
+                      <span className={`text-label font-semibold px-2 py-0.5 rounded-full ${globalStorageSummary.server_disk.is_low_space ? "bg-danger/10 text-danger border border-danger/30" : "bg-okSoft text-ok border border-okLine"}`}>
+                        {globalStorageSummary.server_disk.is_low_space ? "⚠️ 磁盘空间紧张 (<10%)" : "✓ 空间充裕 (健康)"}
+                      </span>
+                    </div>
+
+                    <div className="w-full bg-paper rounded-full h-3 overflow-hidden border border-line">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${globalStorageSummary.server_disk.usage_ratio > 90 ? "bg-danger" : globalStorageSummary.server_disk.usage_ratio > 75 ? "bg-warn" : "bg-ok"}`}
+                        style={{ width: `${Math.min(globalStorageSummary.server_disk.usage_ratio, 100)}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-meta text-muted flex-wrap gap-2">
+                      <span>已用: <strong className="text-ink font-mono">{globalStorageSummary.server_disk.used_human}</strong> ({globalStorageSummary.server_disk.usage_ratio}%)</span>
+                      <span>剩余可用: <strong className="text-ok font-mono">{globalStorageSummary.server_disk.free_human}</strong></span>
+                      <span>总容量: <strong className="text-ink font-mono">{globalStorageSummary.server_disk.total_human}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* 应用持久化卷汇总卡片 */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 rounded-xl bg-panel border border-line">
+                      <div className="text-meta text-muted">已分配持久化卷总数</div>
+                      <div className="text-2xl font-bold font-mono text-accent mt-1">{globalStorageSummary.total_volumes} 个独立命名卷</div>
+                      <p className="text-[11px] text-muted mt-1">Docker Volume 自动挂载至各应用容器</p>
+                    </div>
+                    <div className="p-4 rounded-xl bg-panel border border-line">
+                      <div className="text-meta text-muted">业务数据总占用量</div>
+                      <div className="text-2xl font-bold font-mono text-ink mt-1">{globalStorageSummary.total_human}</div>
+                      <p className="text-[11px] text-muted mt-1">含业务 SQLite、状态 JSON、上传附件与报告</p>
+                    </div>
+                  </div>
+
+                  {/* 各应用挂载详情列表 */}
+                  <div className="space-y-3">
+                    <div className="font-semibold text-ui text-ink">各应用持久化存储占用列表</div>
+                    {globalStorageSummary.apps_storage.length === 0 ? (
+                      <div className="text-center py-8 border border-dashed border-line rounded-xl text-muted text-meta">
+                        当前暂无声明持久化挂载卷的应用
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {globalStorageSummary.apps_storage.map((app) => (
+                          <div key={app.app_slug} className="p-4 rounded-xl border border-line bg-paper/60 space-y-3">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-ui text-ink">{app.app_name}</span>
+                                <code className="text-label text-muted font-mono bg-panel px-1.5 py-0.5 rounded border border-line">
+                                  {app.app_slug}
+                                </code>
+                                <span className={`text-[11px] px-2 py-0.2 rounded-full font-medium ${app.app_status === "running" ? "bg-okSoft text-ok" : "bg-danger/10 text-danger"}`}>
+                                  {app.app_status === "running" ? "运行中" : app.app_status}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-ui font-mono font-bold text-ink">{app.total_human}</span>
+                                <span className="text-label text-muted">({app.total_files} 文件 · {app.mounts_count} 卷)</span>
+                                <a
+                                  href={getAppStorageBackupUrl(app.app_slug)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="px-2.5 py-1 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Icon name="archive" size={11} />
+                                  打包备份
+                                </a>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-2 border-t border-line/60">
+                              {app.mounts.map((m) => (
+                                <div key={m.name} className="p-2.5 rounded-lg bg-panel border border-line/80 flex items-center justify-between text-meta">
+                                  <div className="min-w-0 pr-2">
+                                    <div className="font-mono text-accent font-semibold truncate">{m.container_path}</div>
+                                    <div className="text-[11px] text-muted truncate">{m.volume_name}</div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <div className="font-mono font-bold text-ink">{m.size_human}</div>
+                                    <div className="text-[10px] text-muted">{m.file_count} 文件</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end px-6 py-3.5 border-t border-line bg-paper/50">
+              <button
+                type="button"
+                onClick={() => setIsGlobalStorageOpen(false)}
+                className="px-4 py-1.5 rounded-xl border border-line text-xs font-medium text-ink hover:bg-paper cursor-pointer"
+              >
+                关闭
               </button>
             </div>
           </div>

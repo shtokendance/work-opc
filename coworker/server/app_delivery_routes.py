@@ -411,16 +411,7 @@ def register_app_delivery_routes(app, manager):
             if resp.status_code != 200:
                 raise ValueError(f"查询应用版本历史失败 ({resp.status_code}): {delivery_error(resp.text)}")
             payload = resp.json()
-            versions = payload.get("versions")
-            if isinstance(versions, list) and len(versions) > 1:
-                has_running = any(v.get("status") == "running" or v.get("is_active") for v in versions if isinstance(v, dict))
-                filtered = []
-                for idx, v in enumerate(versions):
-                    if isinstance(v, dict) and v.get("status") == "failed" and not v.get("is_active"):
-                        if has_running or idx > 0:
-                            continue
-                    filtered.append(v)
-                payload["versions"] = filtered
+            # 保留所有版本记录，包括部署未成功的版本，让版本列表与顶部当前版本保持完全透明一致，避免出现版本错位或“幽灵版本”
             return payload
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
@@ -520,6 +511,54 @@ def register_app_delivery_routes(app, manager):
                 "version": rb_data.get("version"),
                 "message": rb_data.get("message") or f"已将应用 {slug} 及对应技能同步回退至 v{target_version}",
             }
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/storage/summary")
+    async def get_global_storage_summary(platform_url: str = ""):
+        try:
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+                resp = await client.get(f"{target_platform}/api/v1/apps/admin/storage")
+            if resp.status_code != 200:
+                raise ValueError(f"获取全局存储总览失败 ({resp.status_code}): {delivery_error(resp.text)}")
+            return resp.json()
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/storage/{slug}")
+    async def get_app_storage_details(slug: str, platform_url: str = ""):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/storage")
+            if resp.status_code != 200:
+                raise ValueError(f"获取应用存储详情失败 ({resp.status_code}): {delivery_error(resp.text)}")
+            return resp.json()
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/storage/{slug}/backup")
+    async def download_app_storage_backup(slug: str, path: str = "", platform_url: str = ""):
+        try:
+            if not delivery.SLUG.fullmatch(slug):
+                raise ValueError("应用标识格式无效")
+            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
+            delivery.valid_url(target_platform)
+            url = f"{target_platform}/api/v1/apps/{slug}/storage/backup"
+            if path:
+                url += f"?path={path}"
+            async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
+                resp = await client.get(url)
+            if resp.status_code != 200:
+                raise ValueError(f"下载存储备份失败 ({resp.status_code}): {delivery_error(resp.text)}")
+            media_type = resp.headers.get("content-type", "application/x-tar")
+            cd = resp.headers.get("content-disposition", f'attachment; filename="{slug}-storage-backup.tar"')
+            return Response(content=resp.content, media_type=media_type, headers={"Content-Disposition": cd})
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 

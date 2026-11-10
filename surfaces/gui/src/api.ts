@@ -4516,6 +4516,7 @@ export interface DeployedApp {
   current_version?: number;
   app_config: AppConfigItem[];
   resource_ids: string[];
+  storage_mounts?: AppStorageMountDetail[];
   skill_name: string;
   catalog_skill_id?: string;
   skill_synced: boolean;
@@ -4622,12 +4623,13 @@ export async function recheckAppHealth(
       const data = await res.json();
       return { ok: true, status: data.status || "running", message: data.message };
     }
+    // 若 sidecar 探测未通过，记录错误并继续回退到前端直接向应用探活
     const errData = await res.json().catch(() => ({}));
-    if (res.status === 400 || res.status === 422 || res.status === 500) {
-      return { ok: false, status: "failed", error: errData.detail || errData.error || `HTTP ${res.status}` };
+    if (errData?.detail || errData?.error) {
+      console.warn("Sidecar health probe failed, falling back to client probe:", errData);
     }
   } catch {
-    // sidecar 离线或开发模式回退
+    // sidecar 离线或网络异常回退
   }
 
   // 2. 回退机制：前端直接向应用健康检查与平台更新
@@ -4958,4 +4960,84 @@ export async function downloadAppArtifact(
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
   return { ok: true, filename: `${job.slug}-${filename}` };
+}
+
+// ==================== 持久化存储与卷管理接口 ====================
+
+export interface AppStorageMountDetail {
+  name: string;
+  container_path: string;
+  relative_path?: string;
+  purpose?: string;
+  kind?: string;
+  volume_name?: string;
+  host_path?: string;
+  storage_backend?: string;
+  seed_files_count?: number;
+  size_bytes: number;
+  size_human: string;
+  file_count: number;
+  sample_files?: string[];
+  status: string;
+  seed_protected: boolean;
+}
+
+export interface StorageServerDiskInfo {
+  path: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  total_human: string;
+  used_human: string;
+  free_human: string;
+  usage_ratio: number;
+  is_low_space: boolean;
+}
+
+export interface AppStorageOverview {
+  app_slug: string;
+  app_name: string;
+  app_status: string;
+  mounts_count: number;
+  total_bytes: number;
+  total_human: string;
+  total_files: number;
+  mounts: AppStorageMountDetail[];
+}
+
+export interface GlobalStorageSummary {
+  server_disk: StorageServerDiskInfo;
+  total_volumes: number;
+  total_bytes: number;
+  total_human: string;
+  apps_storage: AppStorageOverview[];
+}
+
+export async function getGlobalStorageSummary(): Promise<GlobalStorageSummary> {
+  const res = await fetch(`${httpBase()}/v1/apps/storage/summary?platform_url=${encodeURIComponent(platformBase())}`).catch(() => null);
+  if (res && res.ok) {
+    return await res.json();
+  }
+  const direct = await fetch(`${platformBase()}/api/v1/apps/admin/storage`);
+  if (!direct.ok) {
+    throw new Error(`获取存储总览失败 (HTTP ${direct.status})`);
+  }
+  return await direct.json();
+}
+
+export async function getAppStorageDetails(slug: string): Promise<AppStorageOverview> {
+  const res = await fetch(`${httpBase()}/v1/apps/storage/${encodeURIComponent(slug)}?platform_url=${encodeURIComponent(platformBase())}`).catch(() => null);
+  if (res && res.ok) {
+    return await res.json();
+  }
+  const direct = await fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/storage`);
+  if (!direct.ok) {
+    throw new Error(`获取应用存储详情失败 (HTTP ${direct.status})`);
+  }
+  return await direct.json();
+}
+
+export function getAppStorageBackupUrl(slug: string, path?: string): string {
+  const p = path ? `?path=${encodeURIComponent(path)}` : "";
+  return `${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/storage/backup${p}`;
 }
