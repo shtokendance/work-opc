@@ -9,7 +9,7 @@ import zipfile
 
 import httpx
 from fastapi import HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from ..app_delivery import AppDelivery
 from ..app_delivery_skill.scripts import delivery
@@ -291,8 +291,25 @@ def register_app_delivery_routes(app, manager):
             target_platform = str(body.get("platform_url") or default_platform_url()).strip().rstrip("/")
             delivery.valid_url(target_platform)
 
-            app_url = str(body.get("app_url") or "").strip().rstrip("/")
             async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+                # 1. 优先调用平台服务端的双重健康检查接口（校验 Docker 容器存活态 + 内网 HTTP 探活）
+                try:
+                    server_recheck = await client.post(f"{target_platform}/api/v1/apps/{slug}/recheck")
+                    if server_recheck.status_code == 200:
+                        res = server_recheck.json()
+                        if res.get("ok"):
+                            return {"ok": True, "status": "running", "message": "应用健康检查通过，状态已恢复正常运行"}
+                        else:
+                            status_desc = res.get("status", "unhealthy")
+                            msg = res.get("message") or "服务未就绪或容器异常"
+                            raise ValueError(f"健康检查未通过 ({status_desc})：{msg}")
+                except (ValueError, httpx.HTTPStatusError):
+                    raise
+                except Exception:
+                    # 若服务端 recheck 路由不可达，平滑回退到客户端探活
+                    pass
+
+                app_url = str(body.get("app_url") or "").strip().rstrip("/")
                 if not app_url:
                     resp = await client.get(f"{target_platform}/api/v1/apps/{slug}")
                     if resp.status_code != 200:
@@ -543,22 +560,39 @@ def register_app_delivery_routes(app, manager):
             raise fail(exc)
 
     @app.get("/v1/apps/storage/{slug}/backup")
-    async def download_app_storage_backup(slug: str, path: str = "", platform_url: str = ""):
+    async def download_app_storage_backup(slug: str, path: str = "", mount: str = "", platform_url: str = ""):
         try:
             if not delivery.SLUG.fullmatch(slug):
                 raise ValueError("应用标识格式无效")
             target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
             delivery.valid_url(target_platform)
-            url = f"{target_platform}/api/v1/apps/{slug}/storage/backup"
+            params = {}
             if path:
-                url += f"?path={path}"
-            async with httpx.AsyncClient(timeout=300, trust_env=False) as client:
-                resp = await client.get(url)
+                params["path"] = path
+            if mount:
+                params["mount"] = mount
+
+            client = httpx.AsyncClient(timeout=300, trust_env=False)
+            req = client.build_request("GET", f"{target_platform}/api/v1/apps/{slug}/storage/backup", params=params)
+            resp = await client.send(req, stream=True)
             if resp.status_code != 200:
-                raise ValueError(f"下载存储备份失败 ({resp.status_code}): {delivery_error(resp.text)}")
+                body = await resp.aread()
+                await resp.aclose()
+                await client.aclose()
+                raise ValueError(f"下载存储备份失败 ({resp.status_code}): {delivery_error(body.decode('utf-8', errors='replace'))}")
+
             media_type = resp.headers.get("content-type", "application/x-tar")
             cd = resp.headers.get("content-disposition", f'attachment; filename="{slug}-storage-backup.tar"')
-            return Response(content=resp.content, media_type=media_type, headers={"Content-Disposition": cd})
+
+            async def stream_generator():
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+                finally:
+                    await resp.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(stream_generator(), media_type=media_type, headers={"Content-Disposition": cd})
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 
