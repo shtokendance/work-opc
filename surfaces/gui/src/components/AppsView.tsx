@@ -39,13 +39,16 @@ import { AppDeliveryArtifacts } from "./AppDeliveryArtifacts";
 import { chooseFolder } from "../tauri";
 import { toAppSlug } from "../appSlug";
 
-function formatLogOutput(raw?: string): string {
+function formatLogOutput(raw?: string, limitLines?: number): string {
   if (!raw) return "";
-  return raw
+  const lines = raw
     .split(/\r?\n/)
     .map(line => line.trimEnd())
-    .filter(line => line.trim().length > 0)
-    .join("\n");
+    .filter(line => line.trim().length > 0);
+  if (limitLines && limitLines > 0 && lines.length > limitLines) {
+    return lines.slice(-limitLines).join("\n");
+  }
+  return lines.join("\n");
 }
 
 interface Props {
@@ -113,6 +116,7 @@ export function AppsView({ onBack }: Props) {
   const [drawerResourceIds, setDrawerResourceIds] = useState<string[]>([]);
   const [savingConfig, setSavingConfig] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"configs" | "artifacts" | "storage" | "logs" | "versions">("configs");
+  const [logsSubTab, setLogsSubTab] = useState<"runtime" | "build" | "dockerfile">("runtime");
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<{ [key: string]: boolean }>({});
   const [runtimeLogs, setRuntimeLogs] = useState<string>("");
@@ -222,7 +226,7 @@ export function AppsView({ onBack }: Props) {
     if (!appSlug) return;
     setLoadingRuntimeLogs(true);
     try {
-      const res = await getAppRuntimeLogs(appSlug, 250);
+      const res = await getAppRuntimeLogs(appSlug, 500);
       setRuntimeLogs(res.runtime_logs || "暂无容器实时运行日志输出");
     } catch (e: any) {
       setRuntimeLogs(`读取实时运行日志失败: ${e?.message || String(e)}`);
@@ -2359,58 +2363,155 @@ export function AppsView({ onBack }: Props) {
 
               {/* TAB 3: 运行与部署日志 */}
               {drawerTab === "logs" && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-meta text-muted">
-                      <span className="font-semibold text-ink">容器服务端实时运行日志 (Runtime Logs)</span>
-                      <div className="flex items-center gap-2">
+                <div className="space-y-3.5 flex flex-col flex-1 min-h-0">
+                  {/* 子选项卡控制器 (Logs Sub-Tabs) */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line">
+                    {/* Segmented Control 胶囊切换栏 */}
+                    <div className="inline-flex p-1 rounded-xl bg-panel border border-line/80 gap-1 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setLogsSubTab("runtime")}
+                        className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                          logsSubTab === "runtime"
+                            ? "bg-paper text-accent shadow-2xs border border-accent/20"
+                            : "text-muted hover:text-ink"
+                        }`}
+                      >
+                        <Icon name="monitor" size={13} />
+                        <span>实时运行日志 (Runtime)</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-accentSoft text-accent font-mono font-semibold">
+                          最近 500 条
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setLogsSubTab("build")}
+                        className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                          logsSubTab === "build"
+                            ? "bg-paper text-accent shadow-2xs border border-accent/20"
+                            : "text-muted hover:text-ink"
+                        }`}
+                      >
+                        <Icon name="code" size={13} />
+                        <span>构建与部署日志 (Build)</span>
+                      </button>
+
+                      {selectedApp.dockerfile_content && (
                         <button
-                          onClick={() => void loadRuntimeLogs(selectedApp.slug)}
-                          disabled={loadingRuntimeLogs}
-                          className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors disabled:opacity-50"
+                          type="button"
+                          onClick={() => setLogsSubTab("dockerfile")}
+                          className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                            logsSubTab === "dockerfile"
+                              ? "bg-paper text-accent shadow-2xs border border-accent/20"
+                              : "text-muted hover:text-ink"
+                          }`}
                         >
-                          <Icon name="refresh" size={12} className={loadingRuntimeLogs ? "animate-spin" : ""} />
-                          刷新运行日志
+                          <Icon name="fileCode" size={13} />
+                          <span>已归档 Dockerfile</span>
                         </button>
+                      )}
+                    </div>
+
+                    {/* 操作工具栏 */}
+                    <div className="flex items-center gap-2">
+                      {logsSubTab === "runtime" && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void loadRuntimeLogs(selectedApp.slug)}
+                            disabled={loadingRuntimeLogs}
+                            className="px-2.5 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                          >
+                            <Icon name="refresh" size={12} className={loadingRuntimeLogs ? "animate-spin" : ""} />
+                            <span>刷新日志</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(formatLogOutput(runtimeLogs, 500), "运行日志")}
+                            className="px-2.5 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Icon name="copy" size={12} />
+                            <span>复制运行日志</span>
+                          </button>
+                        </>
+                      )}
+
+                      {logsSubTab === "build" && (
                         <button
-                          onClick={() => copyToClipboard(runtimeLogs || "", "运行日志")}
-                          className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
+                          type="button"
+                          onClick={() => copyToClipboard(formatLogOutput(selectedApp.build_log), "部署日志")}
+                          className="px-2.5 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
                           <Icon name="copy" size={12} />
-                          复制运行日志
+                          <span>复制构建日志</span>
                         </button>
+                      )}
+
+                      {logsSubTab === "dockerfile" && (
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(selectedApp.dockerfile_content || "", "Dockerfile")}
+                          className="px-2.5 py-1.5 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Icon name="copy" size={12} />
+                          <span>复制 Dockerfile</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* SUB-TAB 1: 实时运行日志 (Runtime Logs) */}
+                  {logsSubTab === "runtime" && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted">
+                        <span className="font-medium text-ink flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-ok animate-pulse" />
+                          <span>容器服务实时输出（滚动展示最新 500 条）</span>
+                        </span>
+                        <span className="font-mono text-[11px] text-muted">
+                          {loadingRuntimeLogs ? "拉取中..." : `当前已加载 ${formatLogOutput(runtimeLogs, 500).split("\n").filter(Boolean).length} 行`}
+                        </span>
                       </div>
+                      <pre className="p-4 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[480px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white border border-neutral-800 shadow-inner">
+                        {loadingRuntimeLogs
+                          ? "正在拉取服务端容器实时运行日志..."
+                          : (formatLogOutput(runtimeLogs, 500) || "暂无实时运行日志输出")}
+                      </pre>
                     </div>
-                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-sky-300 font-mono text-label leading-relaxed h-[300px] overflow-y-auto whitespace-pre-wrap selection:bg-sky-900 selection:text-white">
-                      {loadingRuntimeLogs ? "正在拉取服务端容器实时运行日志..." : (formatLogOutput(runtimeLogs) || "暂无实时运行日志输出")}
-                    </pre>
-                  </div>
+                  )}
 
-                  <div className="space-y-2 pt-2 border-t border-line">
-                    <div className="flex items-center justify-between text-meta text-muted">
-                      <span className="font-semibold text-ink">最近构建与部署日志 (Build Logs)</span>
-                      <button
-                        onClick={() => copyToClipboard(formatLogOutput(selectedApp.build_log), "部署日志")}
-                        className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-label text-ink flex items-center gap-1 transition-colors"
-                      >
-                        <Icon name="copy" size={12} />
-                        复制构建日志
-                      </button>
+                  {/* SUB-TAB 2: 构建部署日志 (Build Logs) */}
+                  {logsSubTab === "build" && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted">
+                        <span className="font-medium text-ink flex items-center gap-1.5">
+                          <Icon name="code" size={13} className="text-emerald-400" />
+                          <span>最近一次平台打包与构建日志</span>
+                        </span>
+                        <span className="font-mono text-[11px] text-muted">
+                          共 {formatLogOutput(selectedApp.build_log).split("\n").filter(Boolean).length} 行
+                        </span>
+                      </div>
+                      <pre className="p-4 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[480px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white border border-neutral-800 shadow-inner">
+                        {formatLogOutput(selectedApp.build_log) || "暂无构建日志输出"}
+                      </pre>
                     </div>
-                    <pre className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label leading-relaxed h-[240px] overflow-y-auto whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
-                      {formatLogOutput(selectedApp.build_log) || "暂无构建日志输出"}
-                    </pre>
-                  </div>
+                  )}
 
-                  {selectedApp.dockerfile_content && (
-                    <details className="text-xs text-muted pt-2 border-t border-line">
-                      <summary className="cursor-pointer font-medium text-ink">
-                        查看已归档的 Dockerfile {selectedApp.language ? `(${selectedApp.language} ${selectedApp.runtime_version || ""})` : ""}
-                      </summary>
-                      <pre className="mt-2 p-3 rounded-xl bg-neutral-950 text-amber-300 font-mono text-label max-h-48 overflow-y-auto whitespace-pre-wrap">
+                  {/* SUB-TAB 3: 已归档 Dockerfile */}
+                  {logsSubTab === "dockerfile" && selectedApp.dockerfile_content && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted">
+                        <span className="font-medium text-ink flex items-center gap-1.5">
+                          <Icon name="fileCode" size={13} className="text-amber-400" />
+                          <span>当前版本生效的 Dockerfile {selectedApp.language ? `(${selectedApp.language} ${selectedApp.runtime_version || ""})` : ""}</span>
+                        </span>
+                      </div>
+                      <pre className="p-4 rounded-xl bg-neutral-950 text-amber-300 font-mono text-label leading-relaxed h-[480px] overflow-y-auto whitespace-pre-wrap selection:bg-amber-900 selection:text-white border border-neutral-800 shadow-inner">
                         {selectedApp.dockerfile_content}
                       </pre>
-                    </details>
+                    </div>
                   )}
                 </div>
               )}
