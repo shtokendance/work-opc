@@ -2350,6 +2350,7 @@
     },
     "tab": {
       "account": "账户",
+      "opc_platform": "OPC 平台",
       "slack": "Slack",
       "github": "GitHub",
       "machines": "机器",
@@ -2359,6 +2360,28 @@
     "machine_scope_aria": "机器范围",
     "this_mac_option": "⌂ 这台 Mac",
     "openworker_cloud": "Work OPC Cloud",
+    "opc_platform": {
+      "title": "OPC 平台配置",
+      "sub": "配置 OPC 统一服务端网关与服务地址，支持切换企业正式、预发与私有化环境。",
+      "gateway_card_title": "统一平台网关",
+      "gateway_label": "网关服务地址 (Platform Base)",
+      "gateway_help": "用于企业微信扫码授权登录、企业知识库检索、租户共享技能中心及 MCP 网关。",
+      "advanced_toggle": "高级独立服务地址设置",
+      "advanced_help": "默认自动继承主网关地址。若特定服务（如部署引擎或 Web 控制台）部署在独立域名，可在下方单独指定。",
+      "deploy_label": "应用部署服务地址 (Deploy Gateway)",
+      "deploy_help": "用于应用中心构建发布、版本管理、容器持久化存储与健康检查。",
+      "web_origin_label": "Web 控制台 / 知识库地址 (Web Origin)",
+      "web_help": "用于外跳打开 Web 控制台及知识库网页管理，并作为客户端外跳安全白名单。",
+      "test_connection": "测试连接",
+      "testing": "测试中...",
+      "save_apply": "保存并立即生效",
+      "saving": "保存中...",
+      "reset_default": "恢复默认",
+      "connection_success": "连接成功 ({{latency}}ms, HTTP {{status}})",
+      "connection_failed": "连接失败: {{error}}",
+      "save_success": "配置已保存并立即生效！",
+      "save_failed": "保存失败: {{error}}"
+    },
     "context": {
       "sub_machine": "在 ⌂ {{name}} 上 —— 它的会话如何消耗 token。",
       "sub": "会话如何消耗 token —— 附件处理与长历史压缩。"

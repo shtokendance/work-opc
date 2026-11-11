@@ -20,7 +20,8 @@ export const initialSessionId =
 const TAB_BY_SLUG: Record<string, string> = {
   general: "appearance",
   voice: "voice",
-  account: "account",
+  account: "opc_platform",
+  opc: "opc_platform",
   models: "models",
   context: "context",
   skills: "skills",

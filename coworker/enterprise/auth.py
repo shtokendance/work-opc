@@ -567,6 +567,10 @@ class EnterpriseAuthService:
         self._clear_local_context(reason="logout")
         return {"ok": True}
 
+    def clear_local_context(self, reason: str = "manual") -> None:
+        """Clear the in-memory enterprise context and cached session keys."""
+        self._clear_local_context(reason=reason)
+
     def _clear_local_context(self, reason: str) -> None:
         if self._context is not None:
             profile = self._context.meta().context_key()

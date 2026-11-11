@@ -1,24 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { getI18n, Trans, useTranslation } from "react-i18next";
 import { getStoredLanguage, setLanguage as setI18nLanguage, type Lang } from "../i18n";
 import {
-  announceCloudChanged,
-  CLOUD_CHANGED,
-  cloudLogin,
   getCloudConnections,
   getConnectors,
-  cloudLogout,
-  getActiveOrg,
   getCloudMachines,
-  getCloudStatus,
   getMachines,
   MACHINES_CHANGED,
-  getMe,
   isCloudMode,
-  waitForCloudSignIn,
-  type CloudStatus,
   type Machine,
-  type MeInfo,
   getSettings,
   getTrustedWorkspaces,
   setAutoApprove,
@@ -35,7 +25,11 @@ import {
   type ModelSettings,
   type PdfSettings,
   type WorkspaceCommandTrust,
+  getOpcConfig,
+  updateOpcConfig,
+  testOpcConnection,
 } from "../api";
+import { setConfiguredWebOrigin } from "../enterpriseResources";
 import {
   cancelDictationModelDownload,
   deleteDictationModel,
@@ -57,7 +51,6 @@ import {
   type DictationDownloadProgress,
   type DictationStatus,
 } from "../tauri";
-import { canSignOut, cloudSignOut } from "../cloudAuth";
 import { reflectSettings, settingsMachineParam } from "../routes";
 import { useThemePref } from "../theme";
 import { useTextSize } from "../textSize";
@@ -87,6 +80,7 @@ import { showPersonas } from "../flags";
 export type SetTab =
   | "appearance"
   | "account"
+  | "opc_platform"
   | "models"
   | "context"
   | "skills"
@@ -126,7 +120,8 @@ type SetIcon =
   | "refresh"
   | "plug"
   | "shield"
-  | "user";
+  | "user"
+  | "cloud";
 // `labelKey` = the i18n key for the label; tabs without one yet show `label` as is.
 type TabDef = { key: SetTab; label: string; labelKey?: string; icon: SetIcon };
 
@@ -138,7 +133,7 @@ const SET_GROUPS: { name: string; nameKey?: string; scope: "app" | "machine" | "
     tabs: [
       { key: "appearance", label: "General", labelKey: "settings.tab.general", icon: "sliders" },
       { key: "voice", label: "Voice input", labelKey: "settings.tab.voice", icon: "mic" },
-      { key: "account", label: "Account", labelKey: "settingsx.tab.account", icon: "user" },
+      { key: "opc_platform", label: "OPC 平台", labelKey: "settingsx.tab.opc_platform", icon: "cloud" },
       { key: "slack", label: "Slack", labelKey: "settingsx.tab.slack", icon: "plug" },
       { key: "github", label: "GitHub", labelKey: "settingsx.tab.github", icon: "plug" },
     ],
@@ -357,8 +352,8 @@ export function SettingsView({
         <div className="max-w-3xl mx-auto px-7 py-6">
           {tab === "appearance" ? (
             <AppearanceSection />
-          ) : tab === "account" ? (
-            <AccountSection />
+          ) : tab === "opc_platform" || tab === "account" ? (
+            <OpcPlatformSection />
           ) : tab === "models" ? (
             scoped ? (
               <MachineModelsPanel machine={scoped} />
@@ -721,149 +716,322 @@ function PersonasSection({
   );
 }
 
-// -- Account -------------------------------------------------------------------
-// Two deployments, two meanings of "account". On the hosted dashboard the page
-// is the signed-in identity: who you are, the organization this browser acts
-// in, and the way out (moved here from the Machines page's inline bar). On
-// desktop and self-hosted browsers it is the optional OpenWorker Cloud
-// sign-in — the same one the sidebar's account menu offers, given a full page.
-function AccountSection() {
+// -- OPC Platform Configuration ------------------------------------------------
+function OpcPlatformSection() {
   const { t } = useTranslation();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [platformBase, setPlatformBase] = useState("");
+  const [deployBase, setDeployBase] = useState("");
+  const [webOrigin, setWebOrigin] = useState("");
+  const [defaultPlatformBase, setDefaultPlatformBase] = useState("https://shtokendance.benlai.com");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [testResults, setTestResults] = useState<
+    Record<string, { testing?: boolean; ok?: boolean; latency_ms?: number; status_code?: number; error?: string }>
+  >({});
+  const [banner, setBanner] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    getOpcConfig()
+      .then((cfg) => {
+        setPlatformBase(cfg.platform_base || cfg.effective_platform_base || "https://shtokendance.benlai.com");
+        setDeployBase(cfg.deploy_base || "");
+        setWebOrigin(cfg.web_origin || "");
+        if (cfg.default_platform_base) setDefaultPlatformBase(cfg.default_platform_base);
+        if (cfg.deploy_base || cfg.web_origin) setShowAdvanced(true);
+      })
+      .catch((err) => {
+        setBanner({ type: "error", message: `加载配置失败: ${err?.message || err}` });
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleTest = async (url: string, key: string) => {
+    const target = (url || "").trim();
+    if (!target) return;
+    setTestResults((prev) => ({ ...prev, [key]: { testing: true } }));
+    try {
+      const res = await testOpcConnection(target);
+      setTestResults((prev) => ({ ...prev, [key]: { testing: false, ...res } }));
+    } catch (err: any) {
+      setTestResults((prev) => ({
+        ...prev,
+        [key]: { testing: false, ok: false, error: err?.message || String(err) },
+      }));
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setBanner(null);
+    try {
+      const updated = await updateOpcConfig({
+        platform_base: platformBase.trim(),
+        deploy_base: deployBase.trim(),
+        web_origin: webOrigin.trim(),
+      });
+      setConfiguredWebOrigin(updated.effective_web_origin);
+      setBanner({ type: "success", message: t("settingsx.opc_platform.save_success") });
+    } catch (err: any) {
+      setBanner({ type: "error", message: t("settingsx.opc_platform.save_failed", { error: err?.message || err }) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    setPlatformBase(defaultPlatformBase);
+    setDeployBase("");
+    setWebOrigin("");
+    setTestResults({});
+    setBanner(null);
+  };
+
+  if (loading) {
+    return (
+      <section>
+        <PanelHead
+          title={t("settingsx.opc_platform.title")}
+          sub={t("settingsx.opc_platform.sub")}
+        />
+        <div className="text-meta text-muted mt-4">加载配置中...</div>
+      </section>
+    );
+  }
+
   return (
     <section>
       <PanelHead
-        title={t("settingsx.tab.account")}
-        sub={
-          isCloudMode()
-            ? t("settingsx.account.sub_hosted")
-            : t("settingsx.account.sub_desktop")
-        }
+        title={t("settingsx.opc_platform.title")}
+        sub={t("settingsx.opc_platform.sub")}
       />
-      {isCloudMode() ? <HostedAccountCards /> : <DesktopCloudCard />}
-    </section>
-  );
-}
 
-function HostedAccountCards() {
-  const { t } = useTranslation();
-  // Fetched here rather than read from the boot gate: the page should show
-  // the identity as the API resolves it right now, under the active org.
-  const [me, setMe] = useState<MeInfo | null | undefined>(undefined);
-  useEffect(() => {
-    getMe()
-      .then(setMe)
-      .catch(() => setMe(null));
-  }, []);
+      {banner && (
+        <div
+          className={`p-3.5 mb-5 rounded-xl border text-ui font-medium flex items-center justify-between ${
+            banner.type === "success"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+              : "bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400"
+          }`}
+        >
+          <span>{banner.message}</span>
+          <button
+            type="button"
+            className="text-xs opacity-60 hover:opacity-100 ml-3"
+            onClick={() => setBanner(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
-  if (me === undefined) return <div className="text-meta text-muted mt-3">{t("settingsx.account.loading")}</div>;
-  if (me === null)
-    return (
-      <div className={CARD + " p-4 text-ui text-muted"}>
-        {t("settingsx.account.no_signin_service")}
-      </div>
-    );
-  const active = getActiveOrg() || me.org_id;
-  const activeOrg = me.orgs.find((o) => o.id === active);
-  return (
-    <div data-testid="cloud-account-card">
-      <div className={CARD + " p-4 mb-4"}>
-        <div className={FIELD_LABEL}>{t("settingsx.account.signed_in_as")}</div>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="w-8 h-8 rounded-full bg-accentSoft text-accent grid place-items-center text-ui font-semibold">
-            {(me.actor || "?").slice(0, 1).toUpperCase()}
+      {/* 主网关卡片 */}
+      <div className={CARD + " p-5 mb-5 space-y-4"}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className={FIELD_LABEL}>{t("settingsx.opc_platform.gateway_card_title")}</div>
+            <div className={FIELD_HELP}>{t("settingsx.opc_platform.gateway_help")}</div>
+          </div>
+          <span className="text-xs px-2.5 py-1 rounded-full bg-accent/10 text-accent font-medium">
+            主服务入口
           </span>
-          <span className="text-ui text-ink min-w-0 truncate">{me.actor}</span>
-          {canSignOut() && (
+        </div>
+
+        <div>
+          <label className="block text-meta text-muted mb-1.5" htmlFor="opc-platform-base-input">
+            {t("settingsx.opc_platform.gateway_label")}
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="opc-platform-base-input"
+              type="text"
+              className={INPUT}
+              placeholder="https://..."
+              value={platformBase}
+              onChange={(e) => setPlatformBase(e.target.value)}
+            />
             <button
-              className={BTN_BORDERED + " ml-auto"}
-              onClick={() => void cloudSignOut()}
+              type="button"
+              className={BTN_BORDERED}
+              disabled={!platformBase.trim() || testResults.gateway?.testing}
+              onClick={() => handleTest(platformBase, "gateway")}
             >
-              {t("sidebar.sign_out")}
+              {testResults.gateway?.testing
+                ? t("settingsx.opc_platform.testing")
+                : t("settingsx.opc_platform.test_connection")}
             </button>
+          </div>
+          {testResults.gateway && !testResults.gateway.testing && (
+            <div
+              className={`text-meta mt-1.5 font-medium ${
+                testResults.gateway.ok ? "text-emerald-500" : "text-red-500"
+              }`}
+            >
+              {testResults.gateway.ok
+                ? t("settingsx.opc_platform.connection_success", {
+                    latency: testResults.gateway.latency_ms,
+                    status: testResults.gateway.status_code,
+                  })
+                : t("settingsx.opc_platform.connection_failed", {
+                    error: testResults.gateway.error,
+                  })}
+            </div>
           )}
         </div>
       </div>
 
-      {/* One login, one org (spec 2026-08-31): the org is a function of the
-          identity — display only, never a choice made here. */}
-      <div className={CARD + " p-4 mb-4"}>
-        <div className={FIELD_LABEL}>{t("settingsx.account.organization")}</div>
-        <div className="mt-2 text-ui text-ink" data-testid="org-name">
-          {activeOrg?.name ?? active}
+      {/* 高级独立服务地址卡片 */}
+      <div className={CARD + " p-5 mb-5 space-y-4"}>
+        <div
+          className="flex items-center justify-between cursor-pointer select-none"
+          onClick={() => setShowAdvanced((prev) => !prev)}
+        >
+          <div>
+            <div className={FIELD_LABEL + " flex items-center gap-1.5"}>
+              <span>{showAdvanced ? "▼" : "▶"}</span>
+              <span>{t("settingsx.opc_platform.advanced_toggle")}</span>
+            </div>
+            <div className={FIELD_HELP}>{t("settingsx.opc_platform.advanced_help")}</div>
+          </div>
+          <span className="text-xs text-muted">
+            {showAdvanced ? "收起" : "展开配置"}
+          </span>
         </div>
-        <div className={FIELD_HELP}>
-          {t("settingsx.account.organization_help")}
+
+        {showAdvanced && (
+          <div className="pt-3 border-t border-line/60 space-y-4">
+            {/* Deploy Gateway */}
+            <div>
+              <label className="block text-meta text-muted mb-1.5" htmlFor="opc-deploy-base-input">
+                {t("settingsx.opc_platform.deploy_label")}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="opc-deploy-base-input"
+                  type="text"
+                  className={INPUT}
+                  placeholder={`留空自动使用: ${platformBase.trim() || defaultPlatformBase}`}
+                  value={deployBase}
+                  onChange={(e) => setDeployBase(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className={BTN_BORDERED}
+                  disabled={
+                    !(deployBase.trim() || platformBase.trim()) ||
+                    testResults.deploy?.testing
+                  }
+                  onClick={() =>
+                    handleTest(
+                      deployBase.trim() || platformBase.trim(),
+                      "deploy"
+                    )
+                  }
+                >
+                  {testResults.deploy?.testing
+                    ? t("settingsx.opc_platform.testing")
+                    : t("settingsx.opc_platform.test_connection")}
+                </button>
+              </div>
+              <div className={FIELD_HELP}>{t("settingsx.opc_platform.deploy_help")}</div>
+              {testResults.deploy && !testResults.deploy.testing && (
+                <div
+                  className={`text-meta mt-1.5 font-medium ${
+                    testResults.deploy.ok ? "text-emerald-500" : "text-red-500"
+                  }`}
+                >
+                  {testResults.deploy.ok
+                    ? t("settingsx.opc_platform.connection_success", {
+                        latency: testResults.deploy.latency_ms,
+                        status: testResults.deploy.status_code,
+                      })
+                    : t("settingsx.opc_platform.connection_failed", {
+                        error: testResults.deploy.error,
+                      })}
+                </div>
+              )}
+            </div>
+
+            {/* Web Origin */}
+            <div>
+              <label className="block text-meta text-muted mb-1.5" htmlFor="opc-web-origin-input">
+                {t("settingsx.opc_platform.web_origin_label")}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="opc-web-origin-input"
+                  type="text"
+                  className={INPUT}
+                  placeholder={`留空自动使用: ${platformBase.trim() || defaultPlatformBase}`}
+                  value={webOrigin}
+                  onChange={(e) => setWebOrigin(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className={BTN_BORDERED}
+                  disabled={
+                    !(webOrigin.trim() || platformBase.trim()) ||
+                    testResults.web?.testing
+                  }
+                  onClick={() =>
+                    handleTest(
+                      webOrigin.trim() || platformBase.trim(),
+                      "web"
+                    )
+                  }
+                >
+                  {testResults.web?.testing
+                    ? t("settingsx.opc_platform.testing")
+                    : t("settingsx.opc_platform.test_connection")}
+                </button>
+              </div>
+              <div className={FIELD_HELP}>{t("settingsx.opc_platform.web_help")}</div>
+              {testResults.web && !testResults.web.testing && (
+                <div
+                  className={`text-meta mt-1.5 font-medium ${
+                    testResults.web.ok ? "text-emerald-500" : "text-red-500"
+                  }`}
+                >
+                  {testResults.web.ok
+                    ? t("settingsx.opc_platform.connection_success", {
+                        latency: testResults.web.latency_ms,
+                        status: testResults.web.status_code,
+                      })
+                    : t("settingsx.opc_platform.connection_failed", {
+                        error: testResults.web.error,
+                      })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 底部操作栏 */}
+      <div className="flex items-center justify-between pt-2">
+        <button
+          type="button"
+          className={BTN_BORDERED}
+          disabled={saving}
+          onClick={handleReset}
+        >
+          {t("settingsx.opc_platform.reset_default")}
+        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className={BTN_ACCENT}
+            disabled={saving || !platformBase.trim()}
+            onClick={handleSave}
+          >
+            {saving ? t("settingsx.opc_platform.saving") : t("settingsx.opc_platform.save_apply")}
+          </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function DesktopCloudCard() {
-  const { t } = useTranslation();
-  const [status, setStatus] = useState<CloudStatus | null>(null);
-  const [waiting, setWaiting] = useState(false);
-  const cancelWait = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    const load = () =>
-      getCloudStatus()
-        .then(setStatus)
-        .catch(() => setStatus({ signed_in: false, account: "", user_id: "" }));
-    load();
-    window.addEventListener(CLOUD_CHANGED, load);
-    return () => {
-      window.removeEventListener(CLOUD_CHANGED, load);
-      cancelWait.current?.();
-    };
-  }, []);
-
-  const signIn = async () => {
-    setWaiting(true);
-    await cloudLogin().catch(() => {});
-    cancelWait.current?.();
-    cancelWait.current = waitForCloudSignIn((s) => {
-      setWaiting(false);
-      if (s) setStatus(s);
-      if (s?.signed_in) announceCloudChanged();
-    });
-  };
-  const signOut = async () => {
-    await cloudLogout().catch(() => {});
-    announceCloudChanged();
-  };
-
-  return (
-    <div className={CARD + " p-4"} data-testid="cloud-signin-card">
-      <div className={FIELD_LABEL}>{t("settingsx.openworker_cloud")}</div>
-      {status === null ? (
-        <div className="text-meta text-muted mt-2">{t("settingsx.account.checking_signin")}</div>
-      ) : status.signed_in ? (
-        <div className="mt-2 flex items-center gap-3">
-          <span className="w-8 h-8 rounded-full bg-accentSoft text-accent grid place-items-center text-ui font-semibold">
-            {(status.account || "?").slice(0, 1).toUpperCase()}
-          </span>
-          <span className="text-ui text-ink min-w-0 truncate">{status.account}</span>
-          <button className={BTN_BORDERED + " ml-auto"} onClick={() => void signOut()}>
-            {t("sidebar.sign_out")}
-          </button>
-        </div>
-      ) : (
-        <>
-          <div className={FIELD_HELP}>
-            {t("settingsx.account.signin_help")}
-          </div>
-          <button
-            className={BTN_ACCENT + " mt-3"}
-            onClick={() => void signIn()}
-            disabled={waiting}
-            data-testid="account-page-sign-in"
-          >
-            {waiting ? t("cloud.check_browser") : t("cloud.sign_in")}
-          </button>
-        </>
-      )}
-    </div>
+      <div className="text-meta text-muted mt-3">
+        * 提示：若修改了平台主网关，请前往主界面左下角使用新平台的企微账号重新扫码登录。
+      </div>
+    </section>
   );
 }
 

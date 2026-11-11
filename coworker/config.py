@@ -121,6 +121,12 @@ class Config:
     # endpoints — a repository must not be able to redirect the desktop's enterprise
     # identity flow. Environment override: OPC_PLATFORM_BASE.
     opc_platform_base: str = ""
+    # Optional dedicated deploy gateway base URL (App center delivery & storage).
+    # If empty, automatically inherits from opc_platform_base or default gateway.
+    opc_deploy_base: str = ""
+    # Optional dedicated web origin URL (Web console & knowledge base external links).
+    # If empty, automatically inherits from opc_platform_base or default gateway.
+    opc_web_origin: str = ""
     # Where agents' commands and file tools run: "direct" (in this process, unconfined),
     # "seatbelt" (macOS: a process on this Mac under the system sandbox), "openshell" (one
     # OpenShell sandbox per agent). Sessions are refused when the chosen sandbox is not
@@ -174,6 +180,8 @@ _FIELDS = {
     "cloud_relay_ws_url",
     "cloud_machines_base",
     "opc_platform_base",
+    "opc_deploy_base",
+    "opc_web_origin",
 }
 
 # These fields change what consequential actions can run without a prompt, so the normal

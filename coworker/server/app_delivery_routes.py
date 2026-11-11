@@ -31,6 +31,13 @@ def verification_credentials(contract, deployment_config, supplied):
 
 def default_platform_url() -> str:
     try:
+        cfg = load_config()
+        deploy_url = (getattr(cfg, "opc_deploy_base", "") or "").strip()
+        if deploy_url:
+            return deploy_url.rstrip("/")
+    except Exception:
+        pass
+    try:
         cfg_file = state_dir() / "app-delivery" / "platform_config.json"
         if cfg_file.is_file():
             saved = json.loads(cfg_file.read_text(encoding="utf-8"))
@@ -39,7 +46,8 @@ def default_platform_url() -> str:
     except Exception:
         pass
     env_url = (
-        os.environ.get("OPC_PLATFORM_HTTP")
+        os.environ.get("OPC_DEPLOY_BASE")
+        or os.environ.get("OPC_PLATFORM_HTTP")
         or os.environ.get("OPC_PLATFORM_BASE")
         or ""
     ).strip()

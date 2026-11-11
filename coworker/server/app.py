@@ -2067,6 +2067,148 @@ def create_app(manager: SessionManager) -> FastAPI:
         manager.sync_enterprise_context()  # back to personal: orphan + clear
         return out
 
+    # -- OPC Platform Configuration & Hot Update --
+    from ..config import set_global_value
+    from ..secrets import state_dir
+
+    def _get_opc_config_payload() -> dict[str, Any]:
+        c = load_config()
+        p_base = (getattr(c, "opc_platform_base", "") or "").strip()
+        d_base = (getattr(c, "opc_deploy_base", "") or "").strip()
+        w_origin = (getattr(c, "opc_web_origin", "") or "").strip()
+        def_p = "https://shtokendance.benlai.com"
+        eff_p = p_base or enterprise_auth.platform_base or def_p
+        eff_d = d_base or eff_p
+        eff_w = w_origin or eff_p
+        return {
+            "ok": True,
+            "platform_base": p_base or eff_p,
+            "deploy_base": d_base,
+            "web_origin": w_origin,
+            "effective_platform_base": eff_p,
+            "effective_deploy_base": eff_d,
+            "effective_web_origin": eff_w,
+            "default_platform_base": def_p,
+        }
+
+    @app.get("/v1/opc/config")
+    def get_opc_config() -> Any:
+        return _get_opc_config_payload()
+
+    @app.put("/v1/opc/config")
+    async def update_opc_config(body: dict) -> Any:
+        raw_p = str((body or {}).get("platform_base") or "").strip().rstrip("/")
+        raw_d = str((body or {}).get("deploy_base") or "").strip().rstrip("/")
+        raw_w = str((body or {}).get("web_origin") or "").strip().rstrip("/")
+
+        from urllib.parse import urlparse
+
+        for label, val in [("平台网关", raw_p), ("部署服务", raw_d), ("Web控制台", raw_w)]:
+            if val:
+                parsed = urlparse(val)
+                if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                    return JSONResponse(
+                        {
+                            "error": {
+                                "code": "INVALID_URL",
+                                "message": f"{label}地址无效，须为以 http:// 或 https:// 开头的合法URL",
+                            }
+                        },
+                        status_code=400,
+                    )
+
+        target_p = raw_p or "https://shtokendance.benlai.com"
+        set_global_value("opc_platform_base", target_p)
+        set_global_value("opc_deploy_base", raw_d)
+        set_global_value("opc_web_origin", raw_w)
+
+        # Sync app-delivery platform_config.json
+        try:
+            cfg_dir = state_dir() / "app-delivery"
+            cfg_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cfg_file = cfg_dir / "platform_config.json"
+            cfg_file.write_text(
+                json.dumps(
+                    {"platform_url": raw_d or target_p},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+        # Hot update enterprise_auth in memory
+        old_base = enterprise_auth.platform_base
+        new_base = target_p.rstrip("/")
+        if old_base != new_base:
+            enterprise_auth.platform_base = new_base
+            # If domain changed and user had session, clear to prevent credential leakage
+            if enterprise_auth.context:
+                enterprise_auth.clear_local_context(reason="platform_base_changed")
+                manager.sync_enterprise_context()
+
+        return _get_opc_config_payload()
+
+    @app.post("/v1/opc/config/test")
+    async def test_opc_connection(body: dict) -> Any:
+        raw_url = str((body or {}).get("url") or "").strip().rstrip("/")
+        if not raw_url:
+            return JSONResponse(
+                {"error": {"code": "INVALID_URL", "message": "请输入待测试的 URL 地址"}},
+                status_code=400,
+            )
+        import time
+        from urllib.parse import urlparse
+        import httpx
+
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return JSONResponse(
+                {
+                    "error": {
+                        "code": "INVALID_URL",
+                        "message": "待测试地址无效，须为以 http:// 或 https:// 开头的合法URL",
+                    }
+                },
+                status_code=400,
+            )
+
+        start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(
+                timeout=5.0, follow_redirects=True, verify=False
+            ) as client:
+                resp = await client.get(raw_url)
+                latency = round((time.monotonic() - start) * 1000, 1)
+                return {
+                    "ok": True,
+                    "status_code": resp.status_code,
+                    "latency_ms": latency,
+                    "url": raw_url,
+                }
+        except httpx.HTTPError as exc:
+            latency = round((time.monotonic() - start) * 1000, 1)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "latency_ms": latency,
+                    "error": f"连接失败: {exc}",
+                },
+                status_code=200,
+            )
+        except Exception as exc:
+            latency = round((time.monotonic() - start) * 1000, 1)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "latency_ms": latency,
+                    "error": f"网络异常: {exc}",
+                },
+                status_code=200,
+            )
+
     # -- Enterprise resources (WORK-RESOURCES-001, INT-101/103, BND-002/008) ----
     from ..enterprise import installer as _installer
     from ..enterprise.registry import SkillRef, SkillRefError, REGISTRY

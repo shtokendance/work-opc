@@ -4455,6 +4455,75 @@ export async function updatePlatformConfig(platformUrl: string): Promise<Platfor
   return data;
 }
 
+export interface OpcConfig {
+  ok: boolean;
+  platform_base: string;
+  deploy_base: string;
+  web_origin: string;
+  effective_platform_base: string;
+  effective_deploy_base: string;
+  effective_web_origin: string;
+  default_platform_base: string;
+}
+
+export interface TestOpcConnectionResult {
+  ok: boolean;
+  status_code?: number;
+  latency_ms?: number;
+  url?: string;
+  error?: string;
+}
+
+export async function getOpcConfig(): Promise<OpcConfig> {
+  const res = await fetch(`${httpBase()}/v1/opc/config`);
+  const data = await res.json();
+  if (data?.effective_platform_base) {
+    setLocalPlatformBase(data.effective_platform_base);
+  }
+  if (data?.effective_web_origin) {
+    try {
+      localStorage.setItem("opc_web_origin", data.effective_web_origin);
+    } catch {}
+  }
+  return data;
+}
+
+export async function updateOpcConfig(payload: {
+  platform_base: string;
+  deploy_base?: string;
+  web_origin?: string;
+}): Promise<OpcConfig> {
+  const res = await fetch(`${httpBase()}/v1/opc/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || data?.detail || `HTTP ${res.status}`);
+  if (data?.effective_platform_base) {
+    setLocalPlatformBase(data.effective_platform_base);
+  }
+  if (data?.effective_web_origin) {
+    try {
+      localStorage.setItem("opc_web_origin", data.effective_web_origin);
+    } catch {}
+  }
+  return data;
+}
+
+export async function testOpcConnection(url: string): Promise<TestOpcConnectionResult> {
+  const res = await fetch(`${httpBase()}/v1/opc/config/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const data = await res.json();
+  if (!res.ok && !data?.error) {
+    throw new Error(data?.detail || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 export async function getAppRuntimeLogs(slug: string, tail = 200): Promise<{
   ok: boolean;
   slug: string;

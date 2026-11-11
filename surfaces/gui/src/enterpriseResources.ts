@@ -11,6 +11,21 @@ import { httpBase } from "./api";
 
 export const TRUSTED_WEB_ORIGIN = "https://shtokendance.benlai.com";
 
+let _configuredWebOrigin = "";
+
+export function setConfiguredWebOrigin(url: string): void {
+  _configuredWebOrigin = (url || "").trim().replace(/\/+$/, "");
+}
+
+export function getEffectiveWebOrigin(): string {
+  if (_configuredWebOrigin) return _configuredWebOrigin;
+  try {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("opc_web_origin")?.trim() : "";
+    if (saved) return saved.replace(/\/+$/, "");
+  } catch {}
+  return TRUSTED_WEB_ORIGIN;
+}
+
 export type ResourceAvailability = "available" | "not_ready";
 
 export interface ResourceItem {
@@ -228,7 +243,8 @@ export function buildResourceWebUrl(
   } else {
     path = `/platform/toolbox/skills?catalog_id=${encoded}`;
   }
-  const url = new URL(`${TRUSTED_WEB_ORIGIN}${path}`);
+  const origin = getEffectiveWebOrigin();
+  const url = new URL(`${origin}${path}`);
   if (tenantId) {
     if (/[/\\?#]/.test(tenantId)) return null;
     url.searchParams.set("tenant_id", tenantId);
@@ -239,12 +255,11 @@ export function buildResourceWebUrl(
 /** The upload entry is ALWAYS just the confirmed homepage — no deep link, no
  * token, no query (BND-003). */
 export function uploadHomeUrl(): string {
-  return TRUSTED_WEB_ORIGIN;
+  return getEffectiveWebOrigin();
 }
 
-/** Exact-origin guard shared by every external open (BND-003): https only,
- * exact trusted host, no userinfo, no non-default port. Returns the URL when
- * safe, null otherwise. */
+/** Exact-origin guard shared by every external open (BND-003): http/https only,
+ * trusted host, no userinfo. Returns the URL when safe, null otherwise. */
 export function assertSafeExternalUrl(raw: string): string | null {
   let url: URL;
   try {
@@ -252,8 +267,20 @@ export function assertSafeExternalUrl(raw: string): string | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:") return null;
-  if (url.host !== "shtokendance.benlai.com") return null; // host includes the port
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const trustedHosts = new Set<string>(["shtokendance.benlai.com"]);
+  try {
+    const originHost = new URL(getEffectiveWebOrigin()).host;
+    if (originHost) trustedHosts.add(originHost);
+  } catch {}
+  try {
+    const pb = typeof localStorage !== "undefined" ? localStorage.getItem("platform_url_override")?.trim() : "";
+    if (pb) {
+      const pbHost = new URL(pb).host;
+      if (pbHost) trustedHosts.add(pbHost);
+    }
+  } catch {}
+  if (!trustedHosts.has(url.host)) return null; // host includes the port
   if (url.username || url.password) return null;
   return url.toString();
 }

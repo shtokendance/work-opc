@@ -2390,6 +2390,7 @@
     },
     "tab": {
       "account": "Account",
+      "opc_platform": "OPC Platform",
       "slack": "Slack",
       "github": "GitHub",
       "machines": "Machines",
@@ -2399,6 +2400,28 @@
     "machine_scope_aria": "Machine scope",
     "this_mac_option": "⌂ This Mac",
     "openworker_cloud": "Work OPC Cloud",
+    "opc_platform": {
+      "title": "OPC Platform Configuration",
+      "sub": "Configure OPC unified gateway and service URLs for production, staging, or private environments.",
+      "gateway_card_title": "Unified Platform Gateway",
+      "gateway_label": "Gateway URL (Platform Base)",
+      "gateway_help": "Used for Enterprise WeChat sign-in, knowledge base retrieval, tenant skills, and MCP gateway.",
+      "advanced_toggle": "Advanced Service URL Overrides",
+      "advanced_help": "Defaults to the main gateway URL. If specific services are hosted on separate domains, specify them below.",
+      "deploy_label": "App Deploy Service URL (Deploy Gateway)",
+      "deploy_help": "Used for App Center build, container storage, versioning, and health checks.",
+      "web_origin_label": "Web Console / Knowledge Base URL (Web Origin)",
+      "web_help": "Used for external web console links and trusted web origin security checks.",
+      "test_connection": "Test Connection",
+      "testing": "Testing...",
+      "save_apply": "Save & Apply Immediately",
+      "saving": "Saving...",
+      "reset_default": "Reset to Default",
+      "connection_success": "Connected successfully ({{latency}}ms, HTTP {{status}})",
+      "connection_failed": "Connection failed: {{error}}",
+      "save_success": "Configuration saved and applied!",
+      "save_failed": "Failed to save: {{error}}"
+    },
     "context": {
       "sub_machine": "On ⌂ {{name}} — how its sessions spend tokens.",
       "sub": "How sessions spend tokens — attachment handling and long-history compaction."
