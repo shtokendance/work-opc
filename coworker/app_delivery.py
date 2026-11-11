@@ -22,10 +22,10 @@ from .app_delivery_migration import (
     fetch_platform_dockerfile_template,
     inspect_credentials_in_source,
     inspect_local_sqlite_files,
-    migrate_local_data_to_platform,
     scan_app_routes_and_pages,
     select_and_filter_platform_resources,
 )
+from .app_delivery_auth import resolve_authentication, validate_auth_questions, validate_auth_probe_coverage
 from .app_delivery_repair import read_archive_file, check_archive_syntax
 from .app_delivery_sources import dependency_path
 from .engine import TurnEngine
@@ -121,6 +121,7 @@ class AppDelivery:
         if proposal:
             source = self.path(job_id) / "review/source"
             enriched = enrich_contract_and_discovery_report(source, data, _copy.deepcopy(proposal))
+            result["auth_summary"] = {"profiles": len(enriched["contract"].get("auth_profiles", {})) or int(bool(enriched["contract"].get("auth_profile"))), "status": "configured-pending-verification", "pages_verified": False}
             changes = []
             for change in enriched["changes"]:
                 path = delivery.relative(source, change["path"])
@@ -307,7 +308,7 @@ class AppDelivery:
         prev_contract = plan.get("contract") or {}
         compact_contract = {
             k: prev_contract[k]
-            for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "configs", "resources", "storage_mounts", "verification")
+            for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "auth_profiles", "auth_rules", "auth_blockers", "configs", "resources", "storage_mounts", "verification")
             if k in prev_contract
         }
         return {
@@ -516,37 +517,6 @@ class AppDelivery:
             )
             return json.dumps(res, ensure_ascii=False)
 
-        def migrate_storage_to_platform(source_type: str = "sqlite", sqlite_path: str = "", target_type: str = "postgres", target_resource_id: str = "") -> str:
-            """Step 2 tool: Automatically migrate local SQLite or local DB schema & rows to platform-opc server DB resource."""
-            mig = migrate_local_data_to_platform(
-                platform_url=data.get("platform_url", ""),
-                slug=data["slug"],
-                source_dir=source,
-                source_type=source_type,
-                sqlite_path=sqlite_path,
-                target_type=target_type,
-                target_resource_id=target_resource_id,
-            )
-            data.setdefault("migrations", []).append(mig)
-            res_id = mig.get("resource_id")
-            env_keys = sorted(list((mig.get("env_vars") or {}).keys()))
-            if res_id and env_keys:
-                existing_ids = {r.get("id") for r in data.get("resources", [])}
-                if res_id not in existing_ids:
-                    data.setdefault("resources", []).append({
-                        "id": res_id,
-                        "name": f"{data['slug']} 迁移数据库 ({mig.get('database_name', '')})",
-                        "type": mig.get("target_type", target_type),
-                        "description": mig.get("message", "自动迁移创建的服务端数据库"),
-                        "env_keys": env_keys,
-                        "env_preview": mig.get("env_preview", {}),
-                    })
-            data["events"].append(f"已完成数据库结构与数据迁移：{mig.get('message', res_id)}")
-            self.save(data)
-            safe_mig = {k: v for k, v in mig.items() if k != "env_vars"}
-            safe_mig["env_keys"] = env_keys
-            return json.dumps(safe_mig, ensure_ascii=False)
-
         def submit_proposal(summary: str = "", issues: list = None, unresolved: list = None, changes: list = None, contract: dict = None, proposal_json: str = "", decisions: list = None, four_step_report: dict = None) -> str:
             """Submit native structured fields, not a serialized JSON string. Does NOT modify source."""
             try:
@@ -565,19 +535,6 @@ class AppDelivery:
                         change = {**staged, **change}
                     resolved.append(change)
                 candidate["changes"] = resolved
-                # Auto-trigger SQLite->PostgreSQL migration if user explicitly confirmed migrating to platform DB and AI forgot to call the tool
-                fb_txt = str(data.get("feedback") or "")
-                if (
-                    data.get("analysis_mode") != "repair"
-                    and not data.get("migrations")
-                    and re.search(r"(使用平台\s*PostgreSQL|迁移.*PostgreSQL|迁移.*平台.*数据库|直接迁移所有表和数据)", fb_txt, re.I)
-                    and not re.search(r"保留.*SQLite", fb_txt, re.I)
-                    and inspect_local_sqlite_files(source).get("sqlite_databases")
-                ):
-                    try:
-                        migrate_storage_to_platform(source_type="sqlite", target_type="postgres")
-                    except Exception:
-                        pass
                 # Auto-merge any missing statically scanned APIs & pages and auto-complete DB code adaptation if migrated
                 if isinstance(candidate.get("contract"), dict):
                     enrich_contract_and_discovery_report(source, data, candidate)
@@ -597,8 +554,23 @@ class AppDelivery:
                             changed = changed or old != change["content"]
                         if not changed:
                             raise ValueError("本轮未修改失败制品中的文件，不能将相同程序错误标记为已修复；请读取出错文件并修正")
+                validate_auth_questions(candidate)
+                resolve_authentication(candidate["contract"])
+                for rule in candidate["contract"].get("auth_rules", []):
+                    for evidence in rule["evidence"]:
+                        match = re.fullmatch(r"(.+):(\d+)(?:-\d+)?", evidence)
+                        if not match:
+                            raise ValueError("认证证据必须是 文件:行号，而不是旧提案或猜测")
+                        evidence_path = delivery.relative(source, match[1])
+                        content = next((c["content"] for c in candidate["changes"] if c["path"] == match[1]), None)
+                        if content is None:
+                            content = delivery.text_of(evidence_path) if evidence_path.is_file() else None
+                        if content is None or not 1 <= int(match[2]) <= len(content.splitlines()):
+                            raise ValueError("认证证据位置不存在：" + evidence)
+
                 self.validate_proposal(data, source, candidate)
                 if not candidate.get("unresolved") and not candidate["contract"].get("unresolved"):
+                    validate_auth_probe_coverage(candidate["contract"])
                     self.preflight_proposal(work, candidate)
             except (ValueError, OSError) as exc:
                 reason = redacted(str(exc))[:1000]
@@ -623,7 +595,6 @@ class AppDelivery:
             inspect_credentials_and_decrypt,
             fetch_dockerfile_template,
             inspect_local_storage,
-            migrate_storage_to_platform,
             propose_file_change,
         ):
             registry.register(tool)
@@ -651,6 +622,9 @@ class AppDelivery:
                     "runtime": {"type": "object", "required": ["language", "version", "port"], "properties": {"language": {"type": "string"}, "version": {"type": "string"}, "port": {"type": "integer"}}},
                     "build_context": {"type": "array", "items": {"type": "string"}},
                     "health": {"type": "object", "required": ["path", "status", "json_contains"], "properties": {"path": {"type": "string"}, "status": {"type": "integer"}, "json_contains": {"type": "object"}}},
+                    "auth_profiles": {"type": "object", "description": "按方案 id 保存登录配置，接口 auth.profile 引用；支持 username_env/password_env/token_env 凭据引用"},
+                    "auth_rules": {"type": "array", "items": {"type": "object"}, "description": "有证据的认证继承规则：target=api/page，path 或 prefix，method 可选，auth，evidence。精确路径优先，用于公共登录例外"},
+                    "auth_blockers": {"type": "array", "items": {"type": "object"}, "description": "仅真实外部授权阻塞：question、evidence、affected、action、reason=external_authorization/missing_credential/role_change"},
                     "auth_profile": {
                         "type": "object",
                         "description": "第三步生成应用技能内置的管理员/登录账密与接口授权信息，确保调用应用技能获取页面或 API 数据不因鉴权受阻",
@@ -721,7 +695,7 @@ Understand natural-language feedback and partial answers. Resolve only decisions
 do not repeat them or treat a vague '可以' as consent to several unrelated changes.
 For technical code defects, investigate and repair in the isolated proposal without asking users to
 debug. Ask about business intent only if a fix changes behavior or cannot be inferred from code.
-When the user requests migrating local SQLite or local database data to platform-opc server database (or when migrating local storage per SKILL.md Step 2), call inspect_local_storage and migrate_storage_to_platform, and adapt the application's database connection layer accordingly. When retaining existing files/SQLite/JSON, include required original files in build_context and Docker COPY without reconstructing redacted content.
+Keep SQLite and all embedded file databases in their original engine/schema. Inspect their file paths, include original seeds in build_context, and declare persistent directory mounts including WAL/SHM/journal files. Never migrate schemas/data to platform databases or rewrite database drivers in this delivery flow. Preserve existing remote database connections. A localhost database server is a separate service, not an embedded file; do not pretend a file mount alone starts that service.
 Return credential config defaults empty, secret=true.
 For every existing setting mapped to a runtime environment variable, set configs[].source to the
 exact {"path":"conf/config.yaml","keys":["databases","devops-db","dsn"]} reference returned by
@@ -741,11 +715,12 @@ proposal (with Dockerfile, build_context, and server-ready defaults like HOST=0.
 IMPORTANT ANTI-LOOP RULES:
 1. NEVER put internal technical/tool mechanics (such as "接口扫描被截断", "补齐完整扫描结果", "核对数据库行数差异", "添加 /healthz", "创建 Dockerfile") into `unresolved` or `decisions`.
 2. `scan_routes_and_pages` automatically caches 100% of APIs and pages in the backend and auto-merges them into `contract.apis` and `contract.pages` inside `submit_proposal`. When an app has many APIs, you do NOT need to manually re-type all 60+ API objects in `submit_proposal` — you can pass `contract.apis=[]` (or only a few customized APIs) and the backend will deterministically populate all scanned APIs and pages with zero omissions.
-3. When the user's feedback asks to migrate SQLite to platform PostgreSQL (or confirms database migration), that selection IS full authorization to modify all involved database connection code and dependencies. Immediately call `migrate_storage_to_platform`, propose the necessary database connection adaptation (`db.py` + `psycopg2-binary` in `requirements.txt`) and Dockerfile via `propose_file_change`, and call `submit_proposal` with `unresolved=[]`. NEVER put "尚无经过核实的 PostgreSQL 连接适配实现" or "数据库切换不能视为已完成" into `unresolved`.
+3. LOCAL STORAGE POLICY: SQLite, JSON, uploaded files and other embedded data stay on persistent volumes. Never offer PostgreSQL migration or rewrite SQL/drivers. Old conversation answers requesting migration do not override this policy; migration is a separate task.
 4. When multiple platform resources exist, `available_resource_metadata` already provides the `is_default: true` default resource for each type (`postgres`, `redis`, `s3`, etc.). Always use the default resource of the matching type without asking the user which resource of the same type to pick.
 5. NEVER ask the user whether to keep default/demo admin passwords (e.g. `admin / ChangeMe123!`) or whether local JSON/file data can be stored in container local files — always preserve existing demo accounts (and record them in `contract.auth_profile`) and preserve local JSON/files in `build_context` automatically.
 6. Format `summary` cleanly using multi-line sections separated by `\\n` (e.g., `【应用定位】...\\n【运行环境】...\\n【接口与页面】...\\n【登录与鉴权】...\\n【数据与存储】...\\n【改造与技能】...`) rather than jamming everything into a single paragraph. When `previous_plan` is present (Round 2+ after user answers), DO NOT repeat Step 1 discovery or re-read unchanged files; reuse the pre-staged `changes` IDs from `previous_plan.changes` and write a concise 2-3 line `summary` confirming how `user_answers` were applied.
 """
+        instructions += "\nAUTHENTICATION: scanner auth=unknown means unanalysed, NEVER public. Read login handlers, middleware, session/token extraction and role checks. Never infer X-Admin-Token from admin/permission names. Use auth_rules with target api/page, exact path or prefix, optional method, auth object and source evidence; exact public login/health exceptions override prefixes. Use auth_profiles keyed by id and auth.profile for multiple identities; old auth_profile remains supported. Cookie is type=header, header=Cookie; Bearer uses type=bearer; env is a credential environment variable. Prefer username_env/password_env/token_env runtime references where configured. Include readonly verification cases for every protected auth profile and separate browser_cases for protected pages. Questions about missing credentials need auth_blockers with evidence, affected capabilities and one concrete account connection action. Hashes are not decryptable. Never disable auth or expand roles. Old proposals and scan results are not evidence; re-read authentication source during repair."
         model_settings: dict[str, Any] = {"max_tokens": 32000}
         effort = data.get("reasoning_effort")
         if effort:
@@ -794,7 +769,7 @@ IMPORTANT ANTI-LOOP RULES:
                 raise ValueError("模型未提交有效修改提案，请检查模型输出后重新分析")
             data.update(status="review", proposal=proposal, proposal_hash=fingerprint(proposal))
             data.setdefault("conversation", []).append({"role": "assistant", "text": proposal["summary"], "revision": data.get("revision", 1)})
-            data["events"].append("🔧 修复提案已通过本地制品预检；尚未部署或验证业务，请核对修改" if data.get("analysis_mode") == "repair" else "📋 第一步深度分析完成；请核对分析结果并确认后执行第二步应用改造")
+            data["events"].append("🔧 修复提案已生成；待确认事项解决后执行制品预检，服务器与业务验证尚未执行" if data.get("analysis_mode") == "repair" else "📋 第一步深度分析完成；请核对分析结果并确认后执行第二步应用改造")
         except Exception as exc:
             message = redacted(str(exc))[:2000]
             if isinstance(exc, TimeoutError):

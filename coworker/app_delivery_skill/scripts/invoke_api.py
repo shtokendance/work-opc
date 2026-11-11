@@ -65,11 +65,17 @@ def validate_basic(value, schema, label):
             validate_basic(item, schema["items"], label + "[]")
 
 
-def _resolve_contract_auth_credential(contract, auth):
+def _resolve_contract_auth_credential(contract, auth, credential_env=None):
+    environment = os.environ if credential_env is None else credential_env
     """Fallback to contract.auth_profile (discovered/decrypted admin credentials or auto-login) when env var is not externally set."""
-    profile = contract.get("auth_profile")
+    profile_id = auth.get("profile")
+    profile = contract.get("auth_profiles", {}).get(profile_id) if profile_id else contract.get("auth_profile")
+    if profile_id and not isinstance(profile, dict):
+        raise ValueError("unknown authentication profile: " + str(profile_id))
     if not isinstance(profile, dict):
         return ""
+    if profile.get("token_env"):
+        return environment.get(profile["token_env"], "")
     for k in ("auth_token", "token", "api_key", "cookie", "default_credential"):
         val = str(profile.get(k) or "").strip()
         if val:
@@ -77,11 +83,18 @@ def _resolve_contract_auth_credential(contract, auth):
     login_url = str(profile.get("login_url") or "").strip()
     username = str(profile.get("admin_username") or profile.get("username") or "").strip()
     password = str(profile.get("admin_password") or profile.get("password") or "").strip()
-    if login_url and login_url.startswith("/") and (username or password):
+    if profile.get("username_env"):
+        username = environment.get(profile["username_env"], "")
+    if profile.get("password_env"):
+        password = environment.get(profile["password_env"], "")
+    if login_url and (not login_url.startswith("/") or login_url.startswith("//") or "\\" in login_url or any(c in login_url for c in "\r\n#")):
+        raise ValueError("login URL must be a same-origin application path")
+    if login_url and (username or password):
         try:
             body_tpl = profile.get("login_body_template")
             if not isinstance(body_tpl, dict) or not body_tpl:
                 body_tpl = {"username": username, "password": password}
+            body_tpl = {k: (username if v == "${username}" else password if v == "${password}" else v) for k, v in body_tpl.items()}
             req_url = contract["base_url"].rstrip("/") + login_url
             req = urllib.request.Request(
                 req_url,
@@ -112,8 +125,8 @@ def _resolve_contract_auth_credential(contract, auth):
                             return raw[candidate_key].strip()
                         if isinstance(raw.get("data"), dict) and isinstance(raw["data"].get(candidate_key), str):
                             return raw["data"][candidate_key].strip()
-        except Exception:
-            pass
+        except (urllib.error.URLError, ValueError, OSError) as exc:
+            raise ValueError("application login failed; check the configured account connection (credentials omitted)") from exc
     if username and password and auth.get("type") == "header" and auth.get("header", "").lower() == "authorization":
         import base64
         return "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
@@ -166,11 +179,11 @@ def build_request(contract, operation, params, body, approve_write=False, creden
     if auth.get("type") not in {"none", "bearer", "header"}:
         raise ValueError("unsupported authentication; a dedicated client is required")
     if auth["type"] != "none":
-        credential = (os.environ if credential_env is None else credential_env).get(auth["env"], "")
-        if not credential and credential_env is None:
-            credential = _resolve_contract_auth_credential(contract, auth)
+        credential = (os.environ if credential_env is None else credential_env).get(auth.get("env", ""), "")
         if not credential:
-            raise ValueError("missing credential environment variable: " + auth["env"])
+            credential = _resolve_contract_auth_credential(contract, auth, credential_env)
+        if not credential:
+            raise ValueError("missing credential connection / 应用账号连接不可用，请检查认证方案：" + str(auth.get("profile") or auth.get("env") or "default"))
         if auth["type"] == "bearer":
             headers["Authorization"] = "Bearer " + credential
         else:

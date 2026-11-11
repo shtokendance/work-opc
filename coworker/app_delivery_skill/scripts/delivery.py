@@ -304,9 +304,18 @@ def check_work(work):
         auth = api.get("auth", {})
         require(auth.get("type") in {"none", "bearer", "header"}, "declare API authentication")
         if auth["type"] != "none":
-            require(ENV_NAME.fullmatch(auth.get("env", "")), "declare credential environment variable, not its value")
+            require(bool(auth.get("profile")) or ENV_NAME.fullmatch(auth.get("env", "")), "declare auth profile or credential environment variable")
+            if auth.get("profile"):
+                require(isinstance(contract.get("auth_profiles", {}).get(auth["profile"]), dict), "unknown authentication profile")
         if auth["type"] == "header":
             require(auth.get("header") and auth["header"].lower() not in {"host", "proxy-authorization", "content-length", "transfer-encoding", "connection", "upgrade"}, "invalid authentication header")
+    for profile in contract.get("auth_profiles", {}).values():
+        require(isinstance(profile, dict), "invalid authentication profile")
+        for field in ("username_env", "password_env", "token_env"):
+            require(not profile.get(field) or ENV_NAME.fullmatch(profile[field]), "invalid credential environment reference")
+        if profile.get("login_url"):
+            value = profile["login_url"]
+            require(value.startswith("/") and not value.startswith("//") and not any(c in value for c in "\\\r\n#"), "login URL must stay on application origin")
     for page in contract.get("pages", []):
         require(page.get("path", "").startswith("/") and not page["path"].startswith("//") and page.get("purpose") and page.get("evidence") and isinstance(page.get("actions"), list), "incomplete page contract")
         require(all(isinstance(action, (str, dict)) for action in page["actions"]), "page actions must be text or structured objects")
@@ -366,17 +375,22 @@ def render_skill_markdown(contract):
         md += "调用本应用技能访问页面或调用 API 时，若遇到登录拦截或接口鉴权，请直接使用以下在应用改造阶段提取/解密并验证过的授权信息，无需向用户重复索要账密：\n\n"
         if admin_user or admin_pass:
             md += f"- **管理员/登录账号**：`{admin_user}`\n"
-            md += f"- **登录密码（明文）**：`{admin_pass}`\n"
+            md += "- 登录凭据由调用器的认证配置读取，不在说明文本中展示。\n"
         if auth_profile.get("login_url"):
             md += f"- **登录入口/接口**：`{auth_profile.get('login_method', 'POST')} {auth_profile.get('login_url')}`\n"
         if auth_token:
-            md += f"- **内置授权令牌/密钥**：`{auth_token}`\n"
+            md += "- 已配置令牌来源，由调用器注入。\n"
         if auth_profile.get("notes"):
             md += f"- **授权使用说明**：{auth_profile.get('notes')}\n"
         md += "- **页面访问指引**：若访问页面需要登录，调用本技能的 AI 请直接使用上述记录的账号密码完成登录，再读取页面数据或执行操作。\n"
-        md += "- **API 调用指引**：`scripts/invoke_api.py` 已自动读取 `references/operations.json` 中的 `auth_profile` 完成令牌注入或自动登录兑换，确保接口调用不会因授权受阻。\n\n"
+        md += "- **API 调用指引**：`scripts/invoke_api.py` 已自动读取 `references/operations.json` 中的 `auth_profile` 完成令牌注入或自动登录兑换，配置不代表验证通过；以部署后的只读业务验证为准。\n\n"
     else:
         md += "先阅读 references/operations.json 的业务、参数、响应和认证约定。页面操作需要调用方具备浏览器工具，不能把页面描述当成已执行结果。\n\n"
+    if contract.get("auth_profiles"):
+        md += "## 自动认证方案\n\n"
+        for profile_id in contract["auth_profiles"]:
+            md += f"- `{profile_id}`：使用配置的登录/凭据来源；可用性以部署验证为准。\n"
+        md += "页面会话需单独验证，API 验证不代表页面验证。\n\n"
     apis = contract.get("apis", [])
     pages = contract.get("pages", [])
     md += f"## 应用能力概览\n\n- **收录页面/业务视图总数**：{len(pages)} 个\n- **收录 API 接口总数**：{len(apis)} 个\n\n"

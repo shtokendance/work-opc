@@ -212,3 +212,14 @@ it("submits deployment failures in explicit repair mode and explains verificatio
   }));
   expect(screen.getByText(/分析提案不等于修复通过/)).toBeTruthy();
 });
+
+it("shows authentication as configured rather than verified and does not expose passwords", async () => {
+  vi.mocked(getAppDeliveryJob).mockResolvedValue({
+    ...plan,
+    auth_summary: { profiles: 2, status: "configured-pending-verification", pages_verified: false },
+    proposal: { ...plan.proposal, auth_profile: { username: "admin", password: "must-not-render", token: "private-token" } },
+  });
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
+  expect(await screen.findByText(/已配置 2 套自动认证方案/)).toBeTruthy();
+  expect(screen.queryByText(/must-not-render|private-token/)).toBeNull();
+});

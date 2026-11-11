@@ -807,14 +807,12 @@ export function AppDeliveryReview({
                   <div>
                     <span className="text-ink font-medium">页面/接口鉴权：</span>
                     <span>
-                      {discovery?.auth_and_credentials?.page_auth || "免登访问"} · {discovery?.auth_and_credentials?.api_auth || "无特殊鉴权"}
+                      {discovery?.auth_and_credentials?.page_auth || "待分析页面认证"} · {discovery?.auth_and_credentials?.api_auth || "待分析接口认证"}
                     </span>
                   </div>
-                  {plan?.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
-                    <div className="text-ok font-mono bg-okSoft/40 border border-okLine/30 px-2 py-1 rounded-md">
-                      已提取内置凭据：{plan.auth_profile.username ? `账号=${plan.auth_profile.username}` : ""}
-                      {plan.auth_profile.password ? ` 密码=${plan.auth_profile.password}` : ""}
-                      {plan.auth_profile.token ? ` Token已就绪` : ""}
+                  {!!job?.auth_summary?.profiles && (
+                    <div className="text-muted bg-panel border border-line px-2 py-1 rounded-md">
+                      已配置 {job.auth_summary.profiles} 套自动认证方案；部署后验证业务访问，页面登录另行验证。
                     </div>
                   )}
                   <div>
@@ -1054,20 +1052,6 @@ export function AppDeliveryReview({
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {discovery?.storage_and_database?.can_migrate_to_platform_pg && (
-                    <button
-                      type="button"
-                      className={button + " bg-panel border-accentLine text-accent font-medium"}
-                      disabled={running}
-                      onClick={() =>
-                        void sendFeedback(
-                          "请将本地 SQLite 数据库完整迁移到平台提供的 PostgreSQL 服务端数据库，并导入原有表结构与数据后执行改造。",
-                        )
-                      }
-                    >
-                      迁移 SQLite 到平台 PostgreSQL 并改造
-                    </button>
-                  )}
                   <button
                     type="button"
                     className={button + " bg-accent text-white border-accent font-medium shadow-xs"}

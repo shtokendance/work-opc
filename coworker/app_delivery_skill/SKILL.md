@@ -1,13 +1,13 @@
 ---
 name: opc-app-adapter
-description: 按照四步标准化流程（1. 深度读取剖析应用与账密提取解密 -> 2. Dockerfile 模板化改造与数据库/基础服务自动迁移 -> 3. 生成内置授权凭据的应用技能 -> 4. 用户确认与部署核对）分析并改造用户上传的应用源码，生成可部署容器包及无授权阻碍的业务技能。
+description: 按照四步标准化流程（1. 分析源码、认证与存储 -> 2. 容器化适配与本地数据持久化卷 -> 3. 生成带自动认证及验证计划的应用技能 -> 4. 汇总确认与部署核对）处理应用源码；保留原数据库引擎和业务逻辑，不自动迁库，以实际部署验证确认可用性。
 metadata:
   version: 0.3.0
 ---
 
 # OPC 应用四步标准化改造技能
 
-本技能由当前 AI Agent 执行源码剖析、技术改造、数据迁移与业务技能生成。请使用清晰易懂的中文向用户汇报四个步骤的完整结论。
+本技能由当前 AI Agent 执行源码分析、容器适配、持久化卷配置、自动认证及业务技能生成；不执行数据库迁移。请使用清晰易懂的中文向用户汇报四个步骤的完整结论。
 
 ---
 
@@ -22,9 +22,9 @@ metadata:
 5. **页面是否有权限验证**：访问各个页面是否需要登录或特定角色权限。
 6. **是否有管理员账号及账密解密**：
    - 通过应用的配置文件、初始化脚本、种子数据（seed）、本地数据库或源码逻辑，查找本地或远端记录的管理员/默认登录账号与密码。
-   - **若密码经过加密、编码或哈希**（如 Base64、Hex、AES、自定义可逆加密或已知默认密码哈希），请调用 `inspect_credentials_and_decrypt` 工具并结合应用源码中的加解密/校验函数逆向还原出明文密码，明确输出管理员账号与明文密码。
+   - **若密码经过加密、编码或哈希**（如 Base64、Hex、AES、自定义可逆加密或已知默认密码哈希），请调用 `inspect_credentials_and_decrypt` 工具并结合应用源码中的加解密/校验函数验证已知凭据。哈希不可逆，不能承诺还原；只有编码或具备密钥的可逆加密可以解码/解密。不得在摘要或日志输出明文。
 7. **调用接口是否需要授权**：API 是否需要 Bearer Token、Session Cookie、API Key、`X-Admin-Token` 或 Basic Auth。
-8. **能否拿到登录的账号密码**：明确说明是否已拿到可用登录账密或固定 Token；若拿到，直接输出账号密码是什么。
+8. **能否拿到登录的账号密码**：明确说明是否已拿到可用登录账密或固定 Token；仅报告凭据来源与待验证状态，不展示明文。
 9. **数据存在哪里**：
    - **本地 SQLite**（如 `.sqlite` / `.sqlite3` / `.db` 文件，说明表数量与数据行数）
    - **本地 JSON 或其他本地文件**（如 `.json` / `.csv` / 本地文件目录）
@@ -49,38 +49,33 @@ metadata:
    - 先调用 `fetch_dockerfile_template(language, version)` 从 `platform-opc`（`deploy-opc` 数据库）获取同语言、同版本的标准 `Dockerfile` 模板与基础镜像。
    - **若原应用已有 `Dockerfile`**：检查其端口、监听地址（`0.0.0.0`）、构建依赖与国内镜像源是否需要改造；需要则提交修改。
    - **若原应用没有 `Dockerfile`**：基于 `platform-opc` 返回的基础镜像与模板，结合当前应用的真实入口与依赖文件生成完整 `Dockerfile`（配置国内镜像加速如阿里云 pip / npmmirror / goproxy.cn，并补齐 `/healthz` 健康检查）。
-2. **数据存储调整与自动迁移（用户选择迁移即代表授权修改全部涉及代码）**：
-   - **默认资源自动选用**：`platform-opc` 的每种基础服务资源类型（`postgres`、`mysql`、`redis`、`s3` 等）均标记了 `is_default: true` 的默认共享资源。存在多个同类型资源时，**自动优先选用 `is_default: true` 的默认资源**，严禁因为同类型有多个资源而向用户提问如何选择。
-   - **本地文件或 JSON**：**不用改动任何代码或配置**，将本地文件或 JSON 保持原样列入 `build_context` 打入容器镜像内，继续按原路径作为本地数据存储使用。
-   - **本地 SQLite 等嵌入式数据库**：当用户选择或确认将 SQLite 迁移至平台提供的默认数据库时，**即代表用户已确认授权修改所有涉及数据库连接的代码与依赖**。你必须在同一轮内：
-     1. 调用 `inspect_local_storage` 读取表结构与数据，并通过 `migrate_storage_to_platform(source_type="sqlite", ...)` 将全部表结构及存量数据自动迁移到 `platform-opc` 默认服务端数据库（自动创建独立库 `app_<slug>`）；
-     2. 调用 `propose_file_change` 同步改造应用的数据库连接代码（如 `db.py` 优先读取 `DATABASE_URL` 连接 PostgreSQL）与依赖文件（如 `requirements.txt` 增加 `psycopg2-binary`），并在 `contract.configs` 中声明 `DATABASE_URL`；
-     3. **严禁**将“尚无经过核实的 PostgreSQL 连接适配实现”或“数据库切换不能视为已完成”作为 `unresolved` 问题抛回给用户！（若用户选择保留原 SQLite，则保留原文件打入镜像，不改数据库代码）。
-   - **远端数据库实例**：默认服务器端能够连接，保留原连接配置，**不用改造**。
-   - **本地数据库实例（如 `127.0.0.1` 的 MySQL / PostgreSQL / SQLServer）**：匹配 `platform-opc` 接口获取到的同类型默认服务端数据库资源（`is_default: true`），通过应用代码内的配置读取当前数据库的所有表结构与数据，调用 `migrate_storage_to_platform` 迁移至服务端数据库，并调整应用配置直接使用服务端数据库。
+2. **本地数据统一使用持久化卷**：
+   - SQLite 等嵌入式文件数据库、JSON、上传文件、报告和备份，保留原有引擎、表结构、业务 SQL、数据及读写方式。识别真实数据路径并声明 storage_mounts；不询问迁移到线上数据库，不修改数据库驱动，不执行建库建表或数据导入。
+   - SQLite 挂载整个数据目录，包含 WAL/SHM/journal 等伴随文件；初始数据库作为种子仅在目标文件缺失时补齐，不覆盖线上数据库。不得只把数据库烘焙在镜像中就宣称持久化完成。
+   - 数据文件与程序混放时，不可盲目把整个程序根目录挂成空卷；优先利用应用已有数据路径配置隔离数据目录。无法安全确定映射时明确技术阻塞，不能改用 PostgreSQL 逃避问题。
+   - 原本连接远程数据库的应用保留其连接配置；本机 MySQL/PostgreSQL 等独立数据库服务不等于 SQLite 文件，单靠应用目录挂载不能替代数据库服务，需要单独确认其运行环境，不自动迁库。
+
 3. **外部不可达接口识别与本地 AI 改造提示词**：
    - 检查应用调用的外部 HTTP/RPC 接口。若有指向 `127.0.0.1` / `localhost` 的外部第三方服务接口（在服务器上必定调不通），在 `four_step_report.step2_transformation.unreachable_external_apis` 中明确列出，并生成一段**可直接复制给用户本地 AI 的改造提示词**（指导用户如何将其改造成可配置地址或将相关依赖服务一并部署）。
 4. **基础服务（Redis、MQ 等）本地实例迁移**：
-   - 若使用了本地 Redis / MQ 实例，切换至 `platform-opc` 提供的服务端对应基础服务上；由 AI 判断本地实例中的数据是否需要迁移（如业务状态数据需迁移，纯临时缓存可无需迁移），需要迁移时调用 `migrate_storage_to_platform` 将数据一并迁移至服务端对应服务。
+   - 若使用了本地 Redis / MQ 实例，切换至 `platform-opc` 提供的服务端对应基础服务上；由 AI 判断本地实例中的数据是否需要迁移（如业务状态数据需迁移，纯临时缓存可无需迁移），涉及状态迁移时作为独立任务处理，不在应用改造流程中自动搬迁。
 5. **其他必要容器化适配**：
    - 监听地址改为 `0.0.0.0` 并监听目标 `container_port`。
    - 补齐无副作用的 `GET /healthz` 端点（返回 HTTP 200 且包含 `{"service": "<slug>"}`）。
 
 ---
 
-## 第三步：生成无授权阻碍、全量收录页面与接口的应用技能 (Step 3: Full-Coverage App Skill Generation)
+## 第三步：自动认证与应用技能
 
-生成的应用技能（`app-<slug>`）必须**将用户上传应用内包含的所有页面（含 SPA 子视图/面板）与所有后端接口 100% 放入应用技能内，绝不遗漏**，且**不能因为登录或接口授权问题导致后续 AI 调用受阻**：
+目标：用户无需理解 Token/Cookie 技术细节，由系统分析并接通原有认证，保留角色权限。配置生成不代表已验证。
 
-1. **全量收录所有页面与所有接口（零遗漏）**：
-   - `contract.pages` 必须包含前端全部路由页面及业务视图/子面板；
-   - `contract.apis` 必须包含后端全部 API 路由（包括公共接口、业务单据接口、字典配置接口、管理端接口等），不得只挑代表性接口或随意省略管理接口。
-2. **写入 `contract.auth_profile`**：
-   - 若应用存在页面登录或 API 鉴权，将第一步中获取/解密并验证过的管理员账号、明文密码、登录接口路径（`login_url`）、Token 字段路径（`token_json_path`）或固定授权码完整填入 `contract.auth_profile`。
-3. **访问页面需要登录**：
-   - 打包器会自动把 `contract.auth_profile` 中的管理员账号密码写入生成的 `SKILL.md`「登录与接口授权凭据（已内置）」章节，直接告诉调用该技能的 AI 使用技能内记录的账密完成页面登录。
-4. **调用 API 需要授权**：
-   - 在 `contract.apis[].auth` 中声明认证方式，同时配套的 `scripts/invoke_api.py` 会自动读取 `references/operations.json` 中的 `auth_profile`：当外部未传入环境变量时，自动使用内置授权码或自动调用应用的登录接口换取 Token / Cookie 并按应用认可的方式传入请求头。
+1. 扫描结果 auth.type=unknown 是待分析，不是公开。阅读登录处理、中间件、会话提取和角色检查。禁止根据 admin/permission 名称猜管理令牌；旧提案不能替代当前源码证据。
+2. auth_rules 声明 target=api/page、path 或 prefix、可选 method、auth 和 evidence。精确路径优先，公共登录入口等必须作为例外。接口和页面分开分析。
+3. auth_profiles 按 id 配置登录方案，auth.profile 引用它。兼容旧 auth_profile。Cookie 使用 type=header/header=Cookie；Bearer 使用 type=bearer；固定密钥必须使用源码规定的头。roles 记录真实权限范围，不得扩大权限。
+4. 自动登录支持同源 login_url、login_method、token_json_path、login_body_template。模板顶层值可使用 ${username}/${password}。优先 username_env/password_env/token_env 引用已有受控运行配置；兼容旧内置凭据但不在摘要、日志或技能 Markdown 展示。每次调用重新登录获取会话，避免复用过期会话。不同 profile 的凭据不能混用。
+5. 真正缺少外部授权或凭据时，auth_blockers 提供 question、evidence、affected、action、reason（external_authorization/missing_credential/role_change）。用户只需一次“连接应用账号”等明确操作。无证据的认证猜测返回 AI 修正，不反复询问用户。
+6. 每种受保护 API 身份/权限范围配置只读业务验证用例；公开健康检查不能代替认证验证。页面需要独立浏览器验证。现有调用器未通用支持 SSO/MFA/复杂 CSRF，遇到时设计专用适配并明确未完成范围，不取消原有认证。
+7. 保持四步部署流程。生成 app.tar/skill.zip 后按原流程确认部署。部署、健康、业务认证、页面验证分别报告；自动登录不等于授权写业务数据。
 
 ---
 

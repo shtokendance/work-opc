@@ -432,7 +432,8 @@ def test_step3_auth_profile_embedded_in_skill_and_auto_resolved_by_invoker():
     }
     skill_md = delivery.render_skill_markdown(contract)
     assert "admin" in skill_md
-    assert "secret-password-888" in skill_md
+    assert "secret-password-888" not in skill_md
+    assert "pre-issued-admin-token-xyz" not in skill_md
     assert "登录与接口授权凭据（已内置）" in skill_md
 
     # Verify invoke_api automatically uses contract.auth_profile when env is not explicitly passed
@@ -504,6 +505,7 @@ async def test_full_route_and_page_scanner_enriches_contract_and_reports(tmp_pat
             "content": (app_dir / "main.py").read_text() + "\n# adapted healthz\n",
         },
     ]
+    partial_proposal["contract"]["auth_rules"] = [{"target": target, "prefix": "/", "auth": {"type": "none"}, "evidence": ["main.py:6"]} for target in ("api", "page")]
     partial_proposal["contract"]["build_context"] = ["Dockerfile", "main.py", "routers", "static"]
 
     class PartialProvider(ConfiguredProvider):
@@ -608,7 +610,7 @@ def test_sqlite_unbounded_extraction_and_unresolved_noise_sanitizer(tmp_path):
     assert prop["discovery_report"]["storage_and_database"]["sqlite_databases"][0]["tables"][0]["row_count"] == 6200
 
 
-def test_default_resource_selection_and_auto_postgres_code_adaptation(tmp_path):
+def test_default_resource_selection_does_not_rewrite_sqlite_from_old_migration(tmp_path):
     from coworker.app_delivery_migration import (
         enrich_contract_and_discovery_report,
         select_and_filter_platform_resources,
@@ -681,21 +683,13 @@ def test_default_resource_selection_and_auto_postgres_code_adaptation(tmp_path):
     assert prop["unresolved"] == []
     assert prop["decisions"] == []
 
-    # db.py and requirements.txt are automatically adapted in proposal changes
-    import ast
+    # Historical migration receipts must not trigger new database code/driver changes.
     changes_by_path = {c["path"]: c for c in prop["changes"]}
-    assert "server/app/db.py" in changes_by_path
-    ast.parse(changes_by_path["server/app/db.py"]["content"])
-    assert "OPC Platform PostgreSQL (DATABASE_URL) Compatibility Shim" in changes_by_path["server/app/db.py"]["content"]
-    assert "psycopg2" in changes_by_path["server/app/db.py"]["content"]
-    assert "requirements.txt" in changes_by_path
-    assert "psycopg2-binary" in changes_by_path["requirements.txt"]["content"]
-
-    # Contract configs and resources automatically bind DATABASE_URL and db-test-app
-    config_keys = {c["key"] for c in prop["contract"]["configs"]}
-    assert "DATABASE_URL" in config_keys
-    res_ids = {r["id"] for r in prop["contract"]["resources"]}
-    assert "db-test-app" in res_ids
+    assert "server/app/db.py" not in changes_by_path
+    assert "requirements.txt" not in changes_by_path
+    assert "DATABASE_URL" not in {c["key"] for c in prop["contract"]["configs"]}
+    assert "db-test-app" not in {r["id"] for r in prop["contract"]["resources"]}
+    assert prop["discovery_report"]["storage_and_database"]["can_migrate_to_platform_pg"] is False
 
 
 def test_native_node_routes_and_structured_summary_without_round2_repetition(tmp_path):

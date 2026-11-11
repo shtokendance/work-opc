@@ -1428,20 +1428,10 @@ export function AppsView({ onBack }: Props) {
                   {/* Tab 2: 应用技能 */}
                   {reviewTab === "skills" && (
                     <section className="space-y-3" aria-label="生成的业务技能">
-                      {plan?.auth_profile && (plan.auth_profile.username || plan.auth_profile.token) && (
-                        <div className="rounded-xl border border-okLine bg-okSoft/30 p-3.5 text-xs space-y-1">
-                          <div className="font-semibold text-ok flex items-center gap-1.5">
-                            ✓ 已内置应用免登授权凭据 (Auth-Ready Skill)
-                          </div>
-                          <div className="text-ink">
-                            已自动写入技能凭据：
-                            {plan.auth_profile.username && <span className="font-mono ml-1">账号={plan.auth_profile.username}</span>}
-                            {plan.auth_profile.password && <span className="font-mono ml-2">密码={plan.auth_profile.password}</span>}
-                            {plan.auth_profile.login_url && <span className="font-mono ml-2">登录接口={plan.auth_profile.login_url}</span>}
-                          </div>
-                          <div className="text-muted">
-                            调用该应用技能访问页面或 API 时将自动携带或换取授权，不会因权限拦截受阻。
-                          </div>
+                      {!!deliveryJob?.auth_summary?.profiles && (
+                        <div className="rounded-xl border border-line bg-panel p-3.5 text-xs space-y-1">
+                          <div className="font-semibold">已配置 {deliveryJob.auth_summary.profiles} 套自动认证方案</div>
+                          <div className="text-muted">调用器按接口选择登录方式。配置完成不等于认证通过；部署后验证只读业务，页面登录单独验证。</div>
                         </div>
                       )}
                       {deliveryJob && <AppSkillPreview job={deliveryJob} />}

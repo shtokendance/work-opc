@@ -339,6 +339,20 @@ def inspect_local_file_storage(
                 if base_dir in _PERSISTENT_DIR_CATALOG:
                     code_referenced_dirs.add(base_dir)
 
+    # SQLite may live outside conventional data/ directories. Mount its parent,
+    # including WAL/SHM companions, but never cover application code or the root.
+    for db_file in sorted(source.rglob("*")):
+        if db_file.is_symlink() or not db_file.is_file() or db_file.suffix.lower() not in {".sqlite", ".sqlite3", ".db"}:
+            continue
+        rel = db_file.relative_to(source)
+        if len(rel.parts) < 2 or any(part in delivery.EXCLUDED or part in _EXCLUDED_PERSISTENT_PARENT_DIRS for part in rel.parts[:-1]):
+            continue
+        parent = db_file.parent
+        if any(p.suffix.lower() in _SOURCE_CODE_EXTENSIONS for p in parent.rglob("*") if p.is_file()):
+            continue
+        rel_dir = parent.relative_to(source).as_posix()
+        dir_seed_files.setdefault(rel_dir, []).extend(p.relative_to(source).as_posix() for p in parent.rglob("*") if p.is_file() and not p.is_symlink())
+
     for d in sorted(code_referenced_dirs):
         if d not in dir_has_code:
             dir_seed_files.setdefault(d, [])
@@ -933,10 +947,8 @@ def _scan_openapi_specs(source: Path, files: list[Path]) -> list[dict]:
                             "schema": param.get("schema") or {"type": param.get("type", "string")},
                         })
 
-                # Check security
-                sec = op.get("security") or doc.get("security")
-                is_admin = "/admin" in full_path or bool(sec)
-                auth_obj = {"type": "header", "header": "Authorization", "env": "BEARER_TOKEN"} if is_admin else {"type": "none"}
+                # Route discovery is not authentication analysis.
+                auth_obj = {"type": "unknown"}
 
                 routes.append({
                     "id": api_id,
@@ -1123,20 +1135,7 @@ def _scan_python_routes(source: Path, files: list[Path], pydantic_models: dict[s
                         doc = _extract_ast_str(kw.value).strip()
                         break
 
-                # Detect auth on route or router
-                dec_str = ast.unparse(dec) if hasattr(ast, "unparse") else ""
-                args_str = ast.unparse(node.args) if hasattr(ast, "unparse") else ""
-                is_admin = (
-                    mount_admin
-                    or router_info["admin_auth"]
-                    or "/admin" in full_path
-                    or bool(re.search(r"(?i)require_admin|admin_token|x-admin-token", dec_str + " " + args_str))
-                )
-                auth_obj = (
-                    {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"}
-                    if is_admin
-                    else {"type": "none"}
-                )
+                auth_obj = {"type": "unknown"}
 
                 # Extract path & query parameters + request body
                 path_param_names = set(re.findall(r"\{([a-zA-Z0-9_]+)\}", full_path))
@@ -1272,7 +1271,7 @@ def _scan_python_routes(source: Path, files: list[Path], pydantic_models: dict[s
                     "parameters": [],
                     "request_body": None,
                     "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                    "auth": {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "effect": "read",
                     "confirmation_required": False,
                 })
@@ -1298,7 +1297,7 @@ def _scan_python_routes(source: Path, files: list[Path], pydantic_models: dict[s
                     "parameters": [],
                     "request_body": None,
                     "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                    "auth": {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "effect": "read" if mth == "GET" else "write",
                     "confirmation_required": mth != "GET",
                 })
@@ -1356,7 +1355,7 @@ def _scan_js_ts_routes(source: Path, files: list[Path]) -> list[dict]:
             "parameters": path_params,
             "request_body": req_body,
             "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-            "auth": {"type": "none"},
+            "auth": {"type": "unknown"},
             "effect": effect,
             "confirmation_required": effect != "read",
         }
@@ -1492,7 +1491,7 @@ def _scan_go_routes(source: Path, files: list[Path]) -> list[dict]:
                     "parameters": [],
                     "request_body": None,
                     "responses": {"200": {"type": "object", "required": [], "properties": {"code": {"type": "integer"}}}},
-                    "auth": {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "effect": effect,
                     "confirmation_required": effect != "read",
                 })
@@ -1514,7 +1513,7 @@ def _scan_go_routes(source: Path, files: list[Path]) -> list[dict]:
                     "parameters": [],
                     "request_body": None,
                     "responses": {"200": {"type": "object", "required": [], "properties": {"code": {"type": "integer"}}}},
-                    "auth": {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "effect": effect,
                     "confirmation_required": effect != "read",
                 })
@@ -1543,7 +1542,7 @@ def _scan_go_routes(source: Path, files: list[Path]) -> list[dict]:
                         "parameters": [],
                         "request_body": None,
                         "responses": {"200": {"type": "object", "required": [], "properties": {"code": {"type": "integer"}}}},
-                        "auth": {"type": "none"},
+                        "auth": {"type": "unknown"},
                         "effect": effect,
                         "confirmation_required": effect != "read",
                     })
@@ -1593,7 +1592,7 @@ def _scan_java_routes(source: Path, files: list[Path]) -> list[dict]:
                 "parameters": [],
                 "request_body": None,
                 "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                "auth": {"type": "none"},
+                "auth": {"type": "unknown"},
                 "effect": "read" if mth == "GET" else "write",
                 "confirmation_required": mth != "GET",
             })
@@ -1611,7 +1610,7 @@ def _scan_java_routes(source: Path, files: list[Path]) -> list[dict]:
                 "parameters": [],
                 "request_body": None,
                 "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                "auth": {"type": "none"},
+                "auth": {"type": "unknown"},
                 "effect": "read",
                 "confirmation_required": False,
             })
@@ -1651,7 +1650,7 @@ def _scan_dotnet_routes(source: Path, files: list[Path]) -> list[dict]:
                 "parameters": [],
                 "request_body": None,
                 "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                "auth": {"type": "none"},
+                "auth": {"type": "unknown"},
                 "effect": "read" if mth == "GET" else "write",
                 "confirmation_required": mth != "GET",
             })
@@ -1677,7 +1676,7 @@ def _scan_dotnet_routes(source: Path, files: list[Path]) -> list[dict]:
                 "parameters": [],
                 "request_body": None,
                 "responses": {"200": {"type": "object", "required": [], "properties": {"ok": {"type": "boolean"}}}},
-                "auth": {"type": "none"},
+                "auth": {"type": "unknown"},
                 "effect": "read" if mth == "GET" else "write",
                 "confirmation_required": mth != "GET",
             })
@@ -1706,7 +1705,7 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
                 "path": "/",
                 "purpose": title,
                 "actions": ["打开应用主页面并执行业务操作"],
-                "auth": {"type": "none"},
+                "auth": {"type": "unknown"},
                 "evidence": [f"{rel}:1"],
             })
             seen_ids.add("index-page")
@@ -1730,13 +1729,12 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
             vid, label = m.group(1), m.group(2).strip()
             if vid not in seen_ids:
                 seen_ids.add(vid)
-                is_admin = "admin" in vid or "permission" in vid
                 pages.append({
                     "id": vid,
                     "path": f"/#/{vid}",
                     "purpose": f"{label}（业务视图）",
                     "actions": [f"查看或操作 {label}"],
-                    "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if is_admin else {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "evidence": [f"{rel}:1"],
                 })
 
@@ -1752,7 +1750,7 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
                         "path": f"/#/{vid}",
                         "purpose": f"{title}（{desc[:35]}）" if desc else f"{title}（业务视图）",
                         "actions": [f"查看或操作 {title}"],
-                        "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if "admin" in vid else {"type": "none"},
+                        "auth": {"type": "unknown"},
                         "evidence": [f"{rel}:1"],
                     })
 
@@ -1774,7 +1772,7 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
                     "path": r_path,
                     "purpose": f"{r_title}（前端路由视图）",
                     "actions": [f"访问并操作 {r_title} 页面"],
-                    "auth": {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if "admin" in r_path else {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "evidence": [f"{rel}:1"],
                 })
 
@@ -1788,7 +1786,7 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
                     "path": f"/#/{vid}",
                     "purpose": f"{vid} 业务视图",
                     "actions": [f"查看或操作 {vid}"],
-                    "auth": {"type": "none"},
+                    "auth": {"type": "unknown"},
                     "evidence": [f"{rel}:1"],
                 })
 
@@ -1839,7 +1837,7 @@ def _scan_frontend_pages(source: Path, files: list[Path]) -> list[dict]:
             purpose = f"{p.stem} 页面/业务视图 ({rel})"
 
         actions = clean_headings[:4] if clean_headings else [f"查看或操作 {p.stem} 视图"]
-        auth_obj = {"type": "header", "header": "X-Admin-Token", "env": "ADMIN_TOKEN"} if "admin" in stem else {"type": "none"}
+        auth_obj = {"type": "unknown"}
         pages.append({
             "id": page_id,
             "path": path,
@@ -2210,8 +2208,7 @@ def _auto_adapt_persistent_file_storage(source: Path, slug: str, data: dict, pro
         workdir = m_wd.group(1).rstrip("/") or "/app"
 
     # 2. Deterministically inspect local file storage & merge with any AI-declared mounts
-    has_migrations = bool(data.get("migrations"))
-    scanned_storage = inspect_local_file_storage(source, slug=slug, workdir=workdir, has_migrations=has_migrations)
+    scanned_storage = inspect_local_file_storage(source, slug=slug, workdir=workdir, has_migrations=False)
     mounts_by_cpath: dict[str, dict] = {}
     for item in scanned_storage.get("storage_mounts") or []:
         if isinstance(item, dict) and item.get("container_path"):
@@ -2357,11 +2354,12 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
             "purpose": scanned_page["purpose"],
             "evidence": scanned_page["evidence"],
             "actions": scanned_page.get("actions") or ["查看与交互操作"],
+            "auth": scanned_page.get("auth", {"type": "unknown"}),
         })
     contract["pages"] = existing_pages
 
     # 2b. When user has migrated SQLite to platform PostgreSQL, auto-complete any missing DB code/driver/config adaptations
-    _auto_adapt_sqlite_to_postgres_changes(source, str(data.get("slug", "")), data, proposal)
+    # Local file databases remain on volumes; historical migration receipts do not trigger code rewrites.
 
     # 2b-2. Automatically detect & adapt persistent local file storage (JSON state, uploads, reports, backups)
     storage_mounts = _auto_adapt_persistent_file_storage(source, str(data.get("slug", "")), data, proposal)
@@ -2459,20 +2457,12 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
     )
     mount_paths_desc = "、".join(m["container_path"] for m in storage_mounts)
     default_storage_plan = (
-        f"检测到本地 SQLite 数据库（共 {sqlite_dbs[0]['table_count']} 张表、{sqlite_dbs[0].get('total_rows', 0)} 条记录），可迁移至平台 {pg_resources[0]['name']} 或保留应用内置 SQLite"
-        if (sqlite_dbs and pg_resources)
-        else (
-            "保留应用内置 SQLite 数据库随镜像部署"
-            if sqlite_dbs
-            else (
-                f"已自动配置容器外持久化存储卷挂载（{mount_paths_desc}），保留初始种子文件且应用升级/重启不丢失数据，并支持无缝扩展 S3/OSS 对象存储"
-                if storage_mounts
-                else "无本地持久化数据库文件"
-            )
+        f"保留 SQLite 原引擎、表结构和数据，通过持久化卷部署（{mount_paths_desc or '需核对数据库文件所在目录的挂载'}），不迁移到平台数据库"
+        if sqlite_dbs else (
+            f"本地文件通过持久化卷部署（{mount_paths_desc}），首次补齐种子，后续不覆盖已有数据"
+            if storage_mounts else "未发现本地持久化数据文件"
         )
     )
-    if storage_mounts and sqlite_dbs:
-        default_storage_plan += f"；同时自动挂载外部持久化目录（{mount_paths_desc}）"
 
     api_modules: dict[str, int] = {}
     for a in existing_apis:
@@ -2536,7 +2526,7 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
         },
         "auth_and_credentials": {
             "page_auth": step1_ai.get("page_auth") or ("管理端需令牌/登录认证，普通业务页免登直达" if any((a.get("auth") or {}).get("type") != "none" for a in existing_apis) else "免登录直接访问"),
-            "api_auth": step1_ai.get("api_auth") or ("管理接口校验 X-Admin-Token，其余业务接口免鉴权" if any((a.get("auth") or {}).get("type") != "none" for a in existing_apis) else "无强制接口鉴权"),
+            "api_auth": step1_ai.get("api_auth") or ("按接口认证方案校验；尚需部署后验证" if any((a.get("auth") or {}).get("type") != "none" for a in existing_apis) else "按契约声明公开；尚需验证"),
             "auth_profile": auth_profile,
             "discovered_accounts_count": len(cred_info.get("discovered_accounts") or []) + len(cred_info.get("sqlite_accounts") or []),
         },
@@ -2560,11 +2550,11 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
                 }
                 for db in sqlite_dbs
             ],
-            "can_migrate_to_platform_pg": bool(sqlite_dbs and pg_resources),
+            "can_migrate_to_platform_pg": False,
             "platform_pg_resource": pg_resources[0]["name"] if pg_resources else "",
             "platform_pg_id": pg_resources[0]["id"] if pg_resources else "",
             "storage_mounts": storage_mounts,
-            "storage_migration_plan": step2_ai.get("storage_migration") or default_storage_plan,
+            "storage_migration_plan": default_storage_plan if sqlite_dbs else (step2_ai.get("storage_migration") or default_storage_plan),
         },
         "foundation_and_container": {
             "has_dockerfile": scan["runtime"]["has_dockerfile"],
@@ -2589,7 +2579,7 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
         "modified_files": modified_files,
         "deleted_files": [],
         "dockerfile_summary": discovery_report["foundation_and_container"]["dockerfile_action"],
-        "storage_summary": step2_ai.get("storage_migration") or discovery_report["storage_and_database"]["storage_migration_plan"],
+        "storage_summary": discovery_report["storage_and_database"]["storage_migration_plan"],
         "health_check": f"GET /healthz (端口 {data.get('port', 8080)}，返回 service={data.get('slug', '')})",
         "skill_summary": {
             "skill_name": f"app-{data.get('slug', '')}",

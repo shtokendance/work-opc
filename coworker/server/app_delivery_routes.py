@@ -23,6 +23,8 @@ DEFAULT_PLATFORM_URL = "https://shtokendance.benlai.com"
 def verification_credentials(contract, deployment_config, supplied):
     """Transient probe credentials; never add login sessions to deployment config."""
     allowed = {a.get("auth", {}).get("env") for a in contract.get("apis", []) if a.get("auth", {}).get("type") in {"header", "bearer"}}
+    for profile in [contract.get("auth_profile", {}), *contract.get("auth_profiles", {}).values()]:
+        allowed.update(profile[k] for k in ("username_env", "password_env", "token_env") if isinstance(profile, dict) and profile.get(k))
     supplied = {} if supplied is None else supplied
     if not isinstance(supplied, dict) or any(k not in allowed or not isinstance(v, str) or len(v) > 16384 or any(c in v for c in "\r\n\x00") for k, v in supplied.items()):
         raise ValueError("业务验证凭据无效，请仅填写本应用声明的登录凭据")
@@ -624,6 +626,8 @@ def register_app_delivery_routes(app, manager):
                 if receipt not in status.get("build_log", ""):
                     raise ValueError("线上部署回执与当前应用包或技能版本不一致，拒绝启用")
             contract = data["proposal"]["contract"]
+            from ..app_delivery_auth import validate_auth_probe_coverage
+            validate_auth_probe_coverage(contract)
             health = contract["health"]
             health_contract = {"base_url": data["app_url"], "apis": [{"id": "health", "path": health["path"], "method": "GET", "effect": "read", "auth": {"type": "none"}}]}
             code, content_type, content = await read_only_probe(health_contract, "health", {})
