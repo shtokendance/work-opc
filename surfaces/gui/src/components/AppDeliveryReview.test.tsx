@@ -202,3 +202,13 @@ it("formats long Step 1 summaries into structured blocks and supports external f
   expect(screen.getByText(/请点击右下角「下一步」/)).toBeTruthy();
   await waitFor(() => expect(onStepState).toHaveBeenCalledWith(expect.objectContaining({ canContinue: true })));
 });
+
+it("submits deployment failures in explicit repair mode and explains verification limits", async () => {
+  render(<AppDeliveryReview jobId="job" onReady={vi.fn()} repairMode initialFeedback="SyntaxError: Illegal return statement" />);
+  const input = await screen.findByLabelText("给 AI 的回答或要求");
+  fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/analyze", {
+    feedback: "SyntaxError: Illegal return statement", mode: "repair",
+  }));
+  expect(screen.getByText(/分析提案不等于修复通过/)).toBeTruthy();
+});

@@ -4854,6 +4854,8 @@ export async function enableLocalSkill(slug: string, job_id: string): Promise<{ 
 }
 
 export interface AppDeliveryJob {
+  analysis_mode?: "analysis" | "repair";
+  failed_artifact_sha?: string;
   preparation_checks?: { label: string; status: string; detail: string }[];
   configuration_problems?: { key: string; reason: string }[];
   revision?: number;

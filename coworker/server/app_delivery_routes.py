@@ -202,7 +202,7 @@ def register_app_delivery_routes(app, manager):
     @app.post("/v1/apps/jobs/{job_id}/analyze")
     async def analyze(job_id: str, body: dict):
         try:
-            service.launch_analysis(job_id, str(body.get("feedback", "")))
+            service.launch_analysis(job_id, str(body.get("feedback", "")), repair=body.get("mode") == "repair")
             return {"ok": True}
         except (ValueError, OSError) as exc:
             raise fail(exc)

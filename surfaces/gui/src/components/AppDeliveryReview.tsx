@@ -231,6 +231,7 @@ export function AppDeliveryReview({
   onNextStep,
   onInvalidate,
   initialFeedback = "",
+  repairMode = false,
   onlineResources = [],
   footerMode = "inline",
   onStepStateChange,
@@ -242,6 +243,7 @@ export function AppDeliveryReview({
   onlineResources?: ResourceSummary[];
   onInvalidate?: () => void;
   initialFeedback?: string;
+  repairMode?: boolean;
   footerMode?: "inline" | "external";
   onStepStateChange?: (state: { canContinue: boolean; running: boolean; triggerNext: () => void }) => void;
 }) {
@@ -301,7 +303,7 @@ export function AppDeliveryReview({
     setBusy(true);
     setError("");
     try {
-      await appDeliveryRequest(`jobs/${jobId}/analyze`, { feedback: content });
+      await appDeliveryRequest(`jobs/${jobId}/analyze`, { feedback: content, ...((repairMode || job?.analysis_mode === "repair") ? { mode: "repair" } : {}) });
       onInvalidate?.();
       preparing.current = "";
       configurationVersion.current = "";
@@ -481,6 +483,13 @@ export function AppDeliveryReview({
 
   return (
     <section className="w-full max-w-4xl mx-auto flex-1 flex flex-col min-h-0 text-ui rounded-2xl border border-line bg-paper/60 p-4 sm:p-5 shadow-2xs overflow-hidden">
+      {(repairMode || job?.analysis_mode === "repair") && (
+        <aside aria-label="部署失败修复状态" className="mb-3 rounded-lg border border-line bg-panel p-3 text-meta">
+          <strong>{running ? "正在诊断失败并核对修复" : ready ? "修复包已生成，等待部署验证" : "部署失败专项修复"}</strong>
+          <p className="mt-1 text-muted">对照失败制品与原始源码，保留业务和已有配置。提案、语法检查、服务器启动和业务验证分别记录。</p>
+          {job?.failed_artifact_sha && <p className="mt-1 text-muted break-all">失败制品指纹：{job.failed_artifact_sha.slice(0, 16)}…</p>}
+        </aside>
+      )}
       {/* Top Status Bar */}
       <header
         className="flex items-center justify-between gap-3 pb-3 mb-3 border-b border-line shrink-0"
@@ -1284,14 +1293,14 @@ export function AppDeliveryReview({
             rows={2}
             className="w-full resize-y bg-transparent outline-none text-ink placeholder:text-muted/60 text-ui"
             placeholder={
-              ready
+              repairMode ? "补充故障现象；将检查失败制品并验证修改。请勿输入密码。" : ready
                 ? "还有想调整的地方？直接输入告诉 AI（例如：保留原来的数据库）…"
                 : "告诉 AI 你的选择或想法（例如：保留原来的数据库；请解释这样修改的影响。请勿输入密码）…"
             }
           />
           <div className="flex justify-between items-center gap-3 pt-1">
             <span className="text-[11px] text-muted">
-              支持直接输入要求或点选上方快捷按钮 · 快捷键 ⌘/Ctrl + Enter 发送
+              {repairMode ? "失败修复模式：分析提案不等于修复通过，检查通过后仍需重新部署验证。" : "支持直接输入要求或点选上方快捷按钮"} · 快捷键 ⌘/Ctrl + Enter 发送
             </span>
             <button
               type="button"

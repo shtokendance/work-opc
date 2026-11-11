@@ -824,3 +824,60 @@ def test_persistent_file_storage_discovery_and_dockerfile_seed_adaptation(tmp_pa
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_repair_snapshots_actual_artifact_and_overrides_reuse_prompt(service):
+    job = await analyzed(service)
+    job = await service.approve(job['id'], approved_body(job))
+    bundle = service.path(job['id']) / 'bundle/app.tar'
+    original = bundle.read_bytes()
+    captured = []
+
+    class RepairProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            captured.extend(messages[:1])
+            return AssistantTurn(text='Cannot repair yet')
+
+    service.manager.provider = RepairProvider()
+    service.launch_analysis(job['id'], 'SyntaxError: Illegal return statement', repair=True)
+    await service.tasks[job['id']]
+    data = service.load(job['id'])
+    assert (service.path(job['id']) / 'failed-app.tar').read_bytes() == original
+    assert data['analysis_mode'] == 'repair'
+    assert data['status'] == 'failed'
+    assert not data.get('artifact_hash')
+    assert any('DEPLOYMENT REPAIR overrides' in str(m) for m in captured)
+    assert data['config_draft'] == job.get('config_draft') if 'config_draft' in data else True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change_file', [False, True])
+async def test_repair_requires_effective_change_for_program_failure(service, change_file):
+    job = await analyzed(service)
+    job = await service.approve(job['id'], approved_body(job))
+
+    class RepairProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            if len(self.calls) == 1:
+                return AssistantTurn(tool_calls=[ToolCall('failed-file', 'read_failed_file', {'path': 'main.py'})])
+            candidate = proposal()
+            candidate['summary'] = 'Root cause reviewed; candidate only, runtime verification pending.'
+            if change_file:
+                candidate['changes'][0]['content'] = "print('repaired')\n"
+            return AssistantTurn(tool_calls=[ToolCall(f'submit-{len(self.calls)}', 'submit_proposal', {'proposal_json': json.dumps(candidate)})])
+
+    service.manager.provider = RepairProvider()
+    service.launch_analysis(job['id'], 'ReferenceError: missing name', repair=True)
+    await service.tasks[job['id']]
+    result = service.load(job['id'])
+    if change_file:
+        assert result['status'] == 'review'
+        assert '确认已生效' not in result['proposal']['summary']
+        ready = await service.approve(job['id'], approved_body(service.public(job['id'])))
+        assert ready['status'] == 'ready'
+        assert ready['artifact_hash'] != job['artifact_hash']
+    else:
+        assert result['status'] == 'failed'
+        assert '未修改失败制品' in result['error']

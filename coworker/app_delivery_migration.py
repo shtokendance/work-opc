@@ -2607,7 +2607,7 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
     #    and Round 2+ never repeats Step 1 discovery content after user confirmation.
     raw_summary = str(proposal.get("summary") or "").strip()
     revision = int(data.get("revision", 1) or 1)
-    if revision > 1 and feedback_text.strip() and (len(raw_summary) > 80 or "第一步" in raw_summary):
+    if data.get("analysis_mode") != "repair" and revision > 1 and feedback_text.strip() and (len(raw_summary) > 80 or "第一步" in raw_summary):
         latest_fb = feedback_text.split("本次补充（有冲突时以本次为准）：")[-1].strip()
         latest_fb_one_line = "；".join(ln.strip() for ln in latest_fb.splitlines() if ln.strip())[:120]
         proposal["summary"] = (
