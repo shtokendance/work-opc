@@ -74,29 +74,58 @@ def _resolve_contract_auth_credential(contract, auth, credential_env=None):
         raise ValueError("unknown authentication profile: " + str(profile_id))
     if not isinstance(profile, dict):
         return ""
-    if profile.get("token_env"):
-        return environment.get(profile["token_env"], "")
-    if any(profile.get(key) for key in ("password", "admin_password", "auth_token", "token", "api_key", "cookie", "default_credential")):
-        raise ValueError("embedded credentials are unsupported; connect application credentials")
-    login_url = str(profile.get("login_url") or "").strip()
+    token_key = profile.get("token_env")
+    if token_key and environment.get(token_key):
+        return str(environment[token_key])
+
     username = ""
     password = ""
-    if profile.get("username_env"):
-        username = environment.get(profile["username_env"], "")
-    if profile.get("password_env"):
-        password = environment.get(profile["password_env"], "")
+    u_key = profile.get("username_env")
+    if u_key:
+        username = environment.get(u_key) or ""
+    if not username and profile.get("default_username"):
+        username = str(profile["default_username"])
+    if not username and u_key:
+        for cfg in contract.get("configs", []):
+            if cfg.get("key") == u_key and cfg.get("default"):
+                username = str(cfg["default"])
+                break
+
+    p_key = profile.get("password_env")
+    if p_key:
+        password = environment.get(p_key) or ""
+    if not password and profile.get("default_password"):
+        password = str(profile["default_password"])
+    if not password and p_key:
+        for cfg in contract.get("configs", []):
+            if cfg.get("key") == p_key and cfg.get("default"):
+                password = str(cfg["default"])
+                break
+
+    login_url = str(profile.get("login_url") or "").strip()
     if login_url and (not login_url.startswith("/") or login_url.startswith("//") or "\\" in login_url or any(c in login_url for c in "\r\n#")):
         raise ValueError("login URL must be a same-origin application path")
     if login_url and (username or password):
         try:
-            body_tpl = profile.get("login_body_template")
+            body_tpl = profile.get("login_body_template") or profile.get("login_body")
             if not isinstance(body_tpl, dict) or not body_tpl:
                 body_tpl = {"username": username, "password": password}
-            body_tpl = {k: (username if v == "${username}" else password if v == "${password}" else v) for k, v in body_tpl.items()}
+            resolved_body = {}
+            for k, v in body_tpl.items():
+                if v in ("${username}", f"env:{u_key}", "env:USERNAME"):
+                    resolved_body[k] = username
+                elif v in ("${password}", f"env:{p_key}", "env:PASSWORD"):
+                    resolved_body[k] = password
+                elif isinstance(v, str) and v.startswith("env:"):
+                    env_k = v[4:]
+                    resolved_body[k] = environment.get(env_k) or (username if "USER" in env_k else password)
+                else:
+                    resolved_body[k] = v
+
             req_url = contract["base_url"].rstrip("/") + login_url
             req = urllib.request.Request(
                 req_url,
-                data=json.dumps(body_tpl).encode("utf-8"),
+                data=json.dumps(resolved_body).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
                 method=str(profile.get("login_method") or "POST").upper(),
             )

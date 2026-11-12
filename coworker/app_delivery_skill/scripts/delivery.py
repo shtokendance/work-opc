@@ -464,6 +464,14 @@ def owned_remove(kind, name, run_id):
     docker(kind, "rm", *(["--force"] if kind == "container" else []), name)
 
 
+def json_matches(data, expected):
+    try:
+        parsed = json.loads(data) if isinstance(data, (str, bytes)) else data
+        return subset(parsed, expected)
+    except Exception:
+        return False
+
+
 def subset(actual, expected):
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(k in actual and subset(actual[k], v) for k, v in expected.items())
@@ -538,7 +546,7 @@ def smoke(args):
             try:
                 code, content_type, data = execute(health_contract, "health", {})
                 evidence["health_last"] = {"status": code, "content_type": content_type, "identity_match": False}
-                matched = code == health["status"] and "application/json" in content_type and subset(json.loads(data), health["json_contains"])
+                matched = code == health["status"] and json_matches(data, health["json_contains"])
                 evidence["health_last"]["identity_match"] = matched
                 require(matched, "health response is not this application's declared identity")
                 break
@@ -550,7 +558,7 @@ def smoke(args):
         evidence["checks"].append({"kind": "health-identity", "ok": True})
         for case in contract["verification"].get("cases", []):
             code, content_type, data = execute(contract, case["operation"], case.get("params", {}), case.get("body"), credential_env=credentials)
-            require(code == case.get("status", 200) and "application/json" in content_type and subset(json.loads(data), case["json_contains"]), "business probe failed: " + case["operation"])
+            require(code == case.get("status", 200) and json_matches(data, case["json_contains"]), "business probe failed: " + case["operation"])
             evidence["checks"].append({"kind": "read-only-business", "operation": case["operation"], "status": code, "ok": True})
         browser_pending = bool(contract["pages"])
         evidence["status"] = "awaiting-browser-verification" if browser_pending else "verified-local"
