@@ -74,11 +74,11 @@ def test_real_login_then_protected_request(kind):
 
 
 def test_profiles_do_not_share_tokens():
-    contract = {'base_url': 'https://app.example', 'auth_profile': {'token': 'wrong'}, 'auth_profiles': {'one': {'token': 'right'}}, 'apis': [{'id': 'read', 'path': '/items', 'method': 'GET', 'effect': 'read', 'auth': {'type': 'bearer', 'profile': 'one'}}]}
-    assert build_request(contract, 'read', {}, None).get_header('Authorization') == 'Bearer right'
+    contract = {'base_url': 'https://app.example', 'auth_profile': {'token_env': 'WRONG_TOKEN'}, 'auth_profiles': {'one': {'token_env': 'RIGHT_TOKEN'}}, 'apis': [{'id': 'read', 'path': '/items', 'method': 'GET', 'effect': 'read', 'auth': {'type': 'bearer', 'profile': 'one'}}]}
+    assert build_request(contract, 'read', {}, None, credential_env={'WRONG_TOKEN': 'wrong', 'RIGHT_TOKEN': 'right'}).get_header('Authorization') == 'Bearer right'
     contract['apis'][0]['auth']['profile'] = 'absent'
     with pytest.raises(ValueError, match='unknown authentication profile'):
-        build_request(contract, 'read', {}, None)
+        build_request(contract, 'read', {}, None, credential_env={'WRONG_TOKEN': 'wrong', 'RIGHT_TOKEN': 'right'})
 
 
 def test_sqlite_custom_directory_uses_volume_with_companions(tmp_path):
