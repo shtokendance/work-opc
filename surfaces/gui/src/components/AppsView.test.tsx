@@ -102,7 +102,10 @@ describe("AppsView Component", () => {
     expect(screen.getByRole("link", { name: "http://expense-app.apps.opc.intra" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "升级新版本" })).toBeNull();
     fireEvent.click(screen.getByText("报销审批系统"));
-    expect(screen.queryByText("环境变量配置")).toBeNull();
+    expect(await screen.findByText("环境变量与运行参数")).toBeTruthy();
+    expect(screen.getByText("只读模式")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /保存配置/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "添加变量" })).toBeNull();
   });
 
   it("accepts a native-selected folder as the source without requiring a ZIP", async () => {

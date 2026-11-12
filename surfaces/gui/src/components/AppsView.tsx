@@ -560,7 +560,6 @@ export function AppsView({ onBack }: Props) {
 
   // Drawer handlers
   const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "storage" | "logs" | "versions" = "configs") => {
-    if (app.can_manage === false) return;
     setSelectedApp(app);
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
@@ -582,7 +581,7 @@ export function AppsView({ onBack }: Props) {
   };
 
   const saveDrawerConfig = async () => {
-    if (!selectedApp) return;
+    if (!selectedApp || selectedApp.can_manage === false) return;
     setSavingConfig(true);
     try {
       await updateDeployedAppConfig(selectedApp.slug, {
@@ -760,8 +759,8 @@ export function AppsView({ onBack }: Props) {
             {apps.map((app) => (
               <div
                 key={app.id}
-                onClick={app.can_manage === false ? undefined : () => openDrawer(app)}
-                className={`group rounded-xl2 border border-line bg-panel p-5 flex flex-col justify-between relative overflow-hidden ${app.can_manage === false ? "" : "hover:border-accent/40 hover:shadow-md transition-all duration-200 cursor-pointer"}`}
+                onClick={() => openDrawer(app)}
+                className="group rounded-xl2 border border-line bg-panel p-5 flex flex-col justify-between relative overflow-hidden hover:border-accent/40 hover:shadow-md transition-all duration-200 cursor-pointer"
               >
                 <div>
                   {/* Header: Icon + Title/Slug + Status Tag */}
@@ -851,7 +850,29 @@ export function AppsView({ onBack }: Props) {
                   {/* Card Footer: hover cue & actions */}
                   <div className="mt-3.5 pt-2.5 border-t border-line/40 flex items-center justify-between text-label text-muted">
                     {app.can_manage === false ? (
-                      <span>共享应用</span>
+                      <div className="flex items-center justify-between w-full gap-2" onClick={(e) => e.stopPropagation()}>
+                        <span className="inline-flex items-center gap-1 text-muted">
+                          <Icon name="team" size={12} className="text-muted" />
+                          共享应用
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {app.status === "failed" && (
+                            <button
+                              onClick={() => openDrawer(app, "logs")}
+                              className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-label font-medium transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <Icon name="file" size={11} />
+                              失败日志
+                            </button>
+                          )}
+                          <button
+                            onClick={() => openDrawer(app)}
+                            className="flex items-center gap-0.5 text-accent font-medium group-hover:translate-x-0.5 transition-transform cursor-pointer"
+                          >
+                            详情 <Icon name="chevronRight" size={12} />
+                          </button>
+                        </div>
+                      </div>
                     ) : app.status === "failed" ? (
                       <div className="flex items-center gap-2 w-full justify-between" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -1761,6 +1782,12 @@ export function AppsView({ onBack }: Props) {
                     <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-accentSoft text-accent border border-accent/20 font-semibold">
                       v{selectedApp.current_version || 1}
                     </span>
+                    {selectedApp.can_manage === false && (
+                      <span className="text-[11px] px-2 py-0.5 rounded bg-panel text-muted border border-line font-medium flex items-center gap-1">
+                        <Icon name="team" size={11} />
+                        共享应用（只读）
+                      </span>
+                    )}
                   </div>
                   <p className="text-meta text-muted line-clamp-1 mt-0.5">
                     {selectedApp.description || "暂无应用描述"}
@@ -1827,16 +1854,18 @@ export function AppsView({ onBack }: Props) {
                     <Icon name="refresh" size={12} className={recheckingSlug === selectedApp.slug ? "animate-spin" : ""} />
                     {recheckingSlug === selectedApp.slug ? "正在检查..." : "重新检查健康状态"}
                   </button>
-                  <button
-                    onClick={() => {
-                      handleFixDeploy(selectedApp);
-                      setSelectedApp(null);
-                    }}
-                    className="px-3 py-1.5 rounded-lg border border-danger/40 text-danger hover:bg-danger/10 text-label font-medium flex items-center gap-1.5 transition-colors"
-                  >
-                    <Icon name="refresh" size={12} />
-                    进入向导修复部署
-                  </button>
+                  {selectedApp.can_manage !== false && (
+                    <button
+                      onClick={() => {
+                        handleFixDeploy(selectedApp);
+                        setSelectedApp(null);
+                      }}
+                      className="px-3 py-1.5 rounded-lg border border-danger/40 text-danger hover:bg-danger/10 text-label font-medium flex items-center gap-1.5 transition-colors"
+                    >
+                      <Icon name="refresh" size={12} />
+                      进入向导修复部署
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -2009,12 +2038,14 @@ export function AppsView({ onBack }: Props) {
                       >
                         刷新
                       </button>
-                      <button
-                        onClick={() => void handleUpgradeApp(selectedApp)}
-                        className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-label font-medium transition-opacity"
-                      >
-                        + 升级新版本
-                      </button>
+                      {selectedApp.can_manage !== false && (
+                        <button
+                          onClick={() => void handleUpgradeApp(selectedApp)}
+                          className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-label font-medium transition-opacity"
+                        >
+                          + 升级新版本
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -2083,7 +2114,7 @@ export function AppsView({ onBack }: Props) {
                                   )}
                                 </div>
 
-                                {!isCurrentActive && isRunningRelease && (
+                                {!isCurrentActive && isRunningRelease && selectedApp.can_manage !== false && (
                                   <button
                                     disabled={rollingBackVersion !== null}
                                     onClick={() => void handleRollbackVersion(selectedApp.slug, ver.version)}
@@ -2145,20 +2176,29 @@ export function AppsView({ onBack }: Props) {
                 <div className="space-y-4">
                   <div className="p-3 rounded-xl bg-paper/80 border border-line flex items-center justify-between">
                     <div>
-                      <div className="font-semibold text-ui text-ink">环境变量与运行参数</div>
+                      <div className="font-semibold text-ui text-ink flex items-center gap-2">
+                        <span>环境变量与运行参数</span>
+                        {selectedApp.can_manage === false && (
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-panel text-muted border border-line">只读模式</span>
+                        )}
+                      </div>
                       <p className="text-label text-muted mt-0.5">
-                        修改配置后点击下方保存，将自动秒级重启容器使新变量生效。
+                        {selectedApp.can_manage === false
+                          ? "当前为企业共享应用，环境变量处于只读状态。仅所有者或管理员可修改配置并重启。"
+                          : "修改配置后点击下方保存，将自动秒级重启容器使新变量生效。"}
                       </p>
                     </div>
-                    <button
-                      onClick={() => {
-                        setDrawerConfigs([...drawerConfigs, { key: "", value: "", description: "自定义变量" }]);
-                      }}
-                      className="px-2.5 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink flex items-center gap-1.5 transition-colors"
-                    >
-                      <Icon name="plus" size={12} />
-                      添加变量
-                    </button>
+                    {selectedApp.can_manage !== false && (
+                      <button
+                        onClick={() => {
+                          setDrawerConfigs([...drawerConfigs, { key: "", value: "", description: "自定义变量" }]);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink flex items-center gap-1.5 transition-colors"
+                      >
+                        <Icon name="plus" size={12} />
+                        添加变量
+                      </button>
+                    )}
                   </div>
 
                   {drawerConfigs.length === 0 ? (
@@ -2181,14 +2221,16 @@ export function AppsView({ onBack }: Props) {
                               <input
                                 type="text"
                                 value={cfg.key}
+                                readOnly={selectedApp.can_manage === false}
                                 onChange={(e) => {
+                                  if (selectedApp.can_manage === false) return;
                                   const next = drawerConfigs.map(item => ({ ...item }));
                                   next[idx].key = e.target.value;
                                   if (next[idx].resource_id) { next[idx].resource_id = undefined; next[idx].value_source = "manual"; }
                                   setDrawerConfigs(next);
                                 }}
                                 placeholder="KEY_NAME"
-                                className="font-mono text-ui font-semibold text-ink bg-transparent focus:outline-none flex-1 border-b border-transparent focus:border-accent"
+                                className={`font-mono text-ui font-semibold text-ink bg-transparent focus:outline-none flex-1 border-b border-transparent ${selectedApp.can_manage === false ? "cursor-default" : "focus:border-accent"}`}
                               />
                               <div className="flex items-center gap-1.5">
                                 {isSecretKey && (
@@ -2200,15 +2242,17 @@ export function AppsView({ onBack }: Props) {
                                     {isRevealed ? "隐藏" : "显示"}
                                   </button>
                                 )}
-                                <button
-                                  onClick={() => {
-                                    setDrawerConfigs(drawerConfigs.filter((_, i) => i !== idx));
-                                  }}
-                                  className="text-muted hover:text-danger p-1 rounded hover:bg-paper"
-                                  title="删除此配置"
-                                >
-                                  <Icon name="trash" size={13} />
-                                </button>
+                                {selectedApp.can_manage !== false && (
+                                  <button
+                                    onClick={() => {
+                                      setDrawerConfigs(drawerConfigs.filter((_, i) => i !== idx));
+                                    }}
+                                    className="text-muted hover:text-danger p-1 rounded hover:bg-paper"
+                                    title="删除此配置"
+                                  >
+                                    <Icon name="trash" size={13} />
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -2216,14 +2260,16 @@ export function AppsView({ onBack }: Props) {
                               <input
                                 type={isSecretKey && !isRevealed ? "password" : "text"}
                                 value={cfg.value}
+                                readOnly={selectedApp.can_manage === false}
                                 onChange={(e) => {
+                                  if (selectedApp.can_manage === false) return;
                                   const next = drawerConfigs.map(item => ({ ...item }));
                                   next[idx].value = e.target.value;
                                   if (next[idx].resource_id) { next[idx].resource_id = undefined; next[idx].value_source = "manual"; }
                                   setDrawerConfigs(next);
                                 }}
                                 placeholder={cfg.has_value && cfg.value_source === "resource" ? "已配置：由资源注入，留空保留现有值" : "输入配置值..."}
-                                className="w-full px-3 py-1.5 rounded-lg border border-line bg-panel text-ui font-mono text-ink focus:outline-accent"
+                                className={`w-full px-3 py-1.5 rounded-lg border border-line bg-panel text-ui font-mono text-ink ${selectedApp.can_manage === false ? "cursor-default opacity-85" : "focus:outline-accent"}`}
                               />
                               {cfg.has_value && cfg.value_source === "resource" && <p className="text-xs text-muted mt-2">已配置 · 由“{cfg.source_label}”注入。输入框为空表示沿用资源值，不是配置被清空；填写新值才会覆盖。</p>}
                             </div>
@@ -2523,26 +2569,34 @@ export function AppsView({ onBack }: Props) {
               </div>
 
               <div className="flex items-center gap-3">
-                <span className="text-label text-muted hidden sm:inline">
-                  修改后将触发热更新重启
-                </span>
-                <button
-                  disabled={savingConfig}
-                  onClick={saveDrawerConfig}
-                  className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs disabled:opacity-50 flex items-center gap-2 transition-all"
-                >
-                  {savingConfig ? (
-                    <>
-                      <Icon name="refresh" size={14} className="animate-spin" />
-                      正在应用配置并重启...
-                    </>
-                  ) : (
-                    <>
-                      <Icon name="sparkle" size={14} />
-                      保存配置并秒级重启
-                    </>
-                  )}
-                </button>
+                {selectedApp.can_manage === false ? (
+                  <span className="text-label text-muted">
+                    共享应用（只读模式）· 仅管理员或创建者可修改配置并重启
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-label text-muted hidden sm:inline">
+                      修改后将触发热更新重启
+                    </span>
+                    <button
+                      disabled={savingConfig}
+                      onClick={saveDrawerConfig}
+                      className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs disabled:opacity-50 flex items-center gap-2 transition-all"
+                    >
+                      {savingConfig ? (
+                        <>
+                          <Icon name="refresh" size={14} className="animate-spin" />
+                          正在应用配置并重启...
+                        </>
+                      ) : (
+                        <>
+                          <Icon name="sparkle" size={14} />
+                          保存配置并秒级重启
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
