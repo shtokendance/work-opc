@@ -563,6 +563,9 @@ export function AppsView({ onBack }: Props) {
     setSelectedApp(app);
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
+    if (app.status === "failed") {
+      setLogsSubTab("build");
+    }
     setDrawerTab(app.status === "failed" && initialTab === "configs" ? "logs" : initialTab);
     setRuntimeLogs("");
     void loadRuntimeLogs(app.slug);
@@ -849,44 +852,28 @@ export function AppsView({ onBack }: Props) {
 
                   {/* Card Footer: hover cue & actions */}
                   <div className="mt-3.5 pt-2.5 border-t border-line/40 flex items-center justify-between text-label text-muted">
-                    {app.can_manage === false ? (
-                      <div className="flex items-center justify-between w-full gap-2" onClick={(e) => e.stopPropagation()}>
-                        <span className="inline-flex items-center gap-1 text-muted">
-                          <Icon name="team" size={12} className="text-muted" />
-                          共享应用
-                        </span>
-                        <div className="flex items-center gap-2">
-                          {app.status === "failed" && (
-                            <button
-                              onClick={() => openDrawer(app, "logs")}
-                              className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-label font-medium transition-colors flex items-center gap-1 cursor-pointer"
-                            >
-                              <Icon name="file" size={11} />
-                              失败日志
-                            </button>
-                          )}
-                          <button
-                            onClick={() => openDrawer(app)}
-                            className="flex items-center gap-0.5 text-accent font-medium group-hover:translate-x-0.5 transition-transform cursor-pointer"
-                          >
-                            详情 <Icon name="chevronRight" size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    ) : app.status === "failed" ? (
+                    {app.status === "failed" ? (
                       <div className="flex items-center gap-2 w-full justify-between" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => openDrawer(app, "logs")}
-                          className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-label font-medium transition-colors flex items-center gap-1"
-                        >
-                          <Icon name="file" size={11} />
-                          失败日志
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => openDrawer(app, "logs")}
+                            className="px-2.5 py-1 rounded-lg border border-line bg-paper hover:bg-chromeHover text-muted hover:text-ink text-label font-medium transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <Icon name="file" size={11} />
+                            失败日志
+                          </button>
+                          {app.can_manage === false && (
+                            <span className="inline-flex items-center gap-1 text-muted text-[11px]">
+                              <Icon name="team" size={11} className="text-muted" />
+                              共享
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => void handleRecheckHealth(app)}
                             disabled={recheckingSlug === app.slug}
-                            className="px-2.5 py-1 rounded-lg bg-ok hover:opacity-90 disabled:opacity-50 text-white text-label font-medium transition-opacity flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-lg bg-ok hover:opacity-90 disabled:opacity-50 text-white text-label font-medium transition-opacity flex items-center gap-1 cursor-pointer"
                             title="重新探测应用健康检查并恢复正常状态"
                           >
                             <Icon name="refresh" size={11} className={recheckingSlug === app.slug ? "animate-spin" : ""} />
@@ -894,11 +881,26 @@ export function AppsView({ onBack }: Props) {
                           </button>
                           <button
                             onClick={() => handleFixDeploy(app)}
-                            className="px-2.5 py-1 rounded-lg border border-danger/40 text-danger hover:bg-danger/10 text-label font-medium transition-colors flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-lg border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20 text-label font-medium transition-colors flex items-center gap-1 cursor-pointer"
+                            title="进入部署向导并重新发布"
                           >
-                            向导修复部署
+                            <Icon name="refresh" size={11} />
+                            重新部署
                           </button>
                         </div>
+                      </div>
+                    ) : app.can_manage === false ? (
+                      <div className="flex items-center justify-between w-full gap-2" onClick={(e) => e.stopPropagation()}>
+                        <span className="inline-flex items-center gap-1 text-muted">
+                          <Icon name="team" size={12} className="text-muted" />
+                          共享应用
+                        </span>
+                        <button
+                          onClick={() => openDrawer(app)}
+                          className="flex items-center gap-0.5 text-accent font-medium group-hover:translate-x-0.5 transition-transform cursor-pointer"
+                        >
+                          详情 <Icon name="chevronRight" size={12} />
+                        </button>
                       </div>
                     ) : (
                       <div className="flex items-center justify-between w-full gap-2" onClick={(e) => e.stopPropagation()}>
@@ -1849,23 +1851,22 @@ export function AppsView({ onBack }: Props) {
                   <button
                     onClick={() => void handleRecheckHealth(selectedApp)}
                     disabled={recheckingSlug === selectedApp.slug}
-                    className="px-3 py-1.5 rounded-lg bg-ok hover:opacity-90 disabled:opacity-50 text-white text-label font-medium flex items-center gap-1.5 transition-opacity"
+                    className="px-3 py-1.5 rounded-lg bg-ok hover:opacity-90 disabled:opacity-50 text-white text-label font-medium flex items-center gap-1.5 transition-opacity cursor-pointer"
                   >
                     <Icon name="refresh" size={12} className={recheckingSlug === selectedApp.slug ? "animate-spin" : ""} />
                     {recheckingSlug === selectedApp.slug ? "正在检查..." : "重新检查健康状态"}
                   </button>
-                  {selectedApp.can_manage !== false && (
-                    <button
-                      onClick={() => {
-                        handleFixDeploy(selectedApp);
-                        setSelectedApp(null);
-                      }}
-                      className="px-3 py-1.5 rounded-lg border border-danger/40 text-danger hover:bg-danger/10 text-label font-medium flex items-center gap-1.5 transition-colors"
-                    >
-                      <Icon name="refresh" size={12} />
-                      进入向导修复部署
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      handleFixDeploy(selectedApp);
+                      setSelectedApp(null);
+                    }}
+                    className="px-3.5 py-1.5 rounded-lg bg-danger hover:opacity-90 text-white text-label font-medium flex items-center gap-1.5 transition-opacity cursor-pointer shadow-xs"
+                    title="进入部署向导并重新发布"
+                  >
+                    <Icon name="refresh" size={12} />
+                    重新部署
+                  </button>
                 </div>
               </div>
             )}
@@ -2492,6 +2493,20 @@ export function AppsView({ onBack }: Props) {
                           <span>复制 Dockerfile</span>
                         </button>
                       )}
+
+                      {selectedApp.status === "failed" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleFixDeploy(selectedApp);
+                            setSelectedApp(null);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-danger/10 border border-danger/30 text-danger hover:bg-danger/20 text-label font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Icon name="refresh" size={12} />
+                          <span>重新部署</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -2569,7 +2584,23 @@ export function AppsView({ onBack }: Props) {
               </div>
 
               <div className="flex items-center gap-3">
-                {selectedApp.can_manage === false ? (
+                {selectedApp.status === "failed" ? (
+                  <>
+                    <span className="text-label text-danger">
+                      应用部署未成功
+                    </span>
+                    <button
+                      onClick={() => {
+                        handleFixDeploy(selectedApp);
+                        setSelectedApp(null);
+                      }}
+                      className="px-5 py-2 rounded-xl bg-danger hover:opacity-90 text-white text-ui font-medium shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+                    >
+                      <Icon name="refresh" size={14} />
+                      重新部署此应用
+                    </button>
+                  </>
+                ) : selectedApp.can_manage === false ? (
                   <span className="text-label text-muted">
                     共享应用（只读模式）· 仅管理员或创建者可修改配置并重启
                   </span>

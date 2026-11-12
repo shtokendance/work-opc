@@ -243,8 +243,38 @@ describe("AppsView Component", () => {
     render(<AppsView />);
     const recheckBtn = await screen.findByRole("button", { name: /重新检查/ });
     expect(recheckBtn).toBeTruthy();
+    expect(screen.getByRole("button", { name: /重新部署/ })).toBeTruthy();
     fireEvent.click(recheckBtn);
     expect(recheckAppHealth).toHaveBeenCalledWith("smart-expense", "http://smart-expense.10.101.102.116.nip.io:8080");
+  });
+
+  it("shows redeploy and recheck entrances in details view for a failed app", async () => {
+    vi.mocked(listDeployedApps).mockResolvedValueOnce({
+      apps: [
+        {
+          id: "app-failed",
+          name: "自动报销系统",
+          slug: "smart-expense",
+          description: "报销系统",
+          app_url: "http://smart-expense.10.101.102.116.nip.io:8080",
+          container_port: 8080,
+          status: "failed",
+          can_manage: false,
+          app_config: [],
+          resource_ids: [],
+          skill_name: "app-smart-expense",
+          skill_synced: false,
+          created_at: "2026-10-21T16:00:00Z",
+          updated_at: "2026-10-21T16:00:00Z",
+        },
+      ],
+    });
+    render(<AppsView />);
+    fireEvent.click(await screen.findByText("自动报销系统"));
+    expect(await screen.findByText("该应用上次部署未成功，容器未正常运行")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /重新检查健康状态/ }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: "重新部署" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("button", { name: "重新部署此应用" })).toBeTruthy();
   });
 
   it("automatically generates pinyin slug from app name and handles IME composition in slug field", async () => {
