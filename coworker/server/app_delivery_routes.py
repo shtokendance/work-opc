@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import uuid
 import zipfile
 
 import httpx
@@ -18,6 +19,7 @@ from ..secrets import state_dir
 
 
 DEFAULT_PLATFORM_URL = "https://shtokendance.benlai.com"
+ROLLBACK_NOTICE = "回滚恢复代码与运行配置，不自动回退数据库/卷中的业务数据；旧代码和新数据兼容性仍需验证。"
 
 
 def verification_credentials(contract, deployment_config, supplied):
@@ -85,9 +87,105 @@ def register_app_delivery_routes(app, manager):
     def fail(exc):
         return HTTPException(status_code=422, detail=str(exc))
 
+    def platform_target():
+        enterprise = getattr(app.state, "enterprise", None)
+        context = enterprise.context if enterprise else None
+        if not context or not context.access_token or context.access_expired():
+            raise HTTPException(status_code=403, detail="请先完成企业微信登录，再打开应用中心")
+        base = enterprise.platform_base.rstrip("/")
+        delivery.valid_url(base)
+        return base + "/integration/v1/apps", {"Authorization": f"Bearer {context.access_token}"}
+
+    async def platform_request(method, path="", *, timeout=20, **kwargs):
+        base, headers = platform_target()
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+            fn = getattr(client, method.lower(), None)
+            if fn is not None:
+                result = await fn(base + path, headers=headers, **kwargs)
+            else:
+                result = await client.request(method, base + path, headers=headers, **kwargs)
+        if result.status_code in {401, 403}:
+            message = "企微登录已失效，请重新登录" if result.status_code == 401 else "没有管理此应用的权限"
+            try:
+                error = result.json().get("error")
+                if isinstance(error, dict) and isinstance(error.get("message"), str):
+                    message = error["message"]
+            except ValueError:
+                pass
+            raise HTTPException(status_code=403, detail=message)
+        return result
+
+    async def catalog_request(method, path="", **kwargs):
+        try:
+            response = await platform_request(method, path, **kwargs)
+            if not response.is_success:
+                raise HTTPException(status_code=response.status_code, detail=delivery_error(response.text))
+            return response.json()
+        except (ValueError, OSError, httpx.HTTPError) as exc:
+            raise fail(exc)
+
+    @app.get("/v1/apps/catalog")
+    async def catalog():
+        return await catalog_request("GET")
+
+    @app.post("/v1/apps/catalog/check-slug")
+    async def check_slug(body: dict):
+        return await catalog_request("POST", "/check-slug", json={"slug": body.get("slug", "")})
+
+    @app.get("/v1/apps/catalog/resources")
+    async def resources():
+        return await catalog_request("GET", "/resources")
+
+    @app.get("/v1/apps/catalog/{slug}")
+    async def detail(slug: str):
+        if not delivery.SLUG.fullmatch(slug):
+            raise HTTPException(status_code=400, detail="应用标识格式无效")
+        return await catalog_request("GET", f"/{slug}")
+
+    @app.put("/v1/apps/catalog/{slug}/config")
+    async def update_config(slug: str, body: dict):
+        if not delivery.SLUG.fullmatch(slug):
+            raise HTTPException(status_code=400, detail="应用标识格式无效")
+        result = await catalog_request("PUT", f"/{slug}/config", json=body)
+        # Invalidate prior business verification for local jobs of this app when config changes
+        for file in sorted(service.root.glob("*/job.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                job_data = service.load(file.parent.name)
+            except Exception:
+                continue
+            if job_data.get("slug") != slug:
+                continue
+            verif = job_data.get("verification")
+            if isinstance(verif, dict) and str(verif.get("status", "")).startswith("verified"):
+                verif["status"] = "stale_config"
+                verif["stale_reason"] = "运行配置已变更，需重新执行业务验证"
+                job_data["verification"] = verif
+                service.save(job_data)
+        target_skill = service.manager.skill_store.global_dir / f"app-{slug}"
+        if target_skill.is_dir() and not target_skill.is_symlink():
+            was_user_disabled = service._was_skill_user_disabled(
+                target_skill, f"app-{slug}" in service.manager.skill_store.disabled_names()
+            )
+            pending_text = (
+                json.dumps({"reason": "运行配置已变更，等待业务验证", "was_user_disabled": True}, ensure_ascii=False)
+                if was_user_disabled
+                else "运行配置已变更，等待业务验证"
+            )
+            (target_skill / ".work-delivery-pending").write_text(pending_text, encoding="utf-8")
+            service.manager.skill_store.set_enabled(f"app-{slug}", False)
+        return result
+
+    @app.delete("/v1/apps/catalog/{slug}")
+    async def delete_app(slug: str, purge_volumes: bool = False):
+        if not delivery.SLUG.fullmatch(slug):
+            raise HTTPException(status_code=400, detail="应用标识格式无效")
+        params = {"purge_volumes": "true"} if purge_volumes else None
+        return await catalog_request("DELETE", f"/{slug}", params=params)
+
     @app.post("/v1/apps/transform")
     async def transform(body: dict):
         try:
+            platform_target()
             def prepare_upload():
                 source_path = str(body.get("source_path", "")).strip()
                 if source_path:
@@ -106,7 +204,7 @@ def register_app_delivery_routes(app, manager):
                     archive = base64.b64decode(body.get("data_b64", ""), validate=True)
                 if not archive:
                     raise ValueError("请选择源码 ZIP")
-                platform_url = str(body.get("platform_url") or default_platform_url()).rstrip("/")
+                platform_url = get_platform_config()["platform_url"]
                 delivery.valid_url(platform_url)
                 data = service.create(body, archive)
                 data["platform_url"] = platform_url
@@ -241,51 +339,32 @@ def register_app_delivery_routes(app, manager):
 
     @app.get("/v1/apps/platform-config")
     def get_platform_config():
-        url = default_platform_url()
+        enterprise = getattr(app.state, "enterprise", None)
+        url = (enterprise.platform_base if enterprise else "") or default_platform_url()
         return {
             "ok": True,
             "platform_url": url,
-            "resource_api_url": f"{url}/api/v1/apps/resources",
-            "resources_api_url": f"{url}/api/v1/apps/resources",
-            "dockerfile_template_api_url": f"{url}/api/v1/apps/dockerfile-templates",
-            "dockerfile_templates_api_url": f"{url}/api/v1/apps/dockerfile-templates",
+            "resource_api_url": f"{url}/integration/v1/apps/resources",
+            "resources_api_url": f"{url}/integration/v1/apps/resources",
+            "dockerfile_template_api_url": f"{url}/integration/v1/apps/dockerfile-templates",
+            "dockerfile_templates_api_url": f"{url}/integration/v1/apps/dockerfile-templates",
             "admin_deploy_url": f"{url}/admin/deploy",
             "deploy_admin_url": f"{url}/admin/deploy",
         }
 
     @app.put("/v1/apps/platform-config")
     def update_platform_config(body: dict):
-        try:
-            raw_url = str(body.get("platform_url") or "").strip().rstrip("/")
-            if not raw_url:
-                raw_url = DEFAULT_PLATFORM_URL
-            delivery.valid_url(raw_url)
-            cfg_dir = state_dir() / "app-delivery"
-            cfg_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            cfg_file = cfg_dir / "platform_config.json"
-            cfg_file.write_text(json.dumps({"platform_url": raw_url}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return {
-                "ok": True,
-                "platform_url": raw_url,
-                "resource_api_url": f"{raw_url}/api/v1/apps/resources",
-                "resources_api_url": f"{raw_url}/api/v1/apps/resources",
-                "dockerfile_template_api_url": f"{raw_url}/api/v1/apps/dockerfile-templates",
-                "dockerfile_templates_api_url": f"{raw_url}/api/v1/apps/dockerfile-templates",
-                "admin_deploy_url": f"{raw_url}/admin/deploy",
-                "deploy_admin_url": f"{raw_url}/admin/deploy",
-            }
-        except (ValueError, OSError) as exc:
-            raise fail(exc)
+        config = get_platform_config()
+        if str(body.get("platform_url", "")).rstrip("/") != config["platform_url"]:
+            raise HTTPException(status_code=422, detail="应用中心使用企微登录的平台地址，请在企业设置中更改")
+        return config
 
     @app.get("/v1/apps/runtime-logs/{slug}")
-    async def get_app_runtime_logs(slug: str, platform_url: str = ""):
+    async def get_app_runtime_logs(slug: str, tail: int = 200):
         try:
             if not delivery.SLUG.fullmatch(slug):
                 raise ValueError("应用标识格式无效")
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/logs")
+            resp = await platform_request("GET", f"/{slug}/logs", timeout=15, params={"tail": tail})
             if resp.status_code != 200:
                 raise ValueError(f"获取应用日志失败 ({resp.status_code}): {delivery_error(resp.text)}")
             return resp.json()
@@ -293,91 +372,46 @@ def register_app_delivery_routes(app, manager):
             raise fail(exc)
 
     @app.post("/v1/apps/recheck/{slug}")
-    async def recheck_app_health(slug: str, body: dict = None):
+    async def recheck_app_health(slug: str):
+        if not delivery.SLUG.fullmatch(slug):
+            raise HTTPException(status_code=400, detail="应用标识格式无效")
+        return await catalog_request("POST", f"/{slug}/recheck", timeout=30)
+
+    async def _reconcile_publish_request(data: dict, folder: Path) -> dict | None:
+        request_id = str(data.get("publish_request_id") or "").strip()
+        slug = data.get("slug", "")
+        if request_id and slug:
+            try:
+                req_resp = await platform_request("GET", f"/{slug}/requests/{request_id}", timeout=15)
+                if req_resp.status_code == 200:
+                    req_data = req_resp.json()
+                    req_status = str(req_data.get("status") or "").lower()
+                    if req_status in {"accepted", "building", "running", "failed"}:
+                        pub_ver = int(req_data.get("version") or data.get("published_version") or 1)
+                        data["published_version"] = pub_ver
+                        data["publish_state"] = req_status
+                        if req_status in {"accepted", "building", "running"}:
+                            data["published"] = True
+                            if folder.is_dir():
+                                service.archive_published_version(slug, pub_ver, folder)
+                        service.save(data)
+                        return req_data
+                elif req_resp.status_code == 404:
+                    data["publish_state"] = "not_received"
+                    service.save(data)
+            except Exception:
+                pass
+        return None
+
+    @app.post("/v1/apps/jobs/{job_id}/reconcile-publish")
+    async def reconcile_publish(job_id: str):
         try:
-            if not delivery.SLUG.fullmatch(slug):
-                raise ValueError("应用标识格式无效")
-            body = body or {}
-            target_platform = str(body.get("platform_url") or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-
-            async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-                # 1. 优先调用平台服务端的双重健康检查接口（校验 Docker 容器存活态 + 内网 HTTP 探活）
-                try:
-                    server_recheck = await client.post(f"{target_platform}/api/v1/apps/{slug}/recheck")
-                    if server_recheck.status_code == 200:
-                        res = server_recheck.json()
-                        if res.get("ok"):
-                            return {"ok": True, "status": "running", "message": "应用健康检查通过，状态已恢复正常运行"}
-                        else:
-                            status_desc = res.get("status", "unhealthy")
-                            msg = res.get("message") or "服务未就绪或容器异常"
-                            raise ValueError(f"健康检查未通过 ({status_desc})：{msg}")
-                except (ValueError, httpx.HTTPStatusError):
-                    raise
-                except Exception:
-                    # 若服务端 recheck 路由不可达，平滑回退到客户端探活
-                    pass
-
-                app_url = str(body.get("app_url") or "").strip().rstrip("/")
-                if not app_url:
-                    resp = await client.get(f"{target_platform}/api/v1/apps/{slug}")
-                    if resp.status_code != 200:
-                        raise ValueError(f"获取应用信息失败 ({resp.status_code}): {delivery_error(resp.text)}")
-                    app_data = resp.json()
-                    app_url = str(app_data.get("app_url") or "").strip().rstrip("/")
-
-                if not app_url:
-                    raise ValueError("应用尚未分配访问地址，无法执行健康检查")
-
-                health_url = app_url + "/healthz"
-                root_url = app_url + "/"
-                probe_resp = None
-                try:
-                    probe_resp = await client.get(health_url, timeout=10.0)
-                except Exception:
-                    pass
-
-                # 1. 优先校验 /healthz
-                passed = False
-                if probe_resp is not None and probe_resp.status_code == 200:
-                    s = probe_resp.text.lower().strip()
-                    is_invalid = (
-                        "powered by caprover" in s
-                        or "captain-root-domain" in s
-                        or s.startswith("<!doctype html")
-                        or s.startswith("<html")
-                    )
-                    if not is_invalid:
-                        passed = True
-
-                # 2. 若应用未实现 /healthz，回退探测主页面入口 (/)
-                if not passed:
-                    try:
-                        root_resp = await client.get(root_url, timeout=10.0)
-                        if root_resp.status_code == 200:
-                            rs = root_resp.text.lower().strip()
-                            if "powered by caprover" not in rs and "captain-root-domain" not in rs and len(rs) > 0:
-                                passed = True
-                                probe_resp = root_resp
-                    except Exception as root_err:
-                        if probe_resp is None:
-                            raise ValueError(f"健康检查请求失败: {root_err}")
-
-                if not passed:
-                    code_str = f"HTTP {probe_resp.status_code}" if probe_resp else "超时"
-                    raise ValueError(f"健康检查未通过 ({code_str})：服务未就绪或返回异常")
-
-                # 探活通过，向平台更新状态为 running
-                try:
-                    await client.put(
-                        f"{target_platform}/api/v1/apps/{slug}",
-                        json={"status": "running"}
-                    )
-                except Exception:
-                    pass
-
-            return {"ok": True, "status": "running", "message": "应用健康检查通过，状态已恢复正常运行"}
+            data = service.load(job_id)
+            folder = service.path(job_id) / "bundle"
+            reconciled = await _reconcile_publish_request(data, folder)
+            if reconciled:
+                return {"ok": True, "reconciled": True, "publish_state": data.get("publish_state"), "data": reconciled}
+            return {"ok": True, "reconciled": False, "publish_state": data.get("publish_state", "unknown")}
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 
@@ -385,13 +419,25 @@ def register_app_delivery_routes(app, manager):
     async def publish(body: dict):
         try:
             data, folder = service.verified_package(body.get("job_id", ""), body)
-            platform_url = str(body.get("platform_url") or data.get("platform_url") or default_platform_url()).rstrip("/")
-            delivery.valid_url(platform_url)
+            base, _ = platform_target()
+            platform_url = base.removesuffix("/integration/v1/apps")
+            if data.get("platform_url") and data["platform_url"].rstrip("/") != platform_url:
+                raise ValueError("此部署包属于另一个平台，请重新导入源码并确认部署地址")
             data["platform_url"] = platform_url
             version_note = str(body.get("version_note") or data.get("version_note") or "").strip()
             if version_note:
                 data["version_note"] = version_note
+            request_id = str(body.get("request_id") or data.get("publish_request_id") or "").strip() or uuid.uuid4().hex
+            data["publish_request_id"] = request_id
+            if data.get("publish_state") == "unknown" and not body.get("force_reupload"):
+                reconciled = await _reconcile_publish_request(data, folder)
+                if reconciled and str(reconciled.get("status") or "").lower() in {"accepted", "building", "running"}:
+                    return {"ok": True, "reconciled": True, "data": reconciled}
+                if data.get("publish_state") == "unknown":
+                    raise ValueError("上次上传响应中断，发布状态未知（unknown）；请先核对服务端状态或明确确认重传")
             service.install_pending_skill(data, folder)
+            data["publish_state"] = "uploading"
+            service.save(data)
             runtime = data["proposal"]["contract"].get("runtime", {})
             dockerfile_path = service.path(data["id"]) / "approved" / "source" / "Dockerfile"
             dockerfile_content = dockerfile_path.read_text(encoding="utf-8", errors="replace") if dockerfile_path.is_file() else ""
@@ -404,20 +450,36 @@ def register_app_delivery_routes(app, manager):
                 "runtime_version": str(runtime.get("version", "")),
                 "dockerfile_content": dockerfile_content,
                 "version_note": version_note,
+                "request_id": request_id,
                 "app_config": json.dumps(body.get("app_config", [])),
                 "resource_ids": json.dumps(body.get("resource_ids", [])),
                 "storage_mounts": json.dumps(data["proposal"]["contract"].get("storage_mounts", [])),
             }
             files = {"app_tar": ("app.tar", (folder / "app.tar").read_bytes(), "application/x-tar"), "skill_zip": ("skill.zip", (folder / "skill.zip").read_bytes(), "application/zip")}
-            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-                response = await client.post(platform_url + "/api/v1/apps/publish", data=fields, files=files)
+            try:
+                response = await platform_request("POST", "/publish", timeout=60, data=fields, files=files)
+            except (httpx.HTTPError, OSError) as net_exc:
+                reconciled = await _reconcile_publish_request(data, folder)
+                if reconciled and str(reconciled.get("status") or "").lower() in {"accepted", "building", "running"}:
+                    if reconciled.get("app_url") and reconciled.get("app_url") != data["app_url"]:
+                        raise ValueError("平台返回的 URL 与用户确认地址不同，拒绝启用技能")
+                    data["events"].append(f"上传连接中断后已通过幂等请求号核实平台接收状态 (v{data.get('published_version', 1)})")
+                    service.save(data)
+                    return {"ok": True, "reconciled": True, "data": reconciled}
+                if data.get("publish_state") != "not_received":
+                    data["publish_state"] = "unknown"
+                    service.save(data)
+                raise net_exc
             if response.status_code not in {200, 202}:
+                data["publish_state"] = "failed"
+                service.save(data)
                 raise ValueError("平台拒绝部署：" + str(response.status_code) + " " + delivery_error(response.text))
             result = response.json()
             if result.get("app_url") != data["app_url"]:
                 raise ValueError("平台返回的 URL 与用户确认地址不同，拒绝启用技能")
             pub_ver = int(result.get("version") or 1)
             data["published_version"] = pub_ver
+            data["publish_state"] = str(result.get("status") or "building")
             service.archive_published_version(data["slug"], pub_ver, folder)
             data["events"].append(f"已上传经过确认的同一交付包 (v{pub_ver})，物理文件已归档至服务端 MinIO，等待部署及业务验证")
             data["published"] = True
@@ -431,10 +493,7 @@ def register_app_delivery_routes(app, manager):
         try:
             if not delivery.SLUG.fullmatch(slug):
                 raise ValueError("应用标识格式无效")
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions")
+            resp = await platform_request("GET", f"/{slug}/versions", timeout=20)
             if resp.status_code != 200:
                 raise ValueError(f"查询应用版本历史失败 ({resp.status_code}): {delivery_error(resp.text)}")
             payload = resp.json()
@@ -450,10 +509,7 @@ def register_app_delivery_routes(app, manager):
         try:
             if not delivery.SLUG.fullmatch(slug) or version <= 0:
                 raise ValueError("应用标识或版本号无效")
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions/{version}/artifacts/{filename}")
+            resp = await platform_request("GET", f"/{slug}/versions/{version}/artifacts/{filename}", timeout=60)
             if resp.status_code == 200:
                 media_type = resp.headers.get("content-type", "application/octet-stream")
                 return Response(
@@ -462,8 +518,10 @@ def register_app_delivery_routes(app, manager):
                     headers={"Content-Disposition": f'attachment; filename="{slug}-v{version}-{filename}"'},
                 )
             local_fallback = service.root / "versions" / slug / f"v{version}" / filename
-            if local_fallback.is_file():
-                return FileResponse(local_fallback, filename=f"{slug}-v{version}-{filename}")
+            if resp.status_code == 404 and local_fallback.is_file():
+                remote = await catalog_request("GET", f"/{slug}")
+                if remote.get("can_manage") is True:
+                    return FileResponse(local_fallback, filename=f"{slug}-v{version}-{filename}")
             raise ValueError(f"下载版本 v{version} 制品 {filename} 失败 ({resp.status_code}): {delivery_error(resp.text)}")
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
@@ -477,33 +535,33 @@ def register_app_delivery_routes(app, manager):
             if target_version <= 0:
                 raise ValueError("请指定有效的目标回退版本号")
             reason = str(body.get("reason") or f"回退至版本 v{target_version}").strip()
-            target_platform = str(body.get("platform_url") or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
 
-            async with httpx.AsyncClient(timeout=180, trust_env=False) as client:
-                rb_resp = await client.post(
-                    f"{target_platform}/api/v1/apps/{slug}/rollback",
-                    json={"target_version": target_version, "reason": reason},
-                )
-                if rb_resp.status_code != 200:
-                    raise ValueError(f"服务端版本回退失败 ({rb_resp.status_code}): {delivery_error(rb_resp.text)}")
-                rb_data = rb_resp.json()
+            rb_resp = await platform_request(
+                "POST", f"/{slug}/rollback", timeout=660,
+                json={"target_version": target_version, "reason": reason},
+            )
+            if rb_resp.status_code != 200:
+                raise ValueError(f"服务端版本回退失败 ({rb_resp.status_code}): {delivery_error(rb_resp.text)}")
+            rb_data = rb_resp.json()
 
-                # 从 platform-opc (MinIO) 拉取目标版本的 skill.zip 并同步覆盖本地应用技能
-                skill_zip_bytes = b""
-                zip_resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/versions/{target_version}/artifacts/skill.zip")
-                if zip_resp.status_code == 200 and zip_resp.content:
-                    skill_zip_bytes = zip_resp.content
-                else:
-                    local_zip = service.root / "versions" / slug / f"v{target_version}" / "skill.zip"
-                    if local_zip.is_file():
-                        skill_zip_bytes = local_zip.read_bytes()
+            # 从 platform-opc (MinIO) 拉取目标版本的 skill.zip 并同步覆盖本地应用技能
+            skill_zip_bytes = b""
+            zip_resp = await platform_request("GET", f"/{slug}/versions/{target_version}/artifacts/skill.zip", timeout=60)
+            if zip_resp.status_code == 200 and zip_resp.content:
+                skill_zip_bytes = zip_resp.content
+            elif zip_resp.status_code == 404:
+                local_zip = service.root / "versions" / slug / f"v{target_version}" / "skill.zip"
+                if local_zip.is_file():
+                    skill_zip_bytes = local_zip.read_bytes()
 
             local_skill_synced = False
             verification = None
             if skill_zip_bytes:
                 ver_info = rb_data.get("version") or {}
                 app_url = str(ver_info.get("app_url") or "")
+                expected_sha = ver_info.get("skill_zip_sha256")
+                if not expected_sha or delivery.sha(skill_zip_bytes) != expected_sha:
+                    raise ValueError("回滚技能包摘要不一致，拒绝启用")
                 contract = service.install_rolled_back_skill(slug, app_url, skill_zip_bytes, target_version)
                 local_skill_synced = True
                 health = contract.get("health") or {}
@@ -515,11 +573,44 @@ def register_app_delivery_routes(app, manager):
                             "apis": [{"id": "health", "path": health["path"], "method": "GET", "effect": "read", "auth": {"type": "none"}}],
                         }
                         code, content_type, content = await read_only_probe(health_contract, "health", {})
-                        verification = {
-                            "status": "verified-rolled-back" if code == health.get("status", 200) else "health-mismatch",
-                            "http_status": code,
-                            "base_url": base_url,
-                        }
+                        if code != health.get("status", 200) or "application/json" not in content_type or not delivery.subset(json.loads(content), health.get("json_contains", {"service": slug})):
+                            raise ValueError("回滚后健康身份验证失败")
+                        cases = contract.get("verification", {}).get("cases", [])
+                        has_non_health_apis = any(
+                            isinstance(a, dict) and a.get("path") != health.get("path")
+                            for a in contract.get("apis", [])
+                        )
+                        latest = await platform_request("GET", f"/{slug}")
+                        current = latest.json() if latest.status_code == 200 else {}
+                        if latest.status_code != 200 or current.get("status") != "running" or current.get("current_version") != target_version:
+                            raise ValueError("验证期间线上版本发生变化")
+                        rb_fp = rb_data.get("config_fingerprint") or ver_info.get("config_fingerprint")
+                        cur_fp = current.get("config_fingerprint")
+                        if rb_fp and cur_fp and rb_fp != cur_fp:
+                            raise ValueError("验证期间线上运行配置指纹发生变化")
+                        if cases:
+                            for case in cases:
+                                operation = next((a for a in contract.get("apis", []) if a["id"] == case["operation"]), None)
+                                if not operation or operation.get("effect") != "read" or operation.get("path") == "/healthz":
+                                    raise ValueError("必须使用只读业务接口验证")
+                                code, content_type, content = await read_only_probe(contract, case["operation"], case.get("params", {}), case.get("body"))
+                                if code != case.get("status", 200) or "application/json" not in content_type or not delivery.subset(json.loads(content), case["json_contains"]):
+                                    raise ValueError("回滚后业务验证失败")
+                            service.finalize_rolled_back_skill(slug)
+                            verification = {
+                                "status": "verified-rolled-back",
+                                "base_url": base_url,
+                                "config_fingerprint": cur_fp or rb_fp or "",
+                            }
+                        elif contract.get("pages") and not has_non_health_apis:
+                            verification = {
+                                "status": "awaiting_page_verification",
+                                "base_url": base_url,
+                                "config_fingerprint": cur_fp or rb_fp or "",
+                                "detail": "容器与健康身份已就绪，纯页面应用请打开页面完成人工页面验收",
+                            }
+                        else:
+                            raise ValueError("缺少业务验证，技能保持停用")
                     except Exception as probe_exc:
                         verification = {"status": "probe-warning", "detail": str(probe_exc)}
 
@@ -536,21 +627,9 @@ def register_app_delivery_routes(app, manager):
                 "local_skill_verified": bool(verification and verification.get("status") == "verified-rolled-back"),
                 "verification": verification,
                 "version": rb_data.get("version"),
+                "rollback_notice": ROLLBACK_NOTICE,
                 "message": rb_data.get("message") or f"已将应用 {slug} 及对应技能同步回退至 v{target_version}",
             }
-        except (ValueError, OSError, httpx.HTTPError) as exc:
-            raise fail(exc)
-
-    @app.get("/v1/apps/storage/summary")
-    async def get_global_storage_summary(platform_url: str = ""):
-        try:
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                resp = await client.get(f"{target_platform}/api/v1/apps/admin/storage")
-            if resp.status_code != 200:
-                raise ValueError(f"获取全局存储总览失败 ({resp.status_code}): {delivery_error(resp.text)}")
-            return resp.json()
         except (ValueError, OSError, httpx.HTTPError) as exc:
             raise fail(exc)
 
@@ -559,10 +638,7 @@ def register_app_delivery_routes(app, manager):
         try:
             if not delivery.SLUG.fullmatch(slug):
                 raise ValueError("应用标识格式无效")
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                resp = await client.get(f"{target_platform}/api/v1/apps/{slug}/storage")
+            resp = await platform_request("GET", f"/{slug}/storage", timeout=20)
             if resp.status_code != 200:
                 raise ValueError(f"获取应用存储详情失败 ({resp.status_code}): {delivery_error(resp.text)}")
             return resp.json()
@@ -574,17 +650,20 @@ def register_app_delivery_routes(app, manager):
         try:
             if not delivery.SLUG.fullmatch(slug):
                 raise ValueError("应用标识格式无效")
-            target_platform = str(platform_url or default_platform_url()).strip().rstrip("/")
-            delivery.valid_url(target_platform)
             params = {}
             if path:
                 params["path"] = path
             if mount:
                 params["mount"] = mount
 
-            client = httpx.AsyncClient(timeout=300, trust_env=False)
-            req = client.build_request("GET", f"{target_platform}/api/v1/apps/{slug}/storage/backup", params=params)
-            resp = await client.send(req, stream=True)
+            base, headers = platform_target()
+            client = httpx.AsyncClient(timeout=300, trust_env=False, follow_redirects=False)
+            req = client.build_request("GET", f"{base}/{slug}/storage/backup", params=params, headers=headers)
+            try:
+                resp = await client.send(req, stream=True)
+            except BaseException:
+                await client.aclose()
+                raise
             if resp.status_code != 200:
                 body = await resp.aread()
                 await resp.aclose()
@@ -610,17 +689,17 @@ def register_app_delivery_routes(app, manager):
     async def enable(body: dict):
         try:
             data = service.load(body.get("job_id", ""))
+            folder = service.path(data["id"]) / "bundle"
+            if not data.get("published") and data.get("publish_request_id"):
+                await _reconcile_publish_request(data, folder)
             if not data.get("confirmation_token") or not data.get("published"):
                 raise ValueError("应用尚未确认部署")
-            platform_url = str(body.get("platform_url") or data.get("platform_url") or default_platform_url()).rstrip("/")
-            delivery.valid_url(platform_url)
-            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-                response = await client.get(platform_url + "/api/v1/apps/" + data["slug"])
-                response.raise_for_status()
-                status = response.json()
+            response = await platform_request("GET", "/" + data["slug"])
+            response.raise_for_status()
+            status = response.json()
             if status.get("status") != "running" or status.get("app_url") != data["app_url"]:
                 raise ValueError("部署尚未成功，不能启用业务技能")
-            summary = delivery.load(service.path(data["id"]) / "bundle/summary.json")
+            summary = delivery.load(folder / "summary.json")
             for filename in ("app.tar", "skill.zip"):
                 receipt = "[Artifact] " + filename + ":" + summary["files"][filename]
                 if receipt not in status.get("build_log", ""):
@@ -633,7 +712,12 @@ def register_app_delivery_routes(app, manager):
             code, content_type, content = await read_only_probe(health_contract, "health", {})
             if code != health["status"] or "application/json" not in content_type or not delivery.subset(json.loads(content), health["json_contains"]):
                 raise ValueError("应用健康身份校验失败，不能启用业务技能")
-            credentials = verification_credentials(contract, data["deployment_confirmation"]["app_config"], body.get("verification_credentials"))
+            supplied_creds = body.get("verification_credentials")
+            if supplied_creds is None and isinstance(data.get("saved_verification_credentials"), dict):
+                supplied_creds = data["saved_verification_credentials"]
+            credentials = verification_credentials(contract, data["deployment_confirmation"]["app_config"], supplied_creds)
+            if isinstance(body.get("verification_credentials"), dict):
+                data["saved_verification_credentials"] = dict(body["verification_credentials"])
             checks = []
             for case in contract["verification"].get("cases", []):
                 operation = next((api for api in contract["apis"] if api["id"] == case["operation"]), {})
@@ -643,10 +727,48 @@ def register_app_delivery_routes(app, manager):
                 if code != case.get("status", 200) or "application/json" not in content_type or not delivery.subset(json.loads(content), case["json_contains"]):
                     raise ValueError(f"只读业务验证失败：{case['operation']}（HTTP {code}，预期状态或业务字段不匹配）")
                 checks.append({"operation": case["operation"], "status": code, "passed": True})
+            config_fp = str(status.get("config_fingerprint") or "")
             if not checks:
+                has_pages = bool(contract.get("pages"))
+                has_non_health_apis = any(
+                    isinstance(api, dict) and api.get("path") != health["path"]
+                    for api in contract.get("apis", [])
+                )
+                if has_pages and body.get("confirm_page_verification") is True:
+                    service.enable_verified_skill(data)
+                    data["verified_config_fingerprint"] = config_fp
+                    data["verified_version"] = status.get("current_version")
+                    data["verification"] = {
+                        "status": "verified-deployed-page",
+                        "base_url": data["app_url"],
+                        "checks": [],
+                        "pages_verified": True,
+                        "config_fingerprint": config_fp,
+                    }
+                    service.save(data)
+                    return {"ok": True, "verification": data["verification"]}
+                if has_pages and not has_non_health_apis:
+                    data["verification"] = {
+                        "status": "awaiting_page_verification",
+                        "base_url": data["app_url"],
+                        "checks": [],
+                        "pages_verified": False,
+                        "config_fingerprint": config_fp,
+                        "detail": "容器已启动并通过健康身份校验，请打开应用页面完成人工验收后确认启用技能",
+                    }
+                    service.save(data)
+                    return {"ok": True, "verification": data["verification"]}
                 raise ValueError("缺少实际只读业务验证，健康检查不能代替。请在改造报告补充业务查询条件及预期结果后重新确认；页面应用需先完成浏览器验证。")
             service.enable_verified_skill(data)
-            data["verification"] = {"status": "verified-deployed-api", "base_url": data["app_url"], "checks": checks, "pages_verified": False}
+            data["verified_config_fingerprint"] = config_fp
+            data["verified_version"] = status.get("current_version")
+            data["verification"] = {
+                "status": "verified-deployed-api",
+                "base_url": data["app_url"],
+                "checks": checks,
+                "pages_verified": False,
+                "config_fingerprint": config_fp,
+            }
             service.save(data)
             return {"ok": True, "verification": data["verification"]}
         except (ValueError, OSError, httpx.HTTPError) as exc:

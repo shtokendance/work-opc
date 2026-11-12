@@ -4,6 +4,7 @@ import io
 import time
 import threading
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -21,6 +22,10 @@ def test_source_folder_route_snapshots_and_leaves_original_unchanged(tmp_path, m
     source.mkdir()
     (source / "main.py").write_text("print('original')\n")
     app = create_app(manager)
+    app.state.enterprise = SimpleNamespace(
+        platform_base="https://platform.example",
+        context=SimpleNamespace(access_token="fixture-token", access_expired=lambda: False),
+    )
     monkeypatch.setattr(app.state.app_delivery, "launch_analysis", lambda _: None)
     with TestClient(app) as client:
         body = {"name": "Folder", "slug": "folder-app", "app_url": "http://folder-app.apps.localhost", "source_path": str(source)}
@@ -73,6 +78,10 @@ def test_app_approval_publish_and_verified_enable(tmp_path, monkeypatch):
         z.writestr("main.py", "print('original')\n")
         z.writestr("Dockerfile", 'FROM python:3.11-alpine\nCOPY main.py /app.py\nCMD ["python","/app.py"]\n')
     app = create_app(manager)
+    app.state.enterprise = SimpleNamespace(
+        platform_base="https://platform.example",
+        context=SimpleNamespace(access_token="fixture-token", access_expired=lambda: False),
+    )
     original_create = app.state.app_delivery.create
     worker_threads = []
     def observed_create(*args, **kwargs):
@@ -169,7 +178,12 @@ def test_app_approval_publish_and_verified_enable(tmp_path, monkeypatch):
 def test_enable_without_delivery_confirmation_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
     manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
-    with TestClient(create_app(manager)) as client:
+    app = create_app(manager)
+    app.state.enterprise = SimpleNamespace(
+        platform_base="https://platform.example",
+        context=SimpleNamespace(access_token="fixture-token", access_expired=lambda: False),
+    )
+    with TestClient(app) as client:
         response = client.post("/v1/apps/enable-skill", json={"slug": "test-app"})
         assert response.status_code == 422
 
@@ -177,18 +191,29 @@ def test_enable_without_delivery_confirmation_is_rejected(tmp_path, monkeypatch)
 def test_platform_config_and_runtime_logs_routes(tmp_path, monkeypatch):
     monkeypatch.setattr("coworker.server.app_delivery_routes.state_dir", lambda: tmp_path / "state")
     manager = SessionManager(workspace=tmp_path, provider=ConfiguredProvider())
-    with TestClient(create_app(manager)) as client:
+    app = create_app(manager)
+    app.state.enterprise = SimpleNamespace(
+        platform_base="https://platform.example",
+        context=SimpleNamespace(access_token="fixture-token", access_expired=lambda: False),
+    )
+    with TestClient(app) as client:
         cfg = client.get("/v1/apps/platform-config").json()
         assert cfg["ok"] is True
-        assert "/api/v1/apps/resources" in cfg["resource_api_url"]
+        assert "/v1/apps/resources" in cfg["resource_api_url"]
+
+        rejected = client.put(
+            "/v1/apps/platform-config",
+            json={"platform_url": "http://10.0.0.8:8090/"},
+        )
+        assert rejected.status_code == 422
 
         updated = client.put(
             "/v1/apps/platform-config",
-            json={"platform_url": "http://10.0.0.8:8090/"},
+            json={"platform_url": "https://platform.example/"},
         ).json()
         assert updated["ok"] is True
-        assert updated["platform_url"] == "http://10.0.0.8:8090"
-        assert updated["dockerfile_template_api_url"] == "http://10.0.0.8:8090/api/v1/apps/dockerfile-templates"
+        assert updated["platform_url"] == "https://platform.example"
+        assert updated["dockerfile_template_api_url"] == "https://platform.example/integration/v1/apps/dockerfile-templates"
 
         mock_logs = httpx.Response(
             200,
@@ -230,13 +255,18 @@ def test_app_versions_and_rollback_replace_local_skill(tmp_path, monkeypatch):
                     "health": {"path": "/healthz"},
                     "apis": [{"id": "list_orders", "method": "GET", "path": "/api/orders", "effect": "read"}],
                     "pages": [{"path": "/orders", "purpose": "Orders v1"}],
-                    "verification": {"cases": [{"operation": "list_orders"}]},
+                    "verification": {"cases": [{"operation": "list_orders", "json_contains": {"ok": True}}]},
                 }
             ),
         )
     skill_zip_v1 = skill_buf.getvalue()
 
-    with TestClient(create_app(manager)) as client:
+    app = create_app(manager)
+    app.state.enterprise = SimpleNamespace(
+        platform_base="https://platform.example",
+        context=SimpleNamespace(access_token="fixture-token", access_expired=lambda: False),
+    )
+    with TestClient(app) as client:
         mock_versions = httpx.Response(
             200,
             json={
@@ -255,25 +285,37 @@ def test_app_versions_and_rollback_replace_local_skill(tmp_path, monkeypatch):
         assert len(ver_res.json()["versions"]) == 2
 
         # Rollback from v2 -> v1
+        from coworker.app_delivery_skill.scripts import delivery
         mock_rb_post = httpx.Response(
             200,
             json={
                 "ok": True,
                 "slug": "demo-app",
+                "current_version": 1,
                 "active_version": 1,
                 "restore_mode": "image_switch",
+                "version": {
+                    "version": 1,
+                    "app_url": "http://demo-app.apps.local",
+                    "skill_zip_sha256": delivery.sha(skill_zip_v1),
+                },
                 "app": {"slug": "demo-app", "app_url": "http://demo-app.apps.local", "current_version": 1},
             },
         )
         mock_get_responses = [
             httpx.Response(200, content=skill_zip_v1, headers={"content-type": "application/zip"}),
+            httpx.Response(200, json={"slug": "demo-app", "status": "running", "current_version": 1, "app_url": "http://demo-app.apps.local"}),
         ]
         with (
             patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_rb_post)),
             patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=mock_get_responses)),
             patch(
                 "coworker.server.app_delivery_routes.delivery.execute",
-                return_value=(200, "application/json", '{"ok":true}'),
+                side_effect=lambda contract, op, *_a, **_kw: (
+                    200,
+                    "application/json",
+                    b'{"service":"demo-app"}' if op == "health" else b'{"ok":true}',
+                ),
             ),
         ):
             rb_res = client.post(

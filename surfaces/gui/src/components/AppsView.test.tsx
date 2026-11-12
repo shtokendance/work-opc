@@ -92,6 +92,19 @@ describe("AppsView Component", () => {
     await waitFor(() => expect(updateDeployedAppConfig).toHaveBeenCalledWith("expense-app", expect.objectContaining({ app_config: [expect.objectContaining({ value: "OPC_FIXTURE_MANUAL", value_source: "manual", resource_id: undefined })] })));
     alert.mockRestore();
   });
+  it("shows shared applications without offering management actions", async () => {
+    const original = await listDeployedApps();
+    vi.mocked(listDeployedApps).mockResolvedValueOnce({
+      apps: original.apps.map(app => ({ ...app, can_manage: false })),
+    });
+    render(<AppsView />);
+    expect(await screen.findByText("共享应用")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "http://expense-app.apps.opc.intra" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "升级新版本" })).toBeNull();
+    fireEvent.click(screen.getByText("报销审批系统"));
+    expect(screen.queryByText("环境变量配置")).toBeNull();
+  });
+
   it("accepts a native-selected folder as the source without requiring a ZIP", async () => {
     vi.mocked(transformApp).mockResolvedValueOnce({ ok: true, job_id: "folder-job" });
     render(<AppsView />);

@@ -76,13 +76,11 @@ def _resolve_contract_auth_credential(contract, auth, credential_env=None):
         return ""
     if profile.get("token_env"):
         return environment.get(profile["token_env"], "")
-    for k in ("auth_token", "token", "api_key", "cookie", "default_credential"):
-        val = str(profile.get(k) or "").strip()
-        if val:
-            return val
+    if any(profile.get(key) for key in ("password", "admin_password", "auth_token", "token", "api_key", "cookie", "default_credential")):
+        raise ValueError("embedded credentials are unsupported; connect application credentials")
     login_url = str(profile.get("login_url") or "").strip()
-    username = str(profile.get("admin_username") or profile.get("username") or "").strip()
-    password = str(profile.get("admin_password") or profile.get("password") or "").strip()
+    username = ""
+    password = ""
     if profile.get("username_env"):
         username = environment.get(profile["username_env"], "")
     if profile.get("password_env"):
