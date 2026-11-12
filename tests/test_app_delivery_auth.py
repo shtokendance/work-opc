@@ -100,3 +100,91 @@ def test_sqlite_root_does_not_cover_application_code(tmp_path):
     (tmp_path / 'business.sqlite').write_bytes(b'fixture')
     (tmp_path / 'main.py').write_text('print("business")')
     assert not any(m['container_path'] == '/app' for m in inspect_local_file_storage(tmp_path)['storage_mounts'])
+
+
+def test_pick_best_default_credentials(tmp_path):
+    from coworker.app_delivery_migration import inspect_credentials_in_source, pick_best_default_credentials
+    doc = tmp_path / 'docs'
+    doc.mkdir()
+    (doc / 'api.md').write_text('管理员账号：admin，默认密码：ChangeMe123!')
+    info = inspect_credentials_in_source(tmp_path)
+    best = pick_best_default_credentials(info, tmp_path)
+    assert best.get('username') == 'admin'
+    assert best.get('password') == 'ChangeMe123!'
+    assert 'api.md' in best.get('source', '')
+
+
+def test_verification_credentials_fallback_to_defaults():
+    from coworker.server.app_delivery_routes import verification_credentials
+    contract = {
+        'apis': [{'id': 'test', 'path': '/test', 'auth': {'type': 'header', 'header': 'Cookie', 'env': 'OPC_SESSION_TOKEN'}}],
+        'auth_profiles': {
+            'admin': {
+                'username_env': 'OPC_ADMIN_USERNAME',
+                'password_env': 'OPC_ADMIN_PASSWORD',
+                'token_env': 'OPC_SESSION_TOKEN',
+                'default_username': 'admin',
+                'default_password': 'ChangeMe123!',
+            }
+        },
+        'configs': [
+            {'key': 'OPC_ADMIN_USERNAME', 'default': 'admin'},
+            {'key': 'OPC_ADMIN_PASSWORD', 'default': 'ChangeMe123!', 'secret': True},
+        ]
+    }
+    creds = verification_credentials(contract, [{'key': 'OPC_ADMIN_PASSWORD', 'value': ''}], None)
+    assert creds['OPC_ADMIN_USERNAME'] == 'admin'
+    assert creds['OPC_ADMIN_PASSWORD'] == 'ChangeMe123!'
+
+
+def test_auto_login_without_env_vars_using_contract_defaults():
+    seen = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            seen.append(body)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Set-Cookie', 'sid=auto-cookie; Path=/')
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        def do_GET(self):
+            valid = self.headers.get('Cookie') == 'sid=auto-cookie'
+            self.send_response(200 if valid else 401)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.end_headers()
+            self.wfile.write(b'{"authenticated":true}')
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        from coworker.app_delivery_skill.scripts import delivery
+        contract = {
+            'base_url': f'http://127.0.0.1:{server.server_port}',
+            'auth_profiles': {
+                'admin': {
+                    'login_url': '/login',
+                    'username_env': 'ADMIN_USER',
+                    'password_env': 'ADMIN_PASS',
+                    'default_username': 'default_admin',
+                    'default_password': 'DefaultPassword99!',
+                }
+            },
+            'apis': [{
+                'id': 'get-data',
+                'path': '/data',
+                'method': 'GET',
+                'effect': 'read',
+                'auth': {'type': 'header', 'header': 'Cookie', 'profile': 'admin'},
+            }]
+        }
+        code, content_type, data = execute(contract, 'get-data', {}, None, credential_env={})
+        assert code == 200
+        assert delivery.json_matches(data, {'authenticated': True})
+        assert seen == [{'username': 'default_admin', 'password': 'DefaultPassword99!'}]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
