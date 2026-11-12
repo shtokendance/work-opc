@@ -268,6 +268,7 @@ export function assertSafeExternalUrl(raw: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.host === "shtokendance.benlai.com" && url.protocol !== "https:") return null;
   const trustedHosts = new Set<string>(["shtokendance.benlai.com"]);
   try {
     const originHost = new URL(getEffectiveWebOrigin()).host;
