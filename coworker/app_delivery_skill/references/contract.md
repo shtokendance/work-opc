@@ -56,7 +56,7 @@ Work 自动技术准备记录 `kind: ai-technical`、`scope: deployment-adaptati
 - pages 每项含 path、purpose、evidence、actions；无页面就填空数组，浏览器操作需要调用方提供浏览器工具。
 - 0.2.0 内置调用器只处理普通 HTTP/JSON 与标量 path/query/header 参数；参数名必须唯一。multipart 上传、二进制下载、流式/WebSocket、同名不同位置的参数及复杂数组参数编码需单独脚本并验证；先报告限制，请用户决定是否扩展，不能默默丢弃 API 或宣称已可调用。
 - verification.cases 是已核实无副作用的业务探针，包含 operation、params、可选 body、预期 status 和 json_contains。测试数据只能来自明确的测试环境，不擅自生成真实业务记录。
-- json_contains 对象按字段递归匹配；数组须长度及顺序相同，元素可递归匹配部分字段。空结果、不同条数或错误类型不能通过。多行顺序不稳定时先用获准条件过滤唯一测试记录，或提供专用验证。
+- json_contains 对象按字段递归匹配；非空期望数组逐项匹配实际数组中的记录，顺序可不同；空期望只匹配空数组。空结果、不同条数或错误类型不能通过。多行顺序不稳定时先用获准条件过滤唯一测试记录，或提供专用验证。
 - verification.browser_cases 是页面操作验证计划，例如 `[{"page":"/orders","steps":["输入查询条件","执行只读搜索"],"expected":"显示符合条件的真实订单"}]`。page 必须在 pages 中；该计划不是执行证据。没有 API 探针时必须填写浏览器计划。
 
 ## 使用
