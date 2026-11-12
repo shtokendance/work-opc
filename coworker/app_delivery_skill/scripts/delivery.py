@@ -22,6 +22,7 @@ import uuid
 import zipfile
 
 from .invoke_api import execute, valid_origin
+from .sqlite_snapshot import is_sqlite, snapshot_database, validate_sidecars, normalize_extracted_databases
 
 VERSION = "0.2.9"
 OWNER = "opc-app-adapter"
@@ -154,20 +155,27 @@ def prepare(args):
         with tempfile.TemporaryDirectory(prefix="opc-adapter-directory-") as temp:
             snapshot = Path(temp) / "source.zip"
             count, total = 0, 0
+            validate_sidecars(archive)
             with zipfile.ZipFile(snapshot, "w", zipfile.ZIP_DEFLATED) as z:
                 for parent, dirs, names in os.walk(archive, followlinks=False):
                     dirs[:] = sorted(d for d in dirs if d not in EXCLUDED)
                     for name in dirs:
                         require(not (Path(parent) / name).is_symlink(), "source directory contains a symlink; inspect it explicitly")
                     for name in sorted(names):
-                        if name in EXCLUDED or any(name.lower().endswith(sfx) for sfx in TRANSIENT_FILE_SUFFIXES):
+                        if name in EXCLUDED or name.endswith(("-wal", "-shm")):
                             continue
                         item = Path(parent) / name
                         require(not item.is_symlink() and item.is_file(), "source contains a symlink or special file")
                         size = item.stat().st_size
                         count, total = count + 1, total + size
                         require(count <= 200000 and size <= 1024 * 1024 * 1024 and total <= 4 * 1024 * 1024 * 1024, "source directory exceeds snapshot limits")
-                        z.write(item, item.relative_to(archive).as_posix())
+                        if is_sqlite(item):
+                            database_snapshot = Path(temp) / "database-snapshot.db"
+                            database_snapshot.unlink(missing_ok=True)
+                            snapshot_database(item, database_snapshot)
+                            z.write(database_snapshot, item.relative_to(archive).as_posix())
+                        else:
+                            z.write(item, item.relative_to(archive).as_posix())
             child = argparse.Namespace(**vars(args))
             child.archive = str(snapshot)
             result = prepare(child)
@@ -194,7 +202,7 @@ def prepare(args):
         source.mkdir()
         try:
             for member in members:
-                if any(p in EXCLUDED for p in PurePosixPath(member.filename).parts) or any(member.filename.lower().endswith(sfx) for sfx in TRANSIENT_FILE_SUFFIXES):
+                if any(p in EXCLUDED for p in PurePosixPath(member.filename).parts):
                     continue
                 target = relative(source, member.filename)
                 if member.is_dir():
@@ -212,6 +220,7 @@ def prepare(args):
                 for child in staging.iterdir():
                     child.rename(source / child.name)
                 staging.rmdir()
+            normalize_extracted_databases(source)
             files, findings = inspect_source(source)
             inventory = {"skill_version": VERSION, "run_id": uuid.uuid4().hex, "slug": args.slug, "base_url": args.url.rstrip("/"), "archive_sha256": sha(archive.read_bytes()), "files": files, "possible_secrets": findings, "analysis_complete": False}
             save(work / "inventory.json", inventory)
@@ -250,9 +259,18 @@ def context_files(work, contract):
     return files
 
 
+def validate_credential_references(contract):
+    profiles = contract.get("auth_profiles", {})
+    require(isinstance(profiles, dict), "credential profiles must be an object")
+    for profile in [contract.get("auth_profile", {})] + list(profiles.values()):
+        require(isinstance(profile, dict), "credential profile must be an object")
+        require(not any(profile.get(key) for key in ("password", "admin_password", "auth_token", "token", "api_key", "cookie", "default_credential", "login_body_template")), "Use runtime credential references, not embedded credentials")
+
+
 def check_work(work):
     inventory = load(work / "inventory.json")
     contract = load(work / "app-contract.json")
+    validate_credential_references(contract)
     review = load(work / "review.json")
     require((work / "analysis.md").is_file(), "analysis.md is required")
     require(review.get("kind") in {"human", "fixture", "ai-technical"} and review.get("source") and review.get("approved_issue_ids"), "record actual approval source and approved issue IDs")
@@ -366,31 +384,7 @@ def runtime_environment(contract, env_file=None):
 
 def render_skill_markdown(contract):
     md = f"---\nname: app-{contract['slug']}\ndescription: {json.dumps(contract['description'], ensure_ascii=False)}\n---\n\n# {contract['name']}\n\n应用 URL：`{contract['base_url']}`。仅在实际部署验证成功后使用。\n\n"
-    auth_profile = contract.get("auth_profile") if isinstance(contract.get("auth_profile"), dict) else {}
-    if auth_profile:
-        admin_user = auth_profile.get("admin_username") or auth_profile.get("username") or ""
-        admin_pass = auth_profile.get("admin_password") or auth_profile.get("password") or ""
-        auth_token = auth_profile.get("auth_token") or auth_profile.get("token") or auth_profile.get("api_key") or ""
-        md += "## 登录与接口授权凭据（已内置）\n\n"
-        md += "调用本应用技能访问页面或调用 API 时，若遇到登录拦截或接口鉴权，请直接使用以下在应用改造阶段提取/解密并验证过的授权信息，无需向用户重复索要账密：\n\n"
-        if admin_user or admin_pass:
-            md += f"- **管理员/登录账号**：`{admin_user}`\n"
-            md += "- 登录凭据由调用器的认证配置读取，不在说明文本中展示。\n"
-        if auth_profile.get("login_url"):
-            md += f"- **登录入口/接口**：`{auth_profile.get('login_method', 'POST')} {auth_profile.get('login_url')}`\n"
-        if auth_token:
-            md += "- 已配置令牌来源，由调用器注入。\n"
-        if auth_profile.get("notes"):
-            md += f"- **授权使用说明**：{auth_profile.get('notes')}\n"
-        md += "- **页面访问指引**：若访问页面需要登录，调用本技能的 AI 请直接使用上述记录的账号密码完成登录，再读取页面数据或执行操作。\n"
-        md += "- **API 调用指引**：`scripts/invoke_api.py` 已自动读取 `references/operations.json` 中的 `auth_profile` 完成令牌注入或自动登录兑换，配置不代表验证通过；以部署后的只读业务验证为准。\n\n"
-    else:
-        md += "先阅读 references/operations.json 的业务、参数、响应和认证约定。页面操作需要调用方具备浏览器工具，不能把页面描述当成已执行结果。\n\n"
-    if contract.get("auth_profiles"):
-        md += "## 自动认证方案\n\n"
-        for profile_id in contract["auth_profiles"]:
-            md += f"- `{profile_id}`：使用配置的登录/凭据来源；可用性以部署验证为准。\n"
-        md += "页面会话需单独验证，API 验证不代表页面验证。\n\n"
+    md += "认证凭据通过受保护的运行时环境引用提供，不写入技能。缺少凭据时先连接应用账号；配置不代表业务验证通过。页面操作需要浏览器验证，不能把描述当作已执行结果。\n\n"
     apis = contract.get("apis", [])
     pages = contract.get("pages", [])
     md += f"## 应用能力概览\n\n- **收录页面/业务视图总数**：{len(pages)} 个\n- **收录 API 接口总数**：{len(apis)} 个\n\n"

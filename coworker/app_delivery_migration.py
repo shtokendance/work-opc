@@ -342,7 +342,9 @@ def inspect_local_file_storage(
     # SQLite may live outside conventional data/ directories. Mount its parent,
     # including WAL/SHM companions, but never cover application code or the root.
     for db_file in sorted(source.rglob("*")):
-        if db_file.is_symlink() or not db_file.is_file() or db_file.suffix.lower() not in {".sqlite", ".sqlite3", ".db"}:
+        if db_file.is_symlink() or not db_file.is_file():
+            continue
+        if db_file.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} and not delivery.is_sqlite(db_file):
             continue
         rel = db_file.relative_to(source)
         if len(rel.parts) < 2 or any(part in delivery.EXCLUDED or part in _EXCLUDED_PERSISTENT_PARENT_DIRS for part in rel.parts[:-1]):
@@ -407,8 +409,9 @@ def inspect_local_sqlite_files(source: Path, sqlite_rel_path: str = "") -> dict:
             candidates.append(p)
     else:
         for p in sorted(source.rglob("*")):
-            if p.is_file() and p.suffix.lower() in {".sqlite", ".sqlite3", ".db"} and p.stat().st_size > 0:
-                candidates.append(p)
+            if p.is_file() and not p.is_symlink() and p.stat().st_size > 0:
+                if p.suffix.lower() in {".sqlite", ".sqlite3", ".db"} or delivery.is_sqlite(p):
+                    candidates.append(p)
 
     databases = []
     for db_file in candidates:
@@ -446,6 +449,10 @@ def inspect_local_sqlite_files(source: Path, sqlite_rel_path: str = "") -> dict:
 def extract_sqlite_tables(sqlite_file: Path, max_rows_per_table: int | None = None) -> list[dict]:
     """Read full schema (columns + types + PKs) and ALL rows from a local SQLite file for server migration."""
     tables = []
+    preexisting_aux = {
+        sfx: Path(f"{sqlite_file}{sfx}").exists()
+        for sfx in ("-shm", "-wal")
+    }
     conn = sqlite3.connect(f"file:{sqlite_file}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -494,8 +501,10 @@ def extract_sqlite_tables(sqlite_file: Path, max_rows_per_table: int | None = No
             })
     finally:
         conn.close()
-        # Clean up any transient shm/wal files created by SQLite during readonly inspection
-        for sfx in ("-shm", "-wal"):
+        # Clean up only transient shm/wal files created during readonly inspection that did not exist beforehand
+        for sfx, existed in preexisting_aux.items():
+            if existed:
+                continue
             aux = Path(f"{sqlite_file}{sfx}")
             if aux.exists():
                 try:

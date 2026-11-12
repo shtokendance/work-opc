@@ -51,7 +51,7 @@ Work 自动技术准备记录 `kind: ai-technical`、`scope: deployment-adaptati
 - secret/required 必须是明确的布尔值，default 是字符串，key 唯一。常见凭据字段（如 API_KEY、PASSWORD、TOKEN、DSN）不能标为非秘密；任何默认值都不能夹带带凭据 URL 或 Password=... 连接串。不要把秘密改个名字或将 secret 改为 false 来绕过。
 - apis/pages 均显式填写数组并完整收录应用内全部后端接口与全部前端页面/业务视图（不得遗漏任何路由或子面板）；至少一个非空。纯页面应用无需伪造 API，但必须提供浏览器验证计划。
 - 每个 API 必须含 purpose、源码 evidence、实际 parameters/request_body/responses、auth、effect。request_body 为 null 或包含 required、description、schema 的对象；完整 schema 与错误说明应保留，工具不声称完整实现 JSON Schema 验证。API 错误可能包含 HTTP 200 下的业务错误码，业务流程必须明确成功判断，不把 HTTP 成功等同业务成功。
-- auth.type 为 none、bearer 或 header；非 none 必须有 env 环境变量名，header 还要提供 header。若第一步提取或解密出应用自身的默认测试/管理员账密或固定令牌，可填入 `contract.auth_profile` 供生成的业务技能免阻调用。
+- auth.type 为 none、bearer 或 header；非 none 必须有 env 环境变量名，header 还要提供 header。只允许运行时凭据环境变量引用；禁止将明文密码或固定令牌放进契约、技能或模型输出。
 - 非只读 effect 必须 confirmation_required:true。不能仅按 HTTP 方法判断，POST 搜索也可以明确标为 read；GET 也可能需要确认。
 - pages 每项含 path、purpose、evidence、actions；无页面就填空数组，浏览器操作需要调用方提供浏览器工具。
 - 0.2.0 内置调用器只处理普通 HTTP/JSON 与标量 path/query/header 参数；参数名必须唯一。multipart 上传、二进制下载、流式/WebSocket、同名不同位置的参数及复杂数组参数编码需单独脚本并验证；先报告限制，请用户决定是否扩展，不能默默丢弃 API 或宣称已可调用。
@@ -72,7 +72,7 @@ python3 scripts/delivery.py smoke /tmp/app-review --image opc-adapter/stock-demo
 
 现版 smoke 仅处理本机 Docker：URL 必须是该容器的 OrbStack 域名，或事先固定的回环端口。它从实际生成的 app.tar 解包构建，而非另做不同权限的构建目录；创建无外网的专用运行网络、只读文件系统和 /tmp 临时盘，验证真实健康身份和业务 JSON。app.tar 与业务技能 ZIP 规范化时间/权限，避免文件时间或 Python 版本使摘要漂移。构建阶段可能下载应用依赖；它不配置 DNS、Nginx、证书、外部数据库或连接生产服务。
 
-当用户选择将本地 SQLite（或本地数据库）迁移到平台提供的默认数据库资源时，**即代表用户已完整确认并授权修改所有涉及数据库连接、驱动依赖（如 `psycopg2-binary`）与 `DATABASE_URL` 环境变量配置的代码**；AI 必须在同一轮调用 `migrate_storage_to_platform` 迁移表结构与存量数据，并通过 `propose_file_change` 完成数据库连接代码的改造（严禁以「尚无 PostgreSQL 连接适配实现」或「数据库切换不能视为已完成」为由写入 `unresolved` 阻塞用户）。当用户选择保留原本地数据库或原依赖时，保持原依赖不变。`--env-file <path>` 只接收 chmod 600 的用户指定文件，语法为 Docker 的 KEY=value，不支持 shell 展开或仅 KEY 的宿主环境继承。非秘密默认值传入容器，env-file 优先；必填值与 PORT 一致性预先检查。API auth.env 可从同一文件用于本次只读探针，不写入持久报告。已有同名容器不会覆盖。`--keep` 留给手测；`delivery.py cleanup <工作目录>` 仅删除本次所有权标记匹配的容器/网络。
+本流程保留原数据库引擎与数据，不自动迁库；SQLite 使用一致性快照并挂载完整数据目录。迁移属于独立授权任务。`--env-file` 仅接收受保护的用户配置，不继承宿主环境秘密。
 
 业务技能使用：
 

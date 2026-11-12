@@ -4532,21 +4532,7 @@ export async function getAppRuntimeLogs(slug: string, tail = 200): Promise<{
   runtime_logs: string;
   build_log?: string;
 }> {
-  try {
-    const q = new URLSearchParams({ tail: String(tail), platform_url: platformBase() }).toString();
-    const res = await fetch(`${httpBase()}/v1/apps/runtime-logs/${encodeURIComponent(slug)}?${q}`);
-    if (res.ok) return await res.json();
-  } catch {}
-  const fallback = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/logs?tail=${tail}`);
-  const data = await fallback.json().catch(() => ({}));
-  return {
-    ok: fallback.ok,
-    slug,
-    container_name: data.container_name,
-    status: data.status,
-    runtime_logs: data.runtime_logs || data.error || "",
-    build_log: data.build_log || "",
-  };
+  return appGatewayJson(`runtime-logs/${encodeURIComponent(slug)}?tail=${tail}`);
 }
 
 export interface AppConfigItem {
@@ -4572,6 +4558,7 @@ export interface ResourceSummary {
 }
 
 export interface DeployedApp {
+  can_manage?: boolean;
   id: string;
   name: string;
   slug: string;
@@ -4632,16 +4619,11 @@ export async function listAppVersions(slug: string): Promise<{
   current_version: number;
   versions: AppVersionItem[];
 }> {
-  const q = new URLSearchParams({ platform_url: platformBase() }).toString();
-  const res = await fetch(`${httpBase()}/v1/apps/versions/${encodeURIComponent(slug)}?${q}`);
-  if (res.ok) return res.json();
-  const fallback = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/versions`);
-  return fallback.json();
+  return appGatewayJson(`versions/${encodeURIComponent(slug)}`);
 }
 
 export function getAppVersionArtifactUrl(slug: string, version: number, filename: string): string {
-  const q = new URLSearchParams({ platform_url: platformBase() }).toString();
-  return `${httpBase()}/v1/apps/versions/${encodeURIComponent(slug)}/${version}/artifacts/${encodeURIComponent(filename)}?${q}`;
+  return `${httpBase()}/v1/apps/versions/${encodeURIComponent(slug)}/${version}/artifacts/${encodeURIComponent(filename)}`;
 }
 
 export async function rollbackAppVersion(
@@ -4656,6 +4638,8 @@ export async function rollbackAppVersion(
   message?: string;
   local_skill_replaced?: boolean;
   local_skill_verified?: boolean;
+  verification?: { status?: string; detail?: string };
+  rollback_notice?: string;
   error?: string;
 }> {
   const res = await fetch(`${httpBase()}/v1/apps/rollback/${encodeURIComponent(slug)}`, {
@@ -4674,84 +4658,24 @@ export async function rollbackAppVersion(
   return data;
 }
 
+async function appGatewayJson<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const res = await fetch(`${httpBase()}/v1/apps/${path}`, {
+    method,
+    ...(body === undefined ? {} : {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.error?.message || data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 export async function recheckAppHealth(
   slug: string,
-  appUrl?: string
+  _appUrl?: string,
 ): Promise<{ ok: boolean; status: string; message?: string; error?: string }> {
-  // 1. 优先尝试本地 Coworker sidecar 接口探测与更新（无跨域限制）
-  try {
-    const res = await fetch(`${httpBase()}/v1/apps/recheck/${encodeURIComponent(slug)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app_url: appUrl,
-        platform_url: platformBase(),
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return { ok: true, status: data.status || "running", message: data.message };
-    }
-    // 若 sidecar 探测未通过，记录错误并继续回退到前端直接向应用探活
-    const errData = await res.json().catch(() => ({}));
-    if (errData?.detail || errData?.error) {
-      console.warn("Sidecar health probe failed, falling back to client probe:", errData);
-    }
-  } catch {
-    // sidecar 离线或网络异常回退
-  }
-
-  // 2. 回退机制：前端直接向应用健康检查与平台更新
-  const targetAppUrl = (appUrl || "").trim().replace(/\/+$/, "");
-  if (targetAppUrl) {
-    try {
-      // 2.1 优先探测 /healthz
-      let probeRes = await globalThis.fetch(`${targetAppUrl}/healthz`, {
-        signal: AbortSignal.timeout(6000),
-      }).catch(() => null);
-
-      let passed = false;
-      if (probeRes && probeRes.ok) {
-        const text = await probeRes.text();
-        const lower = text.toLowerCase().trim();
-        if (!lower.includes("powered by caprover") && !lower.startsWith("<!doctype") && !lower.startsWith("<html")) {
-          passed = true;
-        }
-      }
-
-      // 2.2 若 /healthz 不存在，回退探测根路径 (/) 业务入口
-      if (!passed) {
-        const rootRes = await globalThis.fetch(`${targetAppUrl}/`, {
-          signal: AbortSignal.timeout(6000),
-        }).catch(() => null);
-        if (rootRes && rootRes.ok) {
-          const rootText = await rootRes.text();
-          const rLower = rootText.toLowerCase().trim();
-          if (!rLower.includes("powered by caprover") && !rLower.includes("captain-root-domain") && rLower.length > 0) {
-            passed = true;
-            probeRes = rootRes;
-          }
-        }
-      }
-
-      if (passed) {
-        // 向平台同步更新状态为 running
-        await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "running" }),
-        }).catch(() => {});
-        return { ok: true, status: "running", message: "应用健康检查通过，状态已恢复正常运行" };
-      }
-
-      const statusText = probeRes ? `HTTP ${probeRes.status}` : "服务未就绪";
-      return { ok: false, status: "failed", error: `健康检查未通过 (${statusText})` };
-    } catch (e: any) {
-      return { ok: false, status: "failed", error: `健康检查请求失败: ${e.message || String(e)}` };
-    }
-  }
-
-  return { ok: false, status: "failed", error: "无法探测应用健康状态" };
+  return appGatewayJson(`recheck/${encodeURIComponent(slug)}`, "POST");
 }
 
 export async function checkAppSlug(slug: string): Promise<{
@@ -4761,43 +4685,26 @@ export async function checkAppSlug(slug: string): Promise<{
   skill_name: string;
   message?: string;
 }> {
-  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/check-slug`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ slug }),
-  });
-  return res.json();
+  return appGatewayJson("catalog/check-slug", "POST", { slug });
 }
 
 export async function listOnlineResources(): Promise<{ resources: ResourceSummary[] }> {
-  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/resources`);
-  return res.json();
+  return appGatewayJson("catalog/resources");
 }
 
 export async function listDeployedApps(): Promise<{ apps: DeployedApp[] }> {
-  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps`);
-  return res.json();
+  return appGatewayJson("catalog");
 }
 
 export async function getDeployedApp(slug: string): Promise<DeployedApp> {
-  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}`);
-  return res.json();
+  return appGatewayJson(`catalog/${encodeURIComponent(slug)}`);
 }
 
 export async function updateDeployedAppConfig(
   slug: string,
   body: { container_port?: number; app_config: AppConfigItem[]; resource_ids: string[] }
 ): Promise<{ message: string; slug: string }> {
-  const res = await globalThis.fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/config`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
-  }
-  return data;
+  return appGatewayJson(`catalog/${encodeURIComponent(slug)}/config`, "PUT", body);
 }
 
 export async function transformApp(params: {
@@ -4817,7 +4724,7 @@ export async function transformApp(params: {
   const res = await fetch(`${httpBase()}/v1/apps/transform`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...params, platform_url: platformBase() }),
+    body: JSON.stringify(params),
   });
   const result = await res.json();
   if (!res.ok) throw new Error(result.detail || result.error || `HTTP ${res.status}`);
@@ -4836,12 +4743,11 @@ export async function publishAppToPlatform(params: {
   const res = await fetch(`${httpBase()}/v1/apps/publish-to-platform`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      platform_url: platformBase(),
-      ...params,
-    }),
+    body: JSON.stringify(params),
   });
-  return res.json();
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.detail || result.error || `HTTP ${res.status}`);
+  return result;
 }
 
 export async function enableLocalSkill(slug: string, job_id: string): Promise<{ ok: boolean; error?: string }> {
@@ -5085,31 +4991,26 @@ export interface GlobalStorageSummary {
   apps_storage: AppStorageOverview[];
 }
 
-export async function getGlobalStorageSummary(): Promise<GlobalStorageSummary> {
-  const res = await fetch(`${httpBase()}/v1/apps/storage/summary?platform_url=${encodeURIComponent(platformBase())}`).catch(() => null);
-  if (res && res.ok) {
-    return await res.json();
-  }
-  const direct = await fetch(`${platformBase()}/api/v1/apps/admin/storage`);
-  if (!direct.ok) {
-    throw new Error(`获取存储总览失败 (HTTP ${direct.status})`);
-  }
-  return await direct.json();
-}
-
 export async function getAppStorageDetails(slug: string): Promise<AppStorageOverview> {
-  const res = await fetch(`${httpBase()}/v1/apps/storage/${encodeURIComponent(slug)}?platform_url=${encodeURIComponent(platformBase())}`).catch(() => null);
-  if (res && res.ok) {
-    return await res.json();
-  }
-  const direct = await fetch(`${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/storage`);
-  if (!direct.ok) {
-    throw new Error(`获取应用存储详情失败 (HTTP ${direct.status})`);
-  }
-  return await direct.json();
+  return appGatewayJson(`storage/${encodeURIComponent(slug)}`);
 }
 
 export function getAppStorageBackupUrl(slug: string, path?: string): string {
-  const p = path ? `?path=${encodeURIComponent(path)}` : "";
-  return `${platformBase()}/api/v1/apps/${encodeURIComponent(slug)}/storage/backup${p}`;
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return `${httpBase()}/v1/apps/storage/${encodeURIComponent(slug)}/backup${query}`;
+}
+
+export async function downloadAppFile(url: string, filename: string): Promise<void> {
+  if (!url.startsWith(`${httpBase()}/v1/apps/`)) throw new Error("无效的应用下载地址");
+  const response = await fetch(url);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `下载失败 (HTTP ${response.status})`);
+  }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = filename;
+  link.click();
+  const objectUrl = link.href;
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }

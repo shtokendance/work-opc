@@ -431,16 +431,13 @@ def test_step3_auth_profile_embedded_in_skill_and_auto_resolved_by_invoker():
         "pages": [{"path": "/dashboard", "purpose": "Admin order dashboard"}],
     }
     skill_md = delivery.render_skill_markdown(contract)
-    assert "admin" in skill_md
+    assert "secret-password-888" not in skill_md
     assert "secret-password-888" not in skill_md
     assert "pre-issued-admin-token-xyz" not in skill_md
-    assert "登录与接口授权凭据（已内置）" in skill_md
+    assert "登录与接口授权凭据（已内置）" not in skill_md
 
-    # Verify invoke_api automatically uses contract.auth_profile when env is not explicitly passed
-    req = invoke_api.build_request(
-        contract, "list-orders", {}, None, "http://auth-demo.apps.localhost", credential_env=None
-    )
-    assert req.get_header("Authorization") == "Bearer pre-issued-admin-token-xyz"
+    with pytest.raises(ValueError):
+        invoke_api.build_request(contract, "list-orders", {}, None, credential_env={})
 
 
 @pytest.mark.asyncio

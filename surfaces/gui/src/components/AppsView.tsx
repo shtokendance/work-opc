@@ -18,18 +18,15 @@ import {
   rollbackAppVersion,
   transformApp,
   updateDeployedAppConfig,
-  updatePlatformConfig,
   getAppStorageDetails,
-  getGlobalStorageSummary,
+  downloadAppFile,
   getAppStorageBackupUrl,
   type AppConfigItem,
   type AppVersionItem,
   type DeployedApp,
   type ModelControls,
-  type PlatformResourceApiConfig,
   type ResourceSummary,
   type AppStorageOverview,
-  type GlobalStorageSummary,
 } from "../api";
 import { Icon } from "./Icon";
 import { AppDeliveryConfig, configName, needsConnectionDecision } from "./AppDeliveryConfig";
@@ -38,6 +35,7 @@ import { AppSkillPreview } from "./AppSkillPreview";
 import { AppDeliveryArtifacts } from "./AppDeliveryArtifacts";
 import { chooseFolder } from "../tauri";
 import { toAppSlug } from "../appSlug";
+import { ENTERPRISE_STATE_CHANGED } from "../useEnterpriseState";
 
 function formatLogOutput(raw?: string, limitLines?: number): string {
   if (!raw) return "";
@@ -126,9 +124,6 @@ export function AppsView({ onBack }: Props) {
   const [loadingVersions, setLoadingVersions] = useState<boolean>(false);
   const [rollingBackVersion, setRollingBackVersion] = useState<number | null>(null);
   const [recheckingSlug, setRecheckingSlug] = useState<string | null>(null);
-  const [isGlobalStorageOpen, setIsGlobalStorageOpen] = useState(false);
-  const [loadingGlobalStorage, setLoadingGlobalStorage] = useState(false);
-  const [globalStorageSummary, setGlobalStorageSummary] = useState<GlobalStorageSummary | null>(null);
   const [appStorageOverview, setAppStorageOverview] = useState<AppStorageOverview | null>(null);
   const [loadingAppStorage, setLoadingAppStorage] = useState(false);
   const [step2CanContinue, setStep2CanContinue] = useState(false);
@@ -137,9 +132,7 @@ export function AppsView({ onBack }: Props) {
 
   // Platform Resource API Configuration state
   const [showPlatformConfigModal, setShowPlatformConfigModal] = useState(false);
-  const [, setPlatformConfig] = useState<PlatformResourceApiConfig | null>(null);
   const [platformUrlInput, setPlatformUrlInput] = useState(platformBase());
-  const [savingPlatformConfig, setSavingPlatformConfig] = useState(false);
 
   const loadAppVersions = async (appSlug: string) => {
     if (!appSlug) return;
@@ -167,18 +160,6 @@ export function AppsView({ onBack }: Props) {
     }
   };
 
-  const openGlobalStorage = async () => {
-    setIsGlobalStorageOpen(true);
-    setLoadingGlobalStorage(true);
-    try {
-      const data = await getGlobalStorageSummary();
-      setGlobalStorageSummary(data);
-    } catch (err: any) {
-      alert(`加载全局存储大盘失败: ${err?.message || String(err)}`);
-    } finally {
-      setLoadingGlobalStorage(false);
-    }
-  };
 
   const handleUpgradeApp = async (app: DeployedApp) => {
     await closeWizard();
@@ -195,9 +176,10 @@ export function AppsView({ onBack }: Props) {
   };
 
   const handleRollbackVersion = async (appSlug: string, targetVersion: number) => {
+    const rollbackNotice = "回滚恢复代码与运行配置，不自动回退数据库/卷中的业务数据；旧代码和新数据兼容性仍需验证。";
     if (
       !window.confirm(
-        `确认将应用 ${appSlug} 回退到历史版本 v${targetVersion} 吗？\n\n回退将同步还原：\n1. 容器镜像与环境变量配置\n2. 远端技能中心技能包\n3. 本地 ~/.openworker/skills/app-${appSlug} 技能文件`
+        `确认将应用 ${appSlug} 回退到历史版本 v${targetVersion} 吗？\n\n回退将同步还原：\n1. 容器镜像与环境变量配置\n2. 远端技能中心技能包\n3. 本地 ~/.openworker/skills/app-${appSlug} 技能文件\n\n注意：${rollbackNotice}`
       )
     ) {
       return;
@@ -205,8 +187,14 @@ export function AppsView({ onBack }: Props) {
     setRollingBackVersion(targetVersion);
     try {
       const res = await rollbackAppVersion(appSlug, targetVersion, `回退到 v${targetVersion}`);
+      const verifMsg =
+        res.verification?.status === "awaiting_page_verification"
+          ? "容器已就绪，待页面验收。"
+          : res.local_skill_verified
+            ? "业务验证通过，技能已启用。"
+            : "技能尚未通过业务验证，请检查后再启用。";
       alert(
-        `已成功将 ${appSlug} 回退到 v${res.active_version || targetVersion}！\n本地技能包已同步还原为 v${targetVersion}。`
+        `已成功将 ${appSlug} 回退到 v${res.active_version || targetVersion}！\n${verifMsg}\n\n${res.rollback_notice || rollbackNotice}`
       );
       await refreshApps();
       await loadAppVersions(appSlug);
@@ -235,24 +223,6 @@ export function AppsView({ onBack }: Props) {
     }
   };
 
-  const handleSavePlatformConfig = async () => {
-    if (!platformUrlInput.trim()) return;
-    setSavingPlatformConfig(true);
-    try {
-      const cfg = await updatePlatformConfig(platformUrlInput.trim());
-      setPlatformConfig(cfg);
-      setPlatformUrlInput(cfg.platform_url);
-      const res = await listOnlineResources().catch(() => ({ resources: [] }));
-      setOnlineResources(res.resources || []);
-      await refreshApps();
-      setShowPlatformConfigModal(false);
-    } catch (e: any) {
-      alert(`保存平台资源配置失败: ${e?.message || String(e)}`);
-    } finally {
-      setSavingPlatformConfig(false);
-    }
-  };
-
   const toggleShowSecret = (key: string) => {
     setShowSecrets((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
   };
@@ -264,13 +234,17 @@ export function AppsView({ onBack }: Props) {
     setTimeout(() => setCopyFeedback(null), 2000);
   };
 
+  const catalogRequestVersion = useRef(0);
   const refreshApps = async () => {
+    const version = ++catalogRequestVersion.current;
     setLoading(true);
     setError(null);
     try {
       const data = await listDeployedApps();
+      if (version !== catalogRequestVersion.current) return;
       setApps(data.apps || []);
       const drafts = await appDeliveryRequest<{ jobs?: AppDeliveryJob[] }>("jobs").catch(() => ({ jobs: [] }));
+      if (version !== catalogRequestVersion.current) return;
       const seen = new Set<string>();
       const latest = drafts.jobs?.filter(job => {
         if (seen.has(job.slug)) return false;
@@ -279,16 +253,33 @@ export function AppsView({ onBack }: Props) {
       });
       setLastDraft(latest?.find(job => ["review", "failed", "analyzing", "ready"].includes(job.status) && !job.published) || null);
     } catch (err: any) {
-      setError(err?.message || "Failed to load deployed apps");
+      if (version !== catalogRequestVersion.current) return;
+      setApps([]);
+      setLastDraft(null);
+      setError(err?.message || "无法加载应用列表");
     } finally {
-      setLoading(false);
+      if (version === catalogRequestVersion.current) setLoading(false);
     }
   };
 
   useEffect(() => {
+    const onEnterpriseChanged = () => {
+      setSelectedApp(null);
+      setApps([]);
+      setOnlineResources([]);
+      void refreshApps();
+      void listOnlineResources().then(result => setOnlineResources(result.resources ?? [])).catch(() => {});
+    };
+    window.addEventListener(ENTERPRISE_STATE_CHANGED, onEnterpriseChanged);
+    return () => {
+      catalogRequestVersion.current++;
+      window.removeEventListener(ENTERPRISE_STATE_CHANGED, onEnterpriseChanged);
+    };
+  }, []);
+
+  useEffect(() => {
     getPlatformConfig().then((cfg) => {
       if (cfg?.platform_url) {
-        setPlatformConfig(cfg);
         setPlatformUrlInput(cfg.platform_url);
       }
     }).catch(() => {}).finally(() => {
@@ -411,10 +402,14 @@ export function AppsView({ onBack }: Props) {
     setDeploying(true);
     setDeployStatus("verifying");
     try {
-      await appDeliveryRequest("enable-skill", { slug: slug.trim(), job_id: jobId, verification_credentials: probeCredentials });
+      const res = await appDeliveryRequest<{ ok: boolean; verification?: { status?: string; detail?: string } }>("enable-skill", { slug: slug.trim(), job_id: jobId, verification_credentials: probeCredentials });
       setProbeCredentials({});
       setDeployStatus("running");
-      setBuildLogs(logs + "\n业务验证通过，应用技能已启用。");
+      if (res?.verification?.status === "awaiting_page_verification") {
+        setBuildLogs(logs + "\n" + (res.verification.detail || "容器与健康身份已就绪，待页面验收后启用技能。"));
+      } else {
+        setBuildLogs(logs + "\n业务验证通过，应用技能已启用。");
+      }
     } catch (e) {
       setDeployStatus("verification_failed");
       setBuildLogs(logs + "\n应用已启动，但业务验证或技能启用失败：" + String(e));
@@ -565,6 +560,7 @@ export function AppsView({ onBack }: Props) {
 
   // Drawer handlers
   const openDrawer = (app: DeployedApp, initialTab: "configs" | "artifacts" | "storage" | "logs" | "versions" = "configs") => {
+    if (app.can_manage === false) return;
     setSelectedApp(app);
     setDrawerConfigs((app.app_config || []).map(c => ({ ...c })));
     setDrawerResourceIds(app.resource_ids || []);
@@ -683,30 +679,32 @@ export function AppsView({ onBack }: Props) {
           <div>
             <h1 className="text-lg font-semibold text-ink">应用中心</h1>
             <p className="text-xs text-muted">
-              分析源码、确认改造与配置，部署到内网并生成可调用的应用技能
+              企微登录即可部署。应用列表对所有已登录用户开放。
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => void openGlobalStorage()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors cursor-pointer"
-            title="查看宿主机磁盘空间水位与所有应用的持久化卷"
+          <a
+            href={`${platformBase()}/admin/deploy`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink"
+            title="在 Platform 管理后台查看全局存储"
           >
             <Icon name="folder" size={13} />
             存储管理中心
-          </button>
+          </a>
           <button
             onClick={() => {
               setPlatformUrlInput(platformBase());
               setShowPlatformConfigModal(true);
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors"
-            title="配置 Platform-OPC 资源获取接口与管理后台"
+            title="查看当前企微登录的 Platform 和资源"
           >
             <Icon name="sliders" size={13} />
-            平台资源配置
+            平台资源
           </button>
           <button
             onClick={refreshApps}
@@ -762,8 +760,8 @@ export function AppsView({ onBack }: Props) {
             {apps.map((app) => (
               <div
                 key={app.id}
-                onClick={() => openDrawer(app)}
-                className="group rounded-xl2 border border-line bg-panel p-5 hover:border-accent/40 hover:shadow-md transition-all duration-200 cursor-pointer flex flex-col justify-between relative overflow-hidden"
+                onClick={app.can_manage === false ? undefined : () => openDrawer(app)}
+                className={`group rounded-xl2 border border-line bg-panel p-5 flex flex-col justify-between relative overflow-hidden ${app.can_manage === false ? "" : "hover:border-accent/40 hover:shadow-md transition-all duration-200 cursor-pointer"}`}
               >
                 <div>
                   {/* Header: Icon + Title/Slug + Status Tag */}
@@ -837,7 +835,8 @@ export function AppsView({ onBack }: Props) {
                       </a>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-paper border border-line text-meta">
+                    {app.can_manage !== false && (
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-paper border border-line text-meta">
                       <span className="text-muted flex items-center gap-1.5 shrink-0">
                         <Icon name="sparkle" size={13} className="text-accent" />
                         本地技能
@@ -846,11 +845,14 @@ export function AppsView({ onBack }: Props) {
                         {app.skill_name || `app-${app.slug}`}
                       </span>
                     </div>
+                    )}
                   </div>
 
                   {/* Card Footer: hover cue & actions */}
                   <div className="mt-3.5 pt-2.5 border-t border-line/40 flex items-center justify-between text-label text-muted">
-                    {app.status === "failed" ? (
+                    {app.can_manage === false ? (
+                      <span>共享应用</span>
+                    ) : app.status === "failed" ? (
                       <div className="flex items-center gap-2 w-full justify-between" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => openDrawer(app, "logs")}
@@ -2102,34 +2104,31 @@ export function AppsView({ onBack }: Props) {
                               </span>
                               <div className="flex items-center gap-2">
                                 {ver.app_tar_key && (
-                                  <a
-                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "app.tar")}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                  <button
+                                    type="button"
+                                    onClick={() => void downloadAppFile(getAppVersionArtifactUrl(selectedApp.slug, ver.version, "app.tar"), `${selectedApp.slug}-v${ver.version}-app.tar`).catch(e => alert(e.message))}
                                     className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-ink font-mono text-[11px]"
                                   >
                                     📦 下载 app.tar
-                                  </a>
+                                  </button>
                                 )}
                                 {ver.skill_zip_key && (
-                                  <a
-                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "skill.zip")}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                  <button
+                                    type="button"
+                                    onClick={() => void downloadAppFile(getAppVersionArtifactUrl(selectedApp.slug, ver.version, "skill.zip"), `${selectedApp.slug}-v${ver.version}-skill.zip`).catch(e => alert(e.message))}
                                     className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-accent font-mono text-[11px]"
                                   >
                                     ⚡ 下载 skill.zip
-                                  </a>
+                                  </button>
                                 )}
                                 {ver.dockerfile_key && (
-                                  <a
-                                    href={getAppVersionArtifactUrl(selectedApp.slug, ver.version, "Dockerfile")}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                  <button
+                                    type="button"
+                                    onClick={() => void downloadAppFile(getAppVersionArtifactUrl(selectedApp.slug, ver.version, "Dockerfile"), `${selectedApp.slug}-v${ver.version}-Dockerfile`).catch(e => alert(e.message))}
                                     className="px-2 py-0.5 rounded border border-line bg-panel hover:bg-paper text-muted font-mono text-[11px]"
                                   >
                                     🐳 Dockerfile
-                                  </a>
+                                  </button>
                                 )}
                               </div>
                             </div>
@@ -2265,15 +2264,14 @@ export function AppsView({ onBack }: Props) {
                       >
                         {loadingAppStorage ? "正在刷新..." : "刷新卷容量"}
                       </button>
-                      <a
-                        href={getAppStorageBackupUrl(selectedApp.slug)}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                                    type="button"
+                                    onClick={() => void downloadAppFile(getAppStorageBackupUrl(selectedApp.slug), `${selectedApp.slug}-storage-backup.tar`).catch(e => alert(e.message))}
                         className="px-3 py-1.5 rounded-lg bg-accent hover:opacity-90 text-white text-label font-medium transition-opacity flex items-center gap-1.5 cursor-pointer"
                       >
                         <Icon name="archive" size={13} />
                         一键下载备份 (.tar)
-                      </a>
+                      </button>
                     </div>
                   </div>
 
@@ -2321,15 +2319,14 @@ export function AppsView({ onBack }: Props) {
                             <div className="flex items-center gap-2">
                               <span className="text-ui font-mono font-bold text-ink">{m.size_human}</span>
                               <span className="text-label text-muted">({m.file_count} 文件)</span>
-                              <a
-                                href={getAppStorageBackupUrl(selectedApp.slug, m.container_path)}
-                                target="_blank"
-                                rel="noreferrer"
+                              <button
+                                    type="button"
+                                    onClick={() => void downloadAppFile(getAppStorageBackupUrl(selectedApp.slug, m.container_path), `${selectedApp.slug}-storage-backup.tar`).catch(e => alert(e.message))}
                                 className="px-2.5 py-1 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors flex items-center gap-1 cursor-pointer"
                               >
                                 <Icon name="archive" size={11} />
                                 备份
-                              </a>
+                              </button>
                             </div>
                           </div>
                           <div className="text-label text-muted">{m.purpose || "应用持久化存储目录"}</div>
@@ -2561,8 +2558,8 @@ export function AppsView({ onBack }: Props) {
                   <Icon name="sliders" size={16} />
                 </div>
                 <div>
-                  <h2 className="text-ui font-semibold text-ink">Platform-OPC 资源获取 API 配置</h2>
-                  <p className="text-xs text-muted">统一网关服务地址、基础服务资源与 Dockerfile 模板库连接配置</p>
+                  <h2 className="text-ui font-semibold text-ink">Platform-OPC 资源</h2>
+                  <p className="text-xs text-muted">应用中心使用当前企微登录的平台。可在 OPC 设置中更改。</p>
                 </div>
               </div>
               <button
@@ -2582,7 +2579,7 @@ export function AppsView({ onBack }: Props) {
                   id="platform-opc-url-input"
                   type="text"
                   value={platformUrlInput}
-                  onChange={(e) => setPlatformUrlInput(e.target.value)}
+                  readOnly
                   placeholder="https://shtokendance.benlai.com"
                   className="w-full rounded-xl border border-line bg-paper px-3.5 py-2 font-mono text-xs text-ink focus:outline-accent"
                 />
@@ -2592,13 +2589,13 @@ export function AppsView({ onBack }: Props) {
                 <div>
                   <span className="text-muted block">基础服务资源获取 API (MySQL / PG / Redis / MQ)</span>
                   <code className="font-mono text-accent break-all">
-                    {platformUrlInput.replace(/\/+$/, "")}/api/v1/apps/resources
+                    {platformUrlInput.replace(/\/+$/, "")}/integration/v1/apps/resources
                   </code>
                 </div>
                 <div>
                   <span className="text-muted block">语言+版本 Dockerfile 模板获取 API</span>
                   <code className="font-mono text-accent break-all">
-                    {platformUrlInput.replace(/\/+$/, "")}/api/v1/apps/dockerfile-templates
+                    {platformUrlInput.replace(/\/+$/, "")}/integration/v1/apps/dockerfile-templates
                   </code>
                 </div>
                 <div className="pt-1 border-t border-line/60 flex items-center justify-between">
@@ -2623,155 +2620,12 @@ export function AppsView({ onBack }: Props) {
               >
                 取消
               </button>
-              <button
-                type="button"
-                disabled={savingPlatformConfig || !platformUrlInput.trim()}
-                onClick={handleSavePlatformConfig}
-                className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-xs font-medium shadow-xs disabled:opacity-50"
-              >
-                {savingPlatformConfig ? "正在保存并同步..." : "保存并同步资源"}
-              </button>
+
             </div>
           </div>
         </div>
       )}
 
-      {/* Global Storage Center Modal */}
-      {isGlobalStorageOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-4xl bg-panel rounded-2xl shadow-xl border border-line overflow-hidden flex flex-col max-h-[88vh]">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
-              <div className="flex items-center gap-2">
-                <Icon name="folder" size={18} className="text-accent" />
-                <h3 className="font-semibold text-ui text-ink">全局存储管理中心 (宿主机磁盘与持久化卷大盘)</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsGlobalStorageOpen(false)}
-                className="text-muted hover:text-ink text-meta p-1 rounded-lg hover:bg-paper cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-6 space-y-6 overflow-y-auto flex-1">
-              {loadingGlobalStorage ? (
-                <div className="text-center py-16 text-muted text-meta">正在统计底层宿主机磁盘水位与全量应用卷...</div>
-              ) : !globalStorageSummary ? (
-                <div className="text-center py-12 text-muted">未能获取到全局存储统计信息</div>
-              ) : (
-                <>
-                  {/* 宿主机底层磁盘水位 */}
-                  <div className="p-4 rounded-xl bg-paper/70 border border-line space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-ui text-ink flex items-center gap-2">
-                        <span>宿主机文件系统磁盘水位</span>
-                        <span className="text-muted font-mono text-label">({globalStorageSummary.server_disk.path})</span>
-                      </span>
-                      <span className={`text-label font-semibold px-2 py-0.5 rounded-full ${globalStorageSummary.server_disk.is_low_space ? "bg-danger/10 text-danger border border-danger/30" : "bg-okSoft text-ok border border-okLine"}`}>
-                        {globalStorageSummary.server_disk.is_low_space ? "⚠️ 磁盘空间紧张 (<10%)" : "✓ 空间充裕 (健康)"}
-                      </span>
-                    </div>
-
-                    <div className="w-full bg-paper rounded-full h-3 overflow-hidden border border-line">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${globalStorageSummary.server_disk.usage_ratio > 90 ? "bg-danger" : globalStorageSummary.server_disk.usage_ratio > 75 ? "bg-warn" : "bg-ok"}`}
-                        style={{ width: `${Math.min(globalStorageSummary.server_disk.usage_ratio, 100)}%` }}
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between text-meta text-muted flex-wrap gap-2">
-                      <span>已用: <strong className="text-ink font-mono">{globalStorageSummary.server_disk.used_human}</strong> ({globalStorageSummary.server_disk.usage_ratio}%)</span>
-                      <span>剩余可用: <strong className="text-ok font-mono">{globalStorageSummary.server_disk.free_human}</strong></span>
-                      <span>总容量: <strong className="text-ink font-mono">{globalStorageSummary.server_disk.total_human}</strong></span>
-                    </div>
-                  </div>
-
-                  {/* 应用持久化卷汇总卡片 */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 rounded-xl bg-panel border border-line">
-                      <div className="text-meta text-muted">已分配持久化卷总数</div>
-                      <div className="text-2xl font-bold font-mono text-accent mt-1">{globalStorageSummary.total_volumes} 个独立命名卷</div>
-                      <p className="text-[11px] text-muted mt-1">Docker Volume 自动挂载至各应用容器</p>
-                    </div>
-                    <div className="p-4 rounded-xl bg-panel border border-line">
-                      <div className="text-meta text-muted">业务数据总占用量</div>
-                      <div className="text-2xl font-bold font-mono text-ink mt-1">{globalStorageSummary.total_human}</div>
-                      <p className="text-[11px] text-muted mt-1">含业务 SQLite、状态 JSON、上传附件与报告</p>
-                    </div>
-                  </div>
-
-                  {/* 各应用挂载详情列表 */}
-                  <div className="space-y-3">
-                    <div className="font-semibold text-ui text-ink">各应用持久化存储占用列表</div>
-                    {globalStorageSummary.apps_storage.length === 0 ? (
-                      <div className="text-center py-8 border border-dashed border-line rounded-xl text-muted text-meta">
-                        当前暂无声明持久化挂载卷的应用
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {globalStorageSummary.apps_storage.map((app) => (
-                          <div key={app.app_slug} className="p-4 rounded-xl border border-line bg-paper/60 space-y-3">
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-ui text-ink">{app.app_name}</span>
-                                <code className="text-label text-muted font-mono bg-panel px-1.5 py-0.5 rounded border border-line">
-                                  {app.app_slug}
-                                </code>
-                                <span className={`text-[11px] px-2 py-0.2 rounded-full font-medium ${app.app_status === "running" ? "bg-okSoft text-ok" : "bg-danger/10 text-danger"}`}>
-                                  {app.app_status === "running" ? "运行中" : app.app_status}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-ui font-mono font-bold text-ink">{app.total_human}</span>
-                                <span className="text-label text-muted">({app.total_files} 文件 · {app.mounts_count} 卷)</span>
-                                <a
-                                  href={getAppStorageBackupUrl(app.app_slug)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="px-2.5 py-1 rounded-lg border border-line bg-panel hover:bg-paper text-label font-medium text-ink transition-colors flex items-center gap-1 cursor-pointer"
-                                >
-                                  <Icon name="archive" size={11} />
-                                  打包备份
-                                </a>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-2 border-t border-line/60">
-                              {app.mounts.map((m) => (
-                                <div key={m.name} className="p-2.5 rounded-lg bg-panel border border-line/80 flex items-center justify-between text-meta">
-                                  <div className="min-w-0 pr-2">
-                                    <div className="font-mono text-accent font-semibold truncate">{m.container_path}</div>
-                                    <div className="text-[11px] text-muted truncate">{m.volume_name}</div>
-                                  </div>
-                                  <div className="text-right shrink-0">
-                                    <div className="font-mono font-bold text-ink">{m.size_human}</div>
-                                    <div className="text-[10px] text-muted">{m.file_count} 文件</div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end px-6 py-3.5 border-t border-line bg-paper/50">
-              <button
-                type="button"
-                onClick={() => setIsGlobalStorageOpen(false)}
-                className="px-4 py-1.5 rounded-xl border border-line text-xs font-medium text-ink hover:bg-paper cursor-pointer"
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
