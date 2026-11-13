@@ -17,6 +17,7 @@ import zipfile
 
 from .app_delivery_skill.scripts import delivery
 from .app_delivery_config import original_fields, original_value, runtime_configs, loopback_connection
+from .config import load_config
 from .app_delivery_migration import (
     enrich_contract_and_discovery_report,
     fetch_platform_dockerfile_template,
@@ -202,7 +203,9 @@ class AppDelivery:
         if not isinstance(payload.get("slug"), str) or not delivery.SLUG.fullmatch(payload["slug"]):
             raise ValueError("应用唯一标识格式无效")
         delivery.valid_url(payload.get("app_url", ""))
-        port = payload.get("container_port", 8080)
+        default_port = getattr(load_config(), "opc_app_default_port", 8080) or 8080
+        raw_port = payload.get("container_port")
+        port = default_port if raw_port is None else raw_port
         if type(port) is not int or not 1 <= port <= 65535:
             raise ValueError("容器端口必须为 1 至 65535 的整数")
         model = payload.get("model") or self.manager.model

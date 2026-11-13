@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   checkAppSlug,
+  getOpcConfig,
   appDeliveryRequest,
   type AppDeliveryJob,
   getAppRuntimeLogs,
@@ -79,9 +80,47 @@ export function AppsView({ onBack }: Props) {
   const [modelControls, setModelControls] = useState<ModelControls | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [appUrl, setAppUrl] = useState("");
-  const [containerPort, setContainerPort] = useState(8080);
+  const [appDomainRoot, setAppDomainRoot] = useState<string>(() => {
+    try {
+      return localStorage.getItem("opc_app_domain_root") || "10.101.102.116.nip.io:8080";
+    } catch {
+      return "10.101.102.116.nip.io:8080";
+    }
+  });
+  const [configuredDefaultPort, setConfiguredDefaultPort] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("opc_app_default_port");
+      return raw ? parseInt(raw, 10) || 8080 : 8080;
+    } catch {
+      return 8080;
+    }
+  });
+  const [containerPort, setContainerPort] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("opc_app_default_port");
+      return raw ? parseInt(raw, 10) || 8080 : 8080;
+    } catch {
+      return 8080;
+    }
+  });
   const [slugError, setSlugError] = useState<string | null>(null);
   const [redeploySlug, setRedeploySlug] = useState("");
+
+  useEffect(() => {
+    getOpcConfig()
+      .then((cfg) => {
+        if (cfg?.effective_app_domain_root) {
+          setAppDomainRoot(cfg.effective_app_domain_root);
+        }
+        if (cfg?.effective_app_default_port) {
+          setConfiguredDefaultPort(cfg.effective_app_default_port);
+          if (!redeploySlug) {
+            setContainerPort(cfg.effective_app_default_port);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [redeploySlug]);
 
   // Wizard Step 2 & 3 state
   const [transforming, setTransforming] = useState(false);
@@ -345,14 +384,15 @@ export function AppsView({ onBack }: Props) {
     try {
       const slugRes = await checkAppSlug(slug.trim());
       if (!slugRes.available && redeploySlug !== slug.trim()) {
-        setSlugError(slugRes.message || "该 slug 已被占用，请更换唯一标识");
+        setSlugError(slugRes.message || "该子域名已被占用，请更换唯一标识");
         return;
       }
-      setAppUrl(slugRes.app_url);
+      const targetAppUrl = appDomainRoot ? `http://${slug.trim()}.${appDomainRoot}` : slugRes.app_url;
+      setAppUrl(targetAppUrl);
       setStep(2);
-      startTransform(slugRes.app_url);
+      startTransform(targetAppUrl);
     } catch (err: any) {
-      setSlugError(err?.message || "校验 slug 失败");
+      setSlugError(err?.message || "校验访问域名失败");
     }
   };
 
@@ -546,6 +586,7 @@ export function AppsView({ onBack }: Props) {
     isSlugComposingRef.current = false;
     isNameComposingRef.current = false;
     setRedeploySlug("");
+    setContainerPort(configuredDefaultPort);
     setDescription("");
     setSelectedFile(null);
     setSourcePath("");
@@ -1018,7 +1059,7 @@ export function AppsView({ onBack }: Props) {
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block text-meta font-medium text-ink">
-                        唯一标识 (slug) <span className="text-danger">*</span>
+                        应用访问子域名 (唯一标识) <span className="text-danger">*</span>
                       </label>
                       {!redeploySlug && slugManuallyEdited && (
                         <button
@@ -1035,17 +1076,41 @@ export function AppsView({ onBack }: Props) {
                         </button>
                       )}
                     </div>
-                    <input
-                      type="text"
-                      value={slug}
-                      onChange={handleSlugChange}
-                      onCompositionStart={handleSlugCompositionStart}
-                      onCompositionEnd={handleSlugCompositionEnd}
-                      onBlur={handleSlugBlur}
-                      placeholder="例如：devops-aly（仅限小写字母、数字和中划线，支持中文拼音转换）"
-                      className="w-full px-3.5 py-2 rounded-xl border border-line bg-paper text-ink font-mono placeholder:text-muted/60 focus:outline-accent focus:border-accent"
-                    />
-                    {slugError && <p className="text-label text-danger mt-1">{slugError}</p>}
+                    {/* 复合内网域名输入条 */}
+                    <div className="flex items-center rounded-xl border border-line bg-paper overflow-hidden focus-within:border-accent focus-within:ring-1 focus-within:ring-accent transition-all">
+                      <span className="px-3.5 py-2 bg-muted/10 text-muted font-mono text-ui select-none border-r border-line/60">
+                        http://
+                      </span>
+                      <input
+                        type="text"
+                        value={slug}
+                        onChange={handleSlugChange}
+                        onCompositionStart={handleSlugCompositionStart}
+                        onCompositionEnd={handleSlugCompositionEnd}
+                        onBlur={handleSlugBlur}
+                        placeholder="例如：devops-aly（仅限小写字母、数字和中划线）"
+                        className="flex-1 min-w-0 px-3.5 py-2 bg-transparent text-ink font-mono text-ui focus:outline-none placeholder:text-muted/60"
+                      />
+                      <span
+                        className="px-3.5 py-2 bg-muted/10 text-muted font-mono text-ui select-none border-l border-line/60 truncate max-w-[260px]"
+                        title={`.${appDomainRoot}`}
+                      >
+                        .{appDomainRoot}
+                      </span>
+                    </div>
+                    {/* 内网直达地址与端口提示 */}
+                    <div className="mt-2 px-3 py-2 rounded-lg bg-surface/60 border border-line/60 flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-muted shrink-0">内网访问直达地址:</span>
+                        <span className="font-mono text-accent font-medium truncate select-all">
+                          http://{slug.trim() || "your-app"}.{appDomainRoot}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-muted shrink-0">
+                        (默认容器端口: {containerPort || configuredDefaultPort})
+                      </span>
+                    </div>
+                    {slugError && <p className="text-label text-danger mt-1.5">{slugError}</p>}
                   </div>
 
                   <div>

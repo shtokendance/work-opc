@@ -845,7 +845,11 @@ function OpcPlatformSection() {
   const [platformBase, setPlatformBase] = useState("");
   const [deployBase, setDeployBase] = useState("");
   const [webOrigin, setWebOrigin] = useState("");
+  const [appDomainRoot, setAppDomainRoot] = useState("");
+  const [appDefaultPort, setAppDefaultPort] = useState<number | string>(8080);
   const [defaultPlatformBase, setDefaultPlatformBase] = useState("https://shtokendance.benlai.com");
+  const [defaultAppDomainRoot, setDefaultAppDomainRoot] = useState("10.101.102.116.nip.io:8080");
+  const [defaultAppDefaultPort, setDefaultAppDefaultPort] = useState(8080);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResults, setTestResults] = useState<
     Record<string, { testing?: boolean; ok?: boolean; latency_ms?: number; status_code?: number; error?: string }>
@@ -858,7 +862,11 @@ function OpcPlatformSection() {
         setPlatformBase(cfg.platform_base || cfg.effective_platform_base || "https://shtokendance.benlai.com");
         setDeployBase(cfg.deploy_base || "");
         setWebOrigin(cfg.web_origin || "");
+        setAppDomainRoot(cfg.app_domain_root || "");
+        setAppDefaultPort(cfg.app_default_port ?? 8080);
         if (cfg.default_platform_base) setDefaultPlatformBase(cfg.default_platform_base);
+        if (cfg.default_app_domain_root) setDefaultAppDomainRoot(cfg.default_app_domain_root);
+        if (cfg.default_app_default_port) setDefaultAppDefaultPort(cfg.default_app_default_port);
         if (cfg.deploy_base || cfg.web_origin) setShowAdvanced(true);
       })
       .catch((err) => {
@@ -886,10 +894,13 @@ function OpcPlatformSection() {
     setSaving(true);
     setBanner(null);
     try {
+      const portNum = typeof appDefaultPort === "string" ? parseInt(appDefaultPort, 10) : appDefaultPort;
       const updated = await updateOpcConfig({
         platform_base: platformBase.trim(),
         deploy_base: deployBase.trim(),
         web_origin: webOrigin.trim(),
+        app_domain_root: appDomainRoot.trim(),
+        app_default_port: isNaN(portNum) ? 8080 : portNum,
       });
       setConfiguredWebOrigin(updated.effective_web_origin);
       setBanner({ type: "success", message: t("settingsx.opc_platform.save_success") });
@@ -904,6 +915,8 @@ function OpcPlatformSection() {
     setPlatformBase(defaultPlatformBase);
     setDeployBase("");
     setWebOrigin("");
+    setAppDomainRoot("");
+    setAppDefaultPort(defaultAppDefaultPort);
     setTestResults({});
     setBanner(null);
   };
@@ -1126,6 +1139,57 @@ function OpcPlatformSection() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* 应用部署与访问配置卡片 */}
+      <div className={CARD + " p-5 mb-5 space-y-4"}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className={FIELD_LABEL}>{t("settingsx.opc_platform.apps_card_title")}</div>
+            <div className={FIELD_HELP}>{t("settingsx.opc_platform.apps_card_help")}</div>
+          </div>
+          <span className="text-xs px-2.5 py-1 rounded-full bg-accent/10 text-accent font-medium">
+            应用治理与部署
+          </span>
+        </div>
+
+        {/* 根域名后缀配置 */}
+        <div>
+          <label className="block text-meta text-muted mb-1.5" htmlFor="opc-app-domain-root-input">
+            {t("settingsx.opc_platform.app_domain_root_label")}
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="opc-app-domain-root-input"
+              type="text"
+              className={INPUT}
+              placeholder={`默认: ${defaultAppDomainRoot}`}
+              value={appDomainRoot}
+              onChange={(e) => setAppDomainRoot(e.target.value)}
+            />
+          </div>
+          <div className={FIELD_HELP}>{t("settingsx.opc_platform.app_domain_root_help")}</div>
+        </div>
+
+        {/* 默认容器端口配置 */}
+        <div>
+          <label className="block text-meta text-muted mb-1.5" htmlFor="opc-app-default-port-input">
+            {t("settingsx.opc_platform.app_default_port_label")}
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="opc-app-default-port-input"
+              type="number"
+              min={1}
+              max={65535}
+              className={INPUT + " max-w-[200px]"}
+              placeholder={String(defaultAppDefaultPort)}
+              value={appDefaultPort}
+              onChange={(e) => setAppDefaultPort(e.target.value ? parseInt(e.target.value, 10) : "")}
+            />
+          </div>
+          <div className={FIELD_HELP}>{t("settingsx.opc_platform.app_default_port_help")}</div>
+        </div>
       </div>
 
       {/* 底部操作栏 */}

@@ -131,7 +131,13 @@ def register_app_delivery_routes(app, manager):
 
     @app.post("/v1/apps/catalog/check-slug")
     async def check_slug(body: dict):
-        return await catalog_request("POST", "/check-slug", json={"slug": body.get("slug", "")})
+        res = await catalog_request("POST", "/check-slug", json={"slug": body.get("slug", "")})
+        if isinstance(res, dict) and res.get("slug"):
+            cfg = load_config()
+            domain_root = (getattr(cfg, "opc_app_domain_root", "") or "").strip()
+            if domain_root:
+                res["app_url"] = f"http://{res['slug']}.{domain_root}"
+        return res
 
     @app.get("/v1/apps/catalog/resources")
     async def resources():

@@ -31,6 +31,10 @@ def test_get_opc_config_defaults(tmp_path, monkeypatch):
     assert "effective_deploy_base" in data
     assert "effective_web_origin" in data
     assert data["default_platform_base"] == "https://shtokendance.benlai.com"
+    assert data["effective_app_domain_root"] == "10.101.102.116.nip.io:8080"
+    assert data["effective_app_default_port"] == 8080
+    assert data["default_app_domain_root"] == "10.101.102.116.nip.io:8080"
+    assert data["default_app_default_port"] == 8080
 
 
 def test_update_opc_config_and_hot_reload(tmp_path, monkeypatch):
@@ -38,6 +42,8 @@ def test_update_opc_config_and_hot_reload(tmp_path, monkeypatch):
     new_platform = "https://opc.mycompany.com"
     new_deploy = "https://deploy.mycompany.com"
     new_web = "https://web.mycompany.com"
+    new_domain_root = "custom.nip.io:9000"
+    new_port = 8888
 
     resp = client.put(
         "/v1/opc/config",
@@ -45,6 +51,8 @@ def test_update_opc_config_and_hot_reload(tmp_path, monkeypatch):
             "platform_base": new_platform,
             "deploy_base": new_deploy,
             "web_origin": new_web,
+            "app_domain_root": new_domain_root,
+            "app_default_port": new_port,
         },
     )
     assert resp.status_code == 200
@@ -53,21 +61,29 @@ def test_update_opc_config_and_hot_reload(tmp_path, monkeypatch):
     assert data["platform_base"] == new_platform
     assert data["deploy_base"] == new_deploy
     assert data["web_origin"] == new_web
+    assert data["app_domain_root"] == new_domain_root
+    assert data["app_default_port"] == new_port
     assert data["effective_platform_base"] == new_platform
     assert data["effective_deploy_base"] == new_deploy
     assert data["effective_web_origin"] == new_web
+    assert data["effective_app_domain_root"] == new_domain_root
+    assert data["effective_app_default_port"] == new_port
 
     # Verify config.toml was persisted
     cfg = load_config()
     assert cfg.opc_platform_base == new_platform
     assert cfg.opc_deploy_base == new_deploy
     assert cfg.opc_web_origin == new_web
+    assert cfg.opc_app_domain_root == new_domain_root
+    assert cfg.opc_app_default_port == new_port
 
     # Verify app-delivery platform_config.json was synced
     platform_json = state_dir() / "app-delivery" / "platform_config.json"
     assert platform_json.is_file()
     saved_cfg = json.loads(platform_json.read_text(encoding="utf-8"))
     assert saved_cfg["platform_url"] == new_deploy
+    assert saved_cfg["app_domain_root"] == new_domain_root
+    assert saved_cfg["app_default_port"] == new_port
 
     # Verify default_platform_url uses new deploy base
     assert default_platform_url() == new_deploy
