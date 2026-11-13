@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from ..app_delivery import AppDelivery
+from ..app_delivery_auth import verification_credential_fields
 from ..app_delivery_skill.scripts import delivery
 from ..config import load_config
 from ..secrets import state_dir
@@ -24,28 +25,11 @@ ROLLBACK_NOTICE = "回滚恢复代码与运行配置，不自动回退数据库/
 
 def verification_credentials(contract, deployment_config, supplied):
     """Transient probe credentials; never add login sessions to deployment config."""
-    allowed = {a.get("auth", {}).get("env") for a in contract.get("apis", []) if a.get("auth", {}).get("type") in {"header", "bearer"}}
-    for profile in [contract.get("auth_profile", {}), *contract.get("auth_profiles", {}).values()]:
-        allowed.update(profile[k] for k in ("username_env", "password_env", "token_env") if isinstance(profile, dict) and profile.get(k))
+    allowed = {field["key"] for field in verification_credential_fields(contract)}
     supplied = {} if supplied is None else supplied
     if not isinstance(supplied, dict) or any(k not in allowed or not isinstance(v, str) or len(v) > 16384 or any(c in v for c in "\r\n\x00") for k, v in supplied.items()):
         raise ValueError("业务验证凭据无效，请仅填写本应用声明的登录凭据")
     res = {c["key"]: c.get("value", "") for c in deployment_config if isinstance(c, dict) and c.get("key")}
-    # Fallback to contract.configs defaults (e.g. auto-discovered from source/tests/docs)
-    for cfg in contract.get("configs", []):
-        k = cfg.get("key")
-        if k in allowed and not res.get(k) and cfg.get("default"):
-            res[k] = str(cfg["default"])
-    # Fallback to auth_profiles default_username / default_password
-    for profile in [contract.get("auth_profile", {}), *contract.get("auth_profiles", {}).values()]:
-        if not isinstance(profile, dict):
-            continue
-        u_k = profile.get("username_env")
-        if u_k and not res.get(u_k) and profile.get("default_username"):
-            res[u_k] = str(profile["default_username"])
-        p_k = profile.get("password_env")
-        if p_k and not res.get(p_k) and profile.get("default_password"):
-            res[p_k] = str(profile["default_password"])
     res.update(supplied)
     return res
 
@@ -729,12 +713,9 @@ def register_app_delivery_routes(app, manager):
             code, content_type, content = await read_only_probe(health_contract, "health", {})
             if code != health["status"] or not delivery.json_matches(content, health["json_contains"]):
                 raise ValueError(f"应用健康身份校验失败（HTTP {code}，返回内容与健康标识不匹配），不能启用业务技能")
-            supplied_creds = body.get("verification_credentials")
-            if supplied_creds is None and isinstance(data.get("saved_verification_credentials"), dict):
-                supplied_creds = data["saved_verification_credentials"]
-            credentials = verification_credentials(contract, data["deployment_confirmation"]["app_config"], supplied_creds)
-            if isinstance(body.get("verification_credentials"), dict):
-                data["saved_verification_credentials"] = dict(body["verification_credentials"])
+            credentials = verification_credentials(
+                contract, data["deployment_confirmation"]["app_config"], body.get("verification_credentials"),
+            )
             checks = []
             for case in contract["verification"].get("cases", []):
                 operation = next((api for api in contract["apis"] if api["id"] == case["operation"]), {})

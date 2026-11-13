@@ -90,6 +90,7 @@ export function AppsView({ onBack }: Props) {
   const [repairFeedback, setRepairFeedback] = useState("");
   const [deliveryJob, setDeliveryJob] = useState<AppDeliveryJob | null>(null);
   const [probeCredentials, setProbeCredentials] = useState<Record<string, string>>({});
+  const probeCredentialFields = deliveryJob?.proposal?.verification_credential_fields ?? [];
   useEffect(() => { setProbeCredentials({}); }, [jobId, isModalOpen]);
   const readyArtifact = useRef("");
   const draftSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -1455,7 +1456,7 @@ export function AppsView({ onBack }: Props) {
                     <section className="space-y-3" aria-label="生成的业务技能">
                       {!!deliveryJob?.auth_summary?.profiles && (
                         <div className="rounded-xl border border-line bg-panel p-3.5 text-xs space-y-1">
-                          <div className="font-semibold">已配置 {deliveryJob.auth_summary.profiles} 套自动认证方案</div>
+                          <div className="font-semibold">已识别 {deliveryJob.auth_summary.profiles} 套应用认证方案</div>
                           <div className="text-muted">调用器按接口选择登录方式。配置完成不等于认证通过；部署后验证只读业务，页面登录单独验证。</div>
                         </div>
                       )}
@@ -1562,13 +1563,14 @@ export function AppsView({ onBack }: Props) {
                     </span>
                   </div>
 
-                  {deployStatus === "verification_failed" && deliveryJob?.proposal?.apis?.some(api => api.auth?.env) && (
+                  {deployStatus === "verification_failed" && probeCredentialFields.length > 0 && (
                     <section className="p-4 rounded-xl border border-line bg-panel space-y-3 shrink-0">
                       <h3 className="font-semibold">登录后验证应用业务</h3>
-                      <p className="text-meta text-muted">应用已运行。需要登录的查询，请提供本应用有效的会话凭据，再点“仅重试业务验证”。仅用于本次验证，不上传为部署配置；关闭或切换应用后清空。</p>
-                      {[...new Set(deliveryJob.proposal.apis.map(api => api.auth?.env).filter((key): key is string => !!key))].map(key => (
-                        <label key={key} className="block text-meta">{key}
-                          <input type="password" autoComplete="off" aria-label={`业务验证凭据 ${key}`} value={probeCredentials[key] || ""} onChange={event => setProbeCredentials(values => ({...values, [key]: event.target.value}))} className="mt-1 block w-full rounded-lg border border-line bg-paper px-3 py-2" />
+                      <p className="text-meta text-muted">填写应用账号和密码，或按认证方式提供已有会话凭据，再点“仅重试业务验证”。这些值仅用于当前验证，关闭窗口或切换应用后清空。</p>
+                      {probeCredentialFields.map(({ key, kind }) => (
+                        <label key={key} className="block text-meta">
+                          {kind === "username" ? "应用账号" : kind === "password" ? "应用密码" : "会话凭据"}（{key}）
+                          <input type={kind === "username" ? "text" : "password"} autoComplete="off" aria-label={`业务验证凭据 ${key}`} value={probeCredentials[key] || ""} onChange={event => setProbeCredentials(values => ({...values, [key]: event.target.value}))} className="mt-1 block w-full rounded-lg border border-line bg-paper px-3 py-2" />
                         </label>
                       ))}
                     </section>

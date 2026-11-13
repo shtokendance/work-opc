@@ -361,34 +361,16 @@ async def test_cancellation_preserves_original_source_and_prevents_approval(serv
     assert not (service.path(job["id"]) / "approved").exists()
 
 
-def test_step1_credential_extraction_and_decryption_and_sqlite_inspection(tmp_path):
+def test_step1_sqlite_inspection(tmp_path):
     import sqlite3
-    from coworker.app_delivery_migration import (
-        extract_sqlite_tables,
-        inspect_credentials_in_source,
-        inspect_local_sqlite_files,
-    )
+    from coworker.app_delivery_migration import extract_sqlite_tables, inspect_local_sqlite_files
 
-    # Create a sample source tree with Base64 & MD5 admin password and a local SQLite DB
-    (tmp_path / "config.py").write_text(
-        'ADMIN_USERNAME = "superadmin"\n'
-        'ADMIN_PASSWORD_B64 = "c2VjcmV0MTIz"\n'  # Base64 for "secret123"
-        'DEFAULT_MD5_PASS = "e10adc3949ba59abbe56e057f20f883e"\n',  # MD5 for "123456"
-        encoding="utf-8",
-    )
     db_file = tmp_path / "data.sqlite3"
     conn = sqlite3.connect(str(db_file))
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, role TEXT)")
     conn.execute("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', '21232f297a57a5a743894a0e4a801fc3', 'admin')")
     conn.commit()
     conn.close()
-
-    creds = inspect_credentials_in_source(tmp_path)
-    decrypted_vals = [item["decrypted"] for item in creds["decrypted_candidates"] if item.get("decrypted")]
-    assert "secret123" in decrypted_vals
-    assert "123456" in decrypted_vals
-    assert "admin" in decrypted_vals
-    assert any(u["table"] == "users" for u in creds["sqlite_users"])
 
     sqlite_info = inspect_local_sqlite_files(tmp_path)
     assert len(sqlite_info["sqlite_databases"]) == 1
@@ -872,3 +854,50 @@ async def test_repair_requires_effective_change_for_program_failure(service, cha
     else:
         assert result['status'] == 'failed'
         assert '未修改失败制品' in result['error']
+
+
+@pytest.mark.asyncio
+async def test_adapter_recovers_from_stale_auth_citation_without_guessing_credentials(service):
+    class Provider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            if len(self.calls) == 2:
+                return AssistantTurn(tool_calls=[ToolCall("read-auth", "read_source", {"path": "main.py"})])
+            candidate = proposal()
+            candidate["changes"] = []
+            contract = candidate["contract"]
+            contract["auth_profiles"] = {
+                "account": {"login_url": "/api/session", "username_env": "APP_USER", "password_env": "APP_PASSWORD"},
+            }
+            contract["auth_rules"] = [{
+                "target": "api", "path": "/lookup",
+                "auth": {"type": "header", "header": "Cookie", "profile": "account"},
+                "evidence": ["main.py:3300" if len(self.calls) == 1 else "main.py:1"],
+            }]
+            return AssistantTurn(tool_calls=[ToolCall(
+                f"submit-{len(self.calls)}", "submit_proposal", {"proposal_json": json.dumps(candidate)},
+            )])
+
+    service.manager.provider = Provider()
+    data = create(service)
+    readme = service.path(data["id"]) / "review/source/README.md"
+    readme.write_text("管理员账号：admin，默认密码：FixturePassword123!\n")
+    inventory_path = service.path(data["id"]) / "review/inventory.json"
+    inventory = delivery.load(inventory_path)
+    inventory["files"] = delivery.inspect_source(readme.parent)[0]
+    delivery.save(inventory_path, inventory)
+    service.launch_analysis(data["id"])
+    await service.tasks[data["id"]]
+
+    result = service.public(data["id"])
+    assert result["status"] == "review", result.get("error")
+    assert any("main.py:3300" in e and "共 1 行" in e for e in result["events"])
+    assert result["proposal"]["unresolved"] == []
+    assert result["proposal"]["verification_credential_fields"] == [
+        {"key": "APP_USER", "kind": "username"}, {"key": "APP_PASSWORD", "kind": "password"},
+    ]
+    assert "FixturePassword123!" not in json.dumps(service.load(data["id"]))
+    ready = await service.approve(data["id"], {"proposal_hash": result["proposal_hash"], "approved_changes": [], "confirm_config_changes": True})
+    assert ready["status"] == "ready"
+    with zipfile.ZipFile(service.path(data["id"]) / "bundle/skill.zip") as archive:
+        assert b"FixturePassword123!" not in archive.read("references/operations.json")

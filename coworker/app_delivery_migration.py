@@ -1,5 +1,4 @@
 """Step 1 & Step 2 helpers for OPC App Delivery:
-- Credential discovery & code-assisted decryption from isolated source/SQLite/JSON/config
 - Dockerfile template fetching from platform-opc (deploy-opc database)
 - Local SQLite / local DB (PostgreSQL, MySQL, SQLServer) / local Redis inspection and automatic migration to platform-opc server resources
 """
@@ -8,9 +7,6 @@ from __future__ import annotations
 
 import ast
 import base64
-import binascii
-import codecs
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -20,260 +16,6 @@ import urllib.parse
 import urllib.request
 
 from .app_delivery_skill.scripts import delivery
-
-
-def inspect_credentials_in_source(source: Path, target_path: str = "", cipher_text: str = "", algorithm_hint: str = "") -> dict:
-    """Step 1 helper: scan config/seed/code/SQLite in isolated source for admin accounts & decrypt encoded/encrypted passwords."""
-    result = {
-        "discovered_accounts": [],
-        "decrypted_candidates": [],
-        "sqlite_accounts": [],
-        "notes": [],
-    }
-
-    # 1. Try decoding/decrypting explicit cipher_text if supplied
-    if cipher_text.strip():
-        raw = cipher_text.strip()
-        result["decrypted_candidates"].extend(_try_decode_cipher(raw, algorithm_hint, source))
-
-    # 2. If a specific file is requested, inspect its raw content for accounts/seeds/hashes
-    files_to_scan = []
-    if target_path.strip():
-        try:
-            p = delivery.relative(source, target_path.strip())
-            if p.is_file():
-                files_to_scan.append(p)
-        except Exception:
-            pass
-    else:
-        for p in sorted(source.rglob("*")):
-            if not p.is_file() or p.is_symlink():
-                continue
-            if any(part in delivery.EXCLUDED for part in p.relative_to(source).parts):
-                continue
-            files_to_scan.append(p)
-
-    user_key_re = re.compile(
-        r"""(?i)(?:admin[_-]?(?:user|username|email|account)|default[_-]?(?:user|admin)|username|user_name|login_name|account|账号|用户名|登录名)\s*["']?\s*[:=：]\s*["']?([a-zA-Z0-9_\-\.@]{2,64})["']?"""
-    )
-    pass_key_re = re.compile(
-        r"""(?i)(?:[a-z0-9_]*(?:pass|password|pwd|secret|hash|b64|cipher)[a-z0-9_]*|密码|口令)\s*["']?\s*[:=：]\s*["']?([^\s"'\n]{4,128})["']?"""
-    )
-    pair_re = re.compile(
-        r"""(?i)(?:账号|用户名|admin|user)[^\n]{0,12}?(admin|[a-zA-Z0-9_]{3,20})\s*[/／|\s]+\s*(?:密码|口令|pass)?\s*([a-zA-Z0-9!@#$%^&*()_+-=]{6,32})"""
-    )
-    token_key_re = re.compile(
-        r"""(?i)(?:admin[_-]?token|api[_-]?token|auth[_-]?token|default[_-]?token|fixed[_-]?token|令牌)\s*["']?\s*[:=：]\s*["']?([^\s"'\n]{4,256})["']?"""
-    )
-
-    for p in files_to_scan:
-        rel = p.relative_to(source).as_posix()
-        suffix = p.suffix.lower()
-        if suffix in {".sqlite", ".sqlite3", ".db"}:
-            if p.stat().st_size == 0:
-                continue
-            sqlite_items = _scan_sqlite_accounts(p, rel)
-            result["sqlite_accounts"].extend(sqlite_items)
-            for item in sqlite_items:
-                result["decrypted_candidates"].extend(item.get("decoded_candidates", []))
-            continue
-        if p.stat().st_size > 10_000_000:
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except Exception:
-            continue
-
-        users = user_key_re.findall(text)
-        passwords = pass_key_re.findall(text)
-        tokens = token_key_re.findall(text)
-        for pu, pp in pair_re.findall(text):
-            users.append(pu)
-            passwords.append(pp)
-        if users or passwords or tokens:
-            decoded_pwds = []
-            for pwd in passwords[:50]:
-                decoded_pwds.extend(_try_decode_cipher(pwd, algorithm_hint, source))
-            result["decrypted_candidates"].extend(decoded_pwds)
-            result["discovered_accounts"].append({
-                "file": rel,
-                "usernames": list(dict.fromkeys(users[:50])),
-                "passwords_or_hashes": list(dict.fromkeys(passwords[:50])),
-                "tokens": list(dict.fromkeys(tokens[:50])),
-                "decoded_candidates": decoded_pwds,
-            })
-
-    result["sqlite_users"] = result["sqlite_accounts"]
-    return result
-
-
-def _scan_sqlite_accounts(sqlite_file: Path, rel_path: str) -> list[dict]:
-    found = []
-    try:
-        conn = sqlite3.connect(f"file:{sqlite_file}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        try:
-            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-            tables = [r[0] for r in cur.fetchall()]
-            for tbl in tables:
-                if not re.search(r"(?i)user|admin|account|member|operator|auth|staff", tbl):
-                    continue
-                rows = conn.execute(f'SELECT * FROM "{tbl}" LIMIT 100').fetchall()
-                for row in rows:
-                    d = dict(row)
-                    entry = {"file": rel_path, "table": tbl, "record": {}}
-                    for k, v in d.items():
-                        if re.search(r"(?i)user|name|email|login|role|pass|pwd|hash|token|secret|salt|is_admin|admin", k):
-                            entry["record"][k] = str(v) if v is not None else None
-                            if isinstance(v, str) and re.search(r"(?i)pass|pwd|hash", k):
-                                dec = _try_decode_cipher(v, "", sqlite_file.parent)
-                                if dec:
-                                    entry["decoded_candidates"] = dec
-                    if entry["record"]:
-                        found.append(entry)
-        finally:
-            conn.close()
-    except Exception:
-        pass
-    return found
-
-
-def pick_best_default_credentials(cred_info: dict, source: Path = None) -> dict:
-    """Extract best candidate admin username & password/token from discovered code/docs/seeds."""
-    if not isinstance(cred_info, dict):
-        return {}
-    candidates = []
-    invalid_users = {"username", "user", "name", "loginusername", "current-user", "undefined", "null"}
-    invalid_pwds = {
-        "password", "current-password", "loginpassword", "passwd", "pwd", "null", "undefined",
-        "confirm_password", "confirmpassword", "符合", "不符合", "true", "false", "unused"
-    }
-    for acc in cred_info.get("discovered_accounts", []):
-        f = acc.get("file", "")
-        users = [
-            u for u in acc.get("usernames", [])
-            if isinstance(u, str) and re.match(r"^[a-zA-Z0-9_\-\.]{2,32}$", u) and u.lower() not in invalid_users
-        ]
-        pwds = []
-        for p in acc.get("passwords_or_hashes", []):
-            if isinstance(p, str) and len(p) >= 4 and p.lower() not in invalid_pwds and not p.startswith(("node ", "select ", "http://", "https://")):
-                pwds.append(p)
-        for dec in acc.get("decoded_candidates", []):
-            pt = dec.get("plaintext") or dec.get("decrypted")
-            if pt and isinstance(pt, str) and pt.lower() not in invalid_pwds:
-                pwds.append(pt)
-        tokens = [t for t in acc.get("tokens", []) if isinstance(t, str) and len(t) >= 6]
-        for u in users:
-            for p in pwds:
-                score = 0
-                if "admin" in u.lower():
-                    score += 15
-                elif "root" in u.lower():
-                    score += 12
-                else:
-                    score += 3
-                lower_f = f.lower()
-                if any(k in lower_f for k in ("install", "readme", "api", "doc", "quickstart")):
-                    score += 10
-                elif "test" in lower_f:
-                    score += 8
-                elif "seed" in lower_f or "data" in lower_f:
-                    score += 7
-                elif "server" in lower_f or "app" in lower_f:
-                    score += 6
-                if any(c.isupper() for c in p) and any(c.islower() for c in p) and any(c.isdigit() for c in p):
-                    score += 5
-                if any(c in "!@#$%^&*()_+-=" for c in p):
-                    score += 5
-                candidates.append((score, u, p, tokens[0] if tokens else "", f))
-
-    for item in cred_info.get("sqlite_accounts", []):
-        rec = item.get("record", {})
-        u = rec.get("username") or rec.get("login_name") or rec.get("account") or rec.get("email") or ""
-        p = rec.get("password") or rec.get("pwd") or ""
-        f = item.get("file", "")
-        for dec in item.get("decoded_candidates", []):
-            pt = dec.get("plaintext") or dec.get("decrypted")
-            if pt:
-                p = pt
-                break
-        if u and p and isinstance(u, str) and isinstance(p, str) and u.lower() not in invalid_users and p.lower() not in invalid_pwds:
-            score = 12
-            if "admin" in u.lower() or rec.get("role") == "admin" or rec.get("is_admin") in (1, "1", True, "true"):
-                score += 15
-            candidates.append((score, u, p, "", f))
-
-    if candidates:
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        best = candidates[0]
-        return {
-            "username": best[1],
-            "password": best[2],
-            "token": best[3],
-            "source": best[4],
-        }
-
-    for acc in cred_info.get("discovered_accounts", []):
-        tokens = [t for t in acc.get("tokens", []) if isinstance(t, str) and len(t) >= 6]
-        if tokens:
-            return {
-                "username": "",
-                "password": "",
-                "token": tokens[0],
-                "source": acc.get("file", ""),
-            }
-
-    return {}
-
-
-def _try_decode_cipher(value: str, hint: str, source: Path) -> list[dict]:
-    """Attempt common encodings, reversible ciphers, and well-known default password hashes."""
-    candidates = []
-    val = value.strip()
-    if not val:
-        return candidates
-
-    # 1. Well-known MD5 / SHA256 hashes of common default passwords
-    common_plaintexts = [
-        "admin", "admin123", "123456", "12345678", "password", "root",
-        "admin@123", "111111", "888888", "qwerty", "opc123", "test1234",
-    ]
-    lower_val = val.lower()
-    for pt in common_plaintexts:
-        if hashlib.md5(pt.encode()).hexdigest() == lower_val:
-            candidates.append({"method": "md5-lookup", "plaintext": pt, "decrypted": pt})
-        if hashlib.sha256(pt.encode()).hexdigest() == lower_val:
-            candidates.append({"method": "sha256-lookup", "plaintext": pt, "decrypted": pt})
-        if hashlib.sha1(pt.encode()).hexdigest() == lower_val:
-            candidates.append({"method": "sha1-lookup", "plaintext": pt, "decrypted": pt})
-
-    # 2. Base64prefix or pure Base64
-    b64_input = re.sub(r"(?i)^(?:base64:|b64:|enc:)", "", val).strip()
-    if len(b64_input) >= 4 and re.fullmatch(r"[A-Za-z0-9+/=_-]+", b64_input):
-        try:
-            padded = b64_input + "=" * ((4 - len(b64_input) % 4) % 4)
-            decoded = base64.b64decode(padded).decode("utf-8")
-            if decoded and all(32 <= ord(c) < 127 for c in decoded) and decoded != val:
-                candidates.append({"method": "base64", "plaintext": decoded, "decrypted": decoded})
-        except Exception:
-            pass
-
-    # 3. Hex encoding
-    hex_input = re.sub(r"(?i)^(?:0x|hex:)", "", val).strip()
-    if len(hex_input) >= 4 and len(hex_input) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", hex_input) and len(hex_input) not in {32, 40, 64}:
-        try:
-            decoded = binascii.unhexlify(hex_input).decode("utf-8")
-            if decoded and all(32 <= ord(c) < 127 for c in decoded):
-                candidates.append({"method": "hex", "plaintext": decoded, "decrypted": decoded})
-        except Exception:
-            pass
-
-    # 4. ROT13
-    if hint and "rot13" in hint.lower():
-        rot_pt = codecs.decode(val, "rot_13")
-        candidates.append({"method": "rot13", "plaintext": rot_pt, "decrypted": rot_pt})
-
-    return candidates
 
 
 def fetch_platform_dockerfile_template(platform_url: str, language: str, version: str = "") -> dict:
@@ -2421,7 +2163,6 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
     contract = proposal.setdefault("contract", {})
     scan = scan_app_routes_and_pages(source)
     sqlite_info = inspect_local_sqlite_files(source)
-    cred_info = inspect_credentials_in_source(source)
 
     # 1. Merge any missing scanned APIs into contract['apis'] so 0 routes are omitted
     existing_apis: list[dict] = list(contract.get("apis") or [])
@@ -2466,84 +2207,6 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
 
     # 2b-2. Automatically detect & adapt persistent local file storage (JSON state, uploads, reports, backups)
     storage_mounts = _auto_adapt_persistent_file_storage(source, str(data.get("slug", "")), data, proposal)
-
-    # 2b-3. Automatically search & inject default credentials from source/tests/docs for out-of-the-box skill auth
-    best_admin = pick_best_default_credentials(cred_info, source)
-    auth_profiles = contract.get("auth_profiles") or {}
-    auth_profile = contract.get("auth_profile") or {}
-    all_profiles = list(auth_profiles.values())
-    if isinstance(auth_profile, dict) and auth_profile:
-        all_profiles.append(auth_profile)
-
-    configs_list = list(contract.get("configs") or [])
-    configs_by_key = {str(c.get("key")): c for c in configs_list if isinstance(c, dict)}
-
-    if best_admin.get("username") or best_admin.get("password") or best_admin.get("token"):
-        for prof in all_profiles:
-            if not isinstance(prof, dict):
-                continue
-            if best_admin.get("username") and not prof.get("default_username"):
-                prof["default_username"] = best_admin["username"]
-            if best_admin.get("password") and not prof.get("default_password"):
-                prof["default_password"] = best_admin["password"]
-
-            u_env = prof.get("username_env")
-            if u_env and best_admin.get("username"):
-                if u_env not in configs_by_key:
-                    new_cfg = {
-                        "key": u_env,
-                        "default": best_admin["username"],
-                        "description": "管理员用户名（已由源码/测试自动识别，免手动配置授权）",
-                        "required": False,
-                        "secret": False,
-                    }
-                    configs_list.append(new_cfg)
-                    configs_by_key[u_env] = new_cfg
-                elif not configs_by_key[u_env].get("default"):
-                    configs_by_key[u_env]["default"] = best_admin["username"]
-
-            p_env = prof.get("password_env")
-            if p_env and best_admin.get("password"):
-                if p_env not in configs_by_key:
-                    new_cfg = {
-                        "key": p_env,
-                        "default": best_admin["password"],
-                        "description": "管理员密码（已由源码/测试自动识别，免手动配置授权）",
-                        "required": False,
-                        "secret": True,
-                    }
-                    configs_list.append(new_cfg)
-                    configs_by_key[p_env] = new_cfg
-                elif not configs_by_key[p_env].get("default"):
-                    configs_by_key[p_env]["default"] = best_admin["password"]
-
-            t_env = prof.get("token_env")
-            if t_env and best_admin.get("token"):
-                if t_env not in configs_by_key:
-                    new_cfg = {
-                        "key": t_env,
-                        "default": best_admin["token"],
-                        "description": "管理授权令牌（已由源码自动识别，免手动配置授权）",
-                        "required": False,
-                        "secret": True,
-                    }
-                    configs_list.append(new_cfg)
-                    configs_by_key[t_env] = new_cfg
-                elif not configs_by_key[t_env].get("default"):
-                    configs_by_key[t_env]["default"] = best_admin["token"]
-
-        contract["configs"] = configs_list
-
-        saved_verif = data.setdefault("saved_verification_credentials", {})
-        for prof in all_profiles:
-            if not isinstance(prof, dict):
-                continue
-            if prof.get("username_env") and best_admin.get("username"):
-                saved_verif.setdefault(prof["username_env"], best_admin["username"])
-            if prof.get("password_env") and best_admin.get("password"):
-                saved_verif.setdefault(prof["password_env"], best_admin["password"])
-            if prof.get("token_env") and best_admin.get("token"):
-                saved_verif.setdefault(prof["token_env"], best_admin["token"])
 
     # 2c. Filter out internal tool/truncation/row-diff/db-adaptation/default-password/local-json noise from unresolved & decisions
     internal_noise_re = re.compile(
@@ -2606,24 +2269,12 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
     # 3. Build fixed-format Step 1 Discovery Report
     step1_ai = (proposal.get("four_step_report") or {}).get("step1_discovery") or {}
     step2_ai = (proposal.get("four_step_report") or {}).get("step2_transformation") or {}
-    auth_profile = proposal.get("auth_profile") or contract.get("auth_profile") or {}
     runtime_cfg = contract.get("runtime") or {}
     lang = runtime_cfg.get("language") or scan["runtime"]["language"]
     ver = runtime_cfg.get("version") or scan["runtime"]["runtime_version"]
 
     readme_summary = step1_ai.get("readme_summary") or ""
-    has_readme = False
-    for rname in ("README.md", "readme.md", "README.txt"):
-        rp = source / rname
-        if rp.is_file():
-            has_readme = True
-            if not readme_summary:
-                try:
-                    lines = [ln.strip("# ").strip() for ln in rp.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()]
-                    readme_summary = "；".join(lines[:3])[:240]
-                except Exception:
-                    pass
-            break
+    has_readme = any((source / name).is_file() for name in ("README.md", "readme.md", "README.txt"))
 
     sqlite_dbs = sqlite_info.get("sqlite_databases") or []
     resources = select_and_filter_platform_resources(data.get("resources") or [], str(data.get("slug", "")))
@@ -2706,17 +2357,8 @@ def enrich_contract_and_discovery_report(source: Path, data: dict, proposal: dic
             ],
         },
         "auth_and_credentials": {
-            "page_auth": step1_ai.get("page_auth") or ("管理端需令牌/登录认证，普通业务页免登直达" if any((a.get("auth") or {}).get("type") != "none" for a in existing_apis) else "免登录直接访问"),
-            "api_auth": (
-                f"已自动识别代码内置管理员（{best_admin['username']}），已注入默认免登凭据，开箱即用"
-                if best_admin.get("username")
-                else (step1_ai.get("api_auth") or ("按接口认证方案校验；尚需部署后验证" if any((a.get("auth") or {}).get("type") != "none" for a in existing_apis) else "按契约声明公开；尚需验证"))
-            ),
-            "auth_profile": auth_profile,
-            "discovered_accounts_count": len(cred_info.get("discovered_accounts") or []) + len(cred_info.get("sqlite_accounts") or []),
-            "default_credentials_found": bool(best_admin.get("username") or best_admin.get("token")),
-            "default_username": best_admin.get("username", ""),
-            "credentials_source": best_admin.get("source", ""),
+            "page_auth": step1_ai.get("page_auth") or "按应用自身的登录和权限规则访问页面",
+            "api_auth": step1_ai.get("api_auth") or "部署后按接口认证方式执行只读验证",
         },
         "storage_and_database": {
             "storage_type": storage_type,

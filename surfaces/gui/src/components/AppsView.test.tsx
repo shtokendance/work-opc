@@ -190,18 +190,23 @@ describe("AppsView Component", () => {
     vi.mocked(publishAppToPlatform).mockClear();
     let verifies = 0;
     vi.mocked(appDeliveryRequest).mockImplementation(async <T,>(path: string) => {
-      if (path.startsWith("jobs?")) return { jobs: [{ id: "ready-job", artifact_hash: "hash", proposal: { summary: "Approved", changes: [], apis: [{id:"lookup",auth:{type:"header",env:"APP_SESSION_COOKIE"}}] } }] } as T;
+      if (path.startsWith("jobs?")) return { jobs: [{ id: "ready-job", artifact_hash: "hash", proposal: { summary: "Approved", changes: [], apis: [{id:"lookup",auth:{type:"header",profile:"account"}}], verification_credential_fields: [{key:"APP_USER",kind:"username"},{key:"APP_PASSWORD",kind:"password"}] } }] } as T;
       if (path === "enable-skill" && ++verifies === 1) throw new Error("search business fields mismatch");
       return { confirmation_token: "confirmed", ok: true } as T;
     });
     render(<AppsView />);
     fireEvent.click(await screen.findByRole("button", { name: /修复.*部署|重新部署/ }));
     fireEvent.click(await screen.findByRole("button", { name: "确认并上传部署" }));
-    fireEvent.change(await screen.findByLabelText("业务验证凭据 APP_SESSION_COOKIE", {}, {timeout:5000}), {target:{value:"sid=test-session"}});
+    const username = await screen.findByLabelText("业务验证凭据 APP_USER", {}, { timeout: 3500 });
+    const password = screen.getByLabelText("业务验证凭据 APP_PASSWORD");
+    expect(username.getAttribute("type")).toBe("text");
+    expect(password.getAttribute("type")).toBe("password");
+    fireEvent.change(username, { target: { value: "test-user" } });
+    fireEvent.change(password, { target: { value: "test-password" } });
     fireEvent.click(await screen.findByRole("button", { name: "仅重试业务验证" }, { timeout: 5000 }));
     await waitFor(() => expect(screen.getByText("应用健康与只读业务验证通过，本地技能已启用")).toBeTruthy());
     expect(verifies).toBe(2);
-    expect(appDeliveryRequest).toHaveBeenCalledWith("enable-skill", expect.objectContaining({verification_credentials:{APP_SESSION_COOKIE:"sid=test-session"}}));
+    expect(appDeliveryRequest).toHaveBeenCalledWith("enable-skill", expect.objectContaining({verification_credentials:{APP_USER:"test-user",APP_PASSWORD:"test-password"}}));
     expect(publishAppToPlatform).toHaveBeenCalledTimes(1);
     vi.mocked(appDeliveryRequest).mockResolvedValue({ jobs: [] });
   });

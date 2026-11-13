@@ -102,19 +102,31 @@ def test_sqlite_root_does_not_cover_application_code(tmp_path):
     assert not any(m['container_path'] == '/app' for m in inspect_local_file_storage(tmp_path)['storage_mounts'])
 
 
-def test_pick_best_default_credentials(tmp_path):
-    from coworker.app_delivery_migration import inspect_credentials_in_source, pick_best_default_credentials
-    doc = tmp_path / 'docs'
-    doc.mkdir()
-    (doc / 'api.md').write_text('管理员账号：admin，默认密码：ChangeMe123!')
-    info = inspect_credentials_in_source(tmp_path)
-    best = pick_best_default_credentials(info, tmp_path)
-    assert best.get('username') == 'admin'
-    assert best.get('password') == 'ChangeMe123!'
-    assert 'api.md' in best.get('source', '')
+def test_enrichment_never_turns_sample_passwords_into_defaults(tmp_path):
+    from coworker.app_delivery_migration import enrich_contract_and_discovery_report
+
+    (tmp_path / 'README.md').write_text('管理员账号：admin，默认密码：FixturePassword123!')
+    contract = {
+        'auth_profile': {'login_url': '/api/session', 'username_env': 'APP_USER', 'password_env': 'APP_PASSWORD'},
+        'configs': [{'key': 'APP_PASSWORD', 'default': '', 'secret': True, 'required': False}],
+    }
+    data = {'slug': 'app-example'}
+    proposal = {'contract': contract, 'changes': [], 'unresolved': []}
+    enrich_contract_and_discovery_report(tmp_path, data, proposal)
+    assert contract['configs'] == [{'key': 'APP_PASSWORD', 'default': '', 'secret': True, 'required': False}]
+    assert 'FixturePassword123!' not in json.dumps(proposal)
+    assert 'saved_verification_credentials' not in data
 
 
-def test_verification_credentials_fallback_to_defaults():
+def test_embedded_credential_aliases_cannot_be_packaged():
+    from coworker.app_delivery_skill.scripts.delivery import validate_credential_references
+
+    for key in ('default_username', 'default_password', 'default_token', 'login_body'):
+        with pytest.raises(ValueError, match='embedded credentials'):
+            validate_credential_references({'auth_profiles': {'admin': {key: 'fixture'}}})
+
+
+def test_verification_credentials_ignore_old_defaults():
     from coworker.server.app_delivery_routes import verification_credentials
     contract = {
         'apis': [{'id': 'test', 'path': '/test', 'auth': {'type': 'header', 'header': 'Cookie', 'env': 'OPC_SESSION_TOKEN'}}],
@@ -133,11 +145,13 @@ def test_verification_credentials_fallback_to_defaults():
         ]
     }
     creds = verification_credentials(contract, [{'key': 'OPC_ADMIN_PASSWORD', 'value': ''}], None)
-    assert creds['OPC_ADMIN_USERNAME'] == 'admin'
-    assert creds['OPC_ADMIN_PASSWORD'] == 'ChangeMe123!'
+    assert not creds.get('OPC_ADMIN_USERNAME')
+    assert not creds.get('OPC_ADMIN_PASSWORD')
+    explicit = verification_credentials(contract, [], {'OPC_ADMIN_USERNAME': 'operator', 'OPC_ADMIN_PASSWORD': 'provided'})
+    assert explicit == {'OPC_ADMIN_USERNAME': 'operator', 'OPC_ADMIN_PASSWORD': 'provided'}
 
 
-def test_auto_login_without_env_vars_using_contract_defaults():
+def test_auto_login_requires_explicit_credentials_even_with_old_defaults():
     seen = []
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
@@ -180,10 +194,15 @@ def test_auto_login_without_env_vars_using_contract_defaults():
                 'auth': {'type': 'header', 'header': 'Cookie', 'profile': 'admin'},
             }]
         }
-        code, content_type, data = execute(contract, 'get-data', {}, None, credential_env={})
+        with pytest.raises(ValueError, match='missing credential'):
+            execute(contract, 'get-data', {}, None, credential_env={})
+        assert seen == []
+        code, content_type, data = execute(
+            contract, 'get-data', {}, None, credential_env={'ADMIN_USER': 'operator', 'ADMIN_PASS': 'provided'},
+        )
         assert code == 200
         assert delivery.json_matches(data, {'authenticated': True})
-        assert seen == [{'username': 'default_admin', 'password': 'DefaultPassword99!'}]
+        assert seen == [{'username': 'operator', 'password': 'provided'}]
     finally:
         server.shutdown()
         server.server_close()

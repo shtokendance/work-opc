@@ -5089,6 +5089,7 @@ export interface AppDeliveryJob {
       step3_skill_generation?: Record<string, any>;
       step4_confirmations?: string[];
     };
+    verification_credential_fields?: { key: string; kind: "username" | "password" | "session" }[];
     auth_profile?: {
       type?: string;
       login_url?: string;

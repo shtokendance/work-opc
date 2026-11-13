@@ -20,12 +20,17 @@ from .app_delivery_config import original_fields, original_value, runtime_config
 from .app_delivery_migration import (
     enrich_contract_and_discovery_report,
     fetch_platform_dockerfile_template,
-    inspect_credentials_in_source,
     inspect_local_sqlite_files,
     scan_app_routes_and_pages,
     select_and_filter_platform_resources,
 )
-from .app_delivery_auth import resolve_authentication, validate_auth_questions, validate_auth_probe_coverage
+from .app_delivery_auth import (
+    resolve_authentication,
+    validate_auth_evidence,
+    validate_auth_questions,
+    validate_auth_probe_coverage,
+    verification_credential_fields,
+)
 from .app_delivery_repair import read_archive_file, check_archive_syntax
 from .app_delivery_sources import dependency_path
 from .engine import TurnEngine
@@ -68,8 +73,6 @@ def format_tool_step(name: str, args: dict | None) -> str:
         return "🔍 参考标准适配契约与架构模式"
     elif name == "read_go_dependency":
         return "📦 分析 Go 模块依赖契约 (go.mod)"
-    elif name == "inspect_credentials_and_decrypt":
-        return "🔐 探测敏感凭证与环境变量契约"
     elif name == "fetch_dockerfile_template":
         lang = args.get("language") or ""
         return f"🐳 匹配官方适配 Dockerfile 容器模板{f' ({lang})' if lang else ''}"
@@ -80,7 +83,7 @@ def format_tool_step(name: str, args: dict | None) -> str:
     elif name == "propose_file_change":
         return f"✏️ 规划文件修改建议: {path}" if path else "✏️ 规划文件修改方案"
     elif name == "submit_proposal":
-        return "📋 汇总技术改造方案与免登业务技能契约"
+        return "📋 汇总技术改造方案与业务技能契约"
     return f"⚡ 执行分析工具: {name}{f' ({path})' if path else ''}"
 
 
@@ -143,7 +146,7 @@ class AppDelivery:
                 "health_path": enriched["contract"].get("health", {}).get("path"),
                 "verification_plan": enriched["contract"].get("verification", {}),
                 "four_step_report": proposal.get("four_step_report", {}),
-                "auth_profile": enriched["contract"].get("auth_profile", {}),
+                "verification_credential_fields": verification_credential_fields(enriched["contract"]),
                 "discovery_report": enriched.get("discovery_report", {}),
                 "transformation_report": enriched.get("transformation_report", {}),
             }
@@ -311,6 +314,21 @@ class AppDelivery:
             for k in ("schema_version", "slug", "name", "description", "base_url", "runtime", "build_context", "health", "auth_profile", "auth_profiles", "auth_rules", "auth_blockers", "configs", "resources", "storage_mounts", "verification")
             if k in prev_contract
         }
+        def reference_only(profile):
+            return {k: v for k, v in profile.items() if k not in delivery.EMBEDDED_CREDENTIAL_FIELDS}
+
+        if "auth_profile" in compact_contract:
+            compact_contract["auth_profile"] = reference_only(compact_contract["auth_profile"])
+        if "auth_profiles" in compact_contract:
+            compact_contract["auth_profiles"] = {
+                name: reference_only(profile) for name, profile in compact_contract["auth_profiles"].items()
+            }
+        credential_keys = {item["key"] for item in verification_credential_fields(prev_contract)}
+        if "configs" in compact_contract:
+            compact_contract["configs"] = [
+                {**c, "default": ""} if c.get("secret") or c.get("key") in credential_keys else c
+                for c in compact_contract["configs"]
+            ]
         return {
             "summary": plan["summary"],
             "issues": plan["issues"],
@@ -410,7 +428,7 @@ class AppDelivery:
         if feedback.strip():
             data.setdefault("conversation", []).append({"role": "user", "text": feedback})
         data["revision"] = data.get("revision", 0) + 1
-        for key in ("artifact_hash", "manifest", "confirmation_token", "deployment_confirmation", "published", "publish_request_id", "publish_state", "verified_config_fingerprint", "verified_version", "verification", "approved_changes", "preparation_checks"):
+        for key in ("artifact_hash", "manifest", "confirmation_token", "deployment_confirmation", "published", "publish_request_id", "publish_state", "verified_config_fingerprint", "verified_version", "verification", "approved_changes", "preparation_checks", "saved_verification_credentials"):
             data.pop(key, None)
         previous = data.get("feedback", "")
         combined = (previous + "\n\n本次补充（有冲突时以本次为准）：\n" + feedback).strip() if previous and feedback.strip() else feedback or previous
@@ -461,7 +479,12 @@ class AppDelivery:
                 return "Binary file: not a text source"
             text = redacted(text, path).splitlines()
             start = max(0, start_line - 1)
-            excerpt = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(text[start:start + min(5000, max(1, lines))], start))[:500_000]
+            numbered = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(text[start:start + min(5000, max(1, lines))], start))
+            if len(numbered) > 500_000:
+                numbered = numbered[:500_000].rsplit("\n", 1)[0]
+            last = start + len(numbered.splitlines())
+            range_info = f"返回第 {start + 1}–{last} 行" if numbered else "所请求范围无内容"
+            excerpt = f"{path} 共 {len(text)} 行，{range_info}。\n{numbered}"
             fields = original_fields(source, path)
             if fields:
                 excerpt += "\nOriginal configuration references (metadata only; values stay local):\n" + json.dumps(fields, ensure_ascii=False)
@@ -505,11 +528,6 @@ class AppDelivery:
                 raise ValueError("同一修改 ID 不能对应不同文件")
             draft_files[id] = change
             return "File proposal recorded: " + id + ". Source is unchanged. Submit metadata and contract when all files are proposed."
-
-        def inspect_credentials_and_decrypt(path: str = "", cipher_text: str = "", algorithm_hint: str = "") -> str:
-            """Step 1 tool: Scan source config/seed/SQLite for admin/login credentials and decrypt encoded/encrypted passwords."""
-            info = inspect_credentials_in_source(source, path, cipher_text, algorithm_hint)
-            return json.dumps(info, ensure_ascii=False)
 
         def fetch_dockerfile_template(language: str, version: str = "") -> str:
             """Step 2 tool: Fetch Dockerfile base image and template for (language, version) from platform-opc deploy-opc DB."""
@@ -571,17 +589,7 @@ class AppDelivery:
                             raise ValueError("本轮未修改失败制品中的文件，不能将相同程序错误标记为已修复；请读取出错文件并修正")
                 validate_auth_questions(candidate)
                 resolve_authentication(candidate["contract"])
-                for rule in candidate["contract"].get("auth_rules", []):
-                    for evidence in rule["evidence"]:
-                        match = re.fullmatch(r"(.+):(\d+)(?:-\d+)?", evidence)
-                        if not match:
-                            raise ValueError("认证证据必须是 文件:行号，而不是旧提案或猜测")
-                        evidence_path = delivery.relative(source, match[1])
-                        content = next((c["content"] for c in candidate["changes"] if c["path"] == match[1]), None)
-                        if content is None:
-                            content = delivery.text_of(evidence_path) if evidence_path.is_file() else None
-                        if content is None or not 1 <= int(match[2]) <= len(content.splitlines()):
-                            raise ValueError("认证证据位置不存在：" + evidence)
+                validate_auth_evidence(source, candidate)
 
                 self.validate_proposal(data, source, candidate)
                 if not candidate.get("unresolved") and not candidate["contract"].get("unresolved"):
@@ -607,7 +615,6 @@ class AppDelivery:
             read_failed_file,
             read_adapter_reference,
             read_go_dependency,
-            inspect_credentials_and_decrypt,
             fetch_dockerfile_template,
             inspect_local_storage,
             propose_file_change,
@@ -711,7 +718,9 @@ do not repeat them or treat a vague '可以' as consent to several unrelated cha
 For technical code defects, investigate and repair in the isolated proposal without asking users to
 debug. Ask about business intent only if a fix changes behavior or cannot be inferred from code.
 Keep SQLite and all embedded file databases in their original engine/schema. Inspect their file paths, include original seeds in build_context, and declare persistent directory mounts including WAL/SHM/journal files. Never migrate schemas/data to platform databases or rewrite database drivers in this delivery flow. Preserve existing remote database connections. A localhost database server is a separate service, not an embedded file; do not pretend a file mount alone starts that service.
-Return credential config defaults empty, secret=true.
+Return secret configuration defaults empty, secret=true. Application login credentials for
+business verification are runtime auth profile references, not container configuration. Never
+extract, decode, guess or ask for credential values in the analysis conversation.
 For every existing setting mapped to a runtime environment variable, set configs[].source to the
 exact {"path":"conf/config.yaml","keys":["databases","devops-db","dsn"]} reference returned by
 read_source metadata. Work reads this value locally, preserves it in the protected configuration
@@ -732,10 +741,10 @@ IMPORTANT ANTI-LOOP RULES:
 2. `scan_routes_and_pages` automatically caches 100% of APIs and pages in the backend and auto-merges them into `contract.apis` and `contract.pages` inside `submit_proposal`. When an app has many APIs, you do NOT need to manually re-type all 60+ API objects in `submit_proposal` — you can pass `contract.apis=[]` (or only a few customized APIs) and the backend will deterministically populate all scanned APIs and pages with zero omissions.
 3. LOCAL STORAGE POLICY: SQLite, JSON, uploaded files and other embedded data stay on persistent volumes. Never offer PostgreSQL migration or rewrite SQL/drivers. Old conversation answers requesting migration do not override this policy; migration is a separate task.
 4. When multiple platform resources exist, `available_resource_metadata` already provides the `is_default: true` default resource for each type (`postgres`, `redis`, `s3`, etc.). Suggest the matching default resource, but preserve existing connections until the user confirms the binding.
-5. NEVER ask the user whether to keep default/demo admin passwords (e.g. `admin / ChangeMe123!`) or whether local JSON/file data can be stored in container local files — preserve existing accounts without exposing credentials; reference runtime credential environment variables in auth profiles, and retain local JSON/files with persistent mounts.
-6. Format `summary` cleanly using multi-line sections separated by `\\n` (e.g., `【应用定位】...\\n【运行环境】...\\n【接口与页面】...\\n【登录与鉴权】...\\n【数据与存储】...\\n【改造与技能】...`) rather than jamming everything into a single paragraph. When `previous_plan` is present (Round 2+ after user answers), DO NOT repeat Step 1 discovery or re-read unchanged files; reuse the pre-staged `changes` IDs from `previous_plan.changes` and write a concise 2-3 line `summary` confirming how `user_answers` were applied.
+5. NEVER ask the user whether to keep default/demo admin passwords (e.g. `admin / ChangeMe123!`) or whether local JSON/file data can be stored in container local files — preserve existing accounts, reference runtime credential environment variables in auth profiles, and retain local JSON/files with persistent mounts.
+6. Format `summary` cleanly using multi-line sections separated by `\\n` (e.g., `【应用定位】...\\n【运行环境】...\\n【接口与页面】...\\n【登录与鉴权】...\\n【数据与存储】...\\n【改造与技能】...`) rather than jamming everything into a single paragraph. When `previous_plan` is present (Round 2+ after user answers), Do not repeat general discovery unless needed; reread authentication files when correcting evidence; reuse the pre-staged `changes` IDs from `previous_plan.changes` and write a concise 2-3 line `summary` confirming how `user_answers` were applied.
 """
-        instructions += "\nAUTHENTICATION: scanner auth=unknown means unanalysed, NEVER public. Read login handlers, middleware, session/token extraction and role checks. Never infer X-Admin-Token from admin/permission names. Use auth_rules with target api/page, exact path or prefix, optional method, auth object and source evidence; exact public login/health exceptions override prefixes. Use auth_profiles keyed by id and auth.profile for multiple identities; old auth_profile remains supported. Cookie is type=header, header=Cookie; Bearer uses type=bearer; env is a credential environment variable. Prefer username_env/password_env/token_env runtime references where configured. Include readonly verification cases for every protected auth profile and separate browser_cases for protected pages. Questions about missing credentials need auth_blockers with evidence, affected capabilities and one concrete account connection action. Hashes are not decryptable. Never disable auth or expand roles. Old proposals and scan results are not evidence; re-read authentication source during repair."
+        instructions += "\nAUTHENTICATION: scanner auth=unknown means unanalysed, NEVER public. Read login handlers, middleware, session/token extraction and role checks. Never infer X-Admin-Token from admin/permission names. Use auth_rules with target api/page, exact path or prefix, optional method, auth object and source evidence; exact public login/health exceptions override prefixes. Use auth_profiles keyed by id and auth.profile for multiple identities; old auth_profile remains supported. Cookie is type=header, header=Cookie; Bearer uses type=bearer; env is a credential environment variable. Prefer username_env/password_env/token_env runtime references where configured. Include readonly verification cases for every protected auth profile and separate browser_cases for protected pages. A normal application login needed only for verification is not an unresolved adaptation decision. Defer entering credentials to business verification. Ask only about a genuine external authorization or role decision that blocks adaptation; include auth_blockers with source evidence, affected capabilities and one concrete action. Quote exact source lines returned by read_source. If a citation is rejected, reread that file and correct only that evidence before resubmitting. Hashes are not decryptable. Never disable auth or expand roles. Old proposals and scan results are not evidence; re-read authentication source during repair."
         model_settings: dict[str, Any] = {"max_tokens": 32000}
         effort = data.get("reasoning_effort")
         if effort:
@@ -746,7 +755,7 @@ IMPORTANT ANTI-LOOP RULES:
         ai_resources = select_and_filter_platform_resources(data.get("resources") or [], data["slug"], default_only=True)
         prev_plan = self.previous_plan(job_id)
         task_instruction = (
-            "这是基于上一轮分析结果（previous_plan）的用户确认/补充轮次。上一轮暂存的文件修改（changes）已预载入暂存区（未改动的文件可直接按原 id 引用，无需重复读取源码或重新调用 propose_file_change），扫描的全部接口与页面也已由后端缓存并自动合并。请仅针对 user_answers 进行必要的增量调整并直接调用 submit_proposal（unresolved 设为空数组 []）。本轮 summary 只需简明说明已按用户确认完成了哪些调整，严禁重复输出『第一步发现：…』等全量摸底内容！"
+            "这是基于上一轮分析结果（previous_plan）的用户确认/补充轮次。上一轮暂存的文件修改（changes）已预载入暂存区（未改动的文件可直接按原 id 引用，无需重复读取源码或重新调用 propose_file_change），扫描的全部接口与页面也已由后端缓存并自动合并。请仅针对 user_answers 进行必要的增量调整并直接调用 submit_proposal（只有真正阻塞改造的事项才保留在 unresolved）。本轮 summary 只需简明说明已按用户确认完成了哪些调整，严禁重复输出『第一步发现：…』等全量摸底内容！"
             if (prev_plan and data.get("feedback", "").strip())
             else "分析应用并提交完整修改提案和业务契约。先调用 scan_routes_and_pages 与读取源码工具全面摸清应用，完整收录所有页面与所有接口，按四步规范分段清晰输出分析与改造方案。"
         )
@@ -842,6 +851,7 @@ IMPORTANT ANTI-LOOP RULES:
         contract = proposal.get("contract", {})
         if not isinstance(contract, dict):
             raise ValueError("业务契约必须是对象")
+        delivery.validate_credential_references(contract)
         for key in ("changes", "issues", "unresolved"):
             if not isinstance(proposal.get(key, []), list):
                 raise ValueError("提案列表字段无效：" + key)
@@ -856,7 +866,7 @@ IMPORTANT ANTI-LOOP RULES:
             if type(config.get("secret")) is not bool or type(config.get("required")) is not bool or not isinstance(config.get("default", ""), str):
                 raise ValueError("配置必须声明 secret、required 和字符串默认值")
             if config["secret"] and config.get("default"):
-                raise ValueError("秘密配置不能包含默认值")
+                raise ValueError(f"秘密配置 {config['key']} 不能包含默认值。请设 default=空字符串，原值仅通过 source 引用。")
             if config.get("source") is not None:
                 original_value(source, config["source"])
         if not isinstance(contract.get("runtime", {}), dict):
@@ -963,7 +973,7 @@ IMPORTANT ANTI-LOOP RULES:
             delivery.save(staging / "app-contract.json", effective_proposal["contract"])
             delivery.save(staging / "review.json", {"kind": "ai-technical" if technical_preparation else "human", "scope": "deployment-adaptation", "source": ("Work-OPC 自动技术准备；用户仅在连接替换及最终部署时确认；不是人工代码审查：" if technical_preparation else "Work-OPC 向导对本提案摘要和逐项文件/配置变更的明确确认：") + data["proposal_hash"], "approved_issue_ids": sorted(expected) or ["NO_SOURCE_CHANGES"], "unresolved": []})
             (staging / "analysis.md").write_text(proposal["summary"] + "\n" + json.dumps(proposal["issues"], ensure_ascii=False))
-            data["events"].append("📄 正在生成应用交付契约与免登业务技能定义…")
+            data["events"].append("📄 正在生成应用交付契约与业务技能定义…")
             self.save(data)
             out = self.path(job_id) / "bundle"
             if out.exists():
@@ -1036,6 +1046,10 @@ IMPORTANT ANTI-LOOP RULES:
         expected = {"artifact_hash": data["artifact_hash"], "app_config": body.get("app_config", []), "resource_ids": sorted(body.get("resource_ids", [])), "app_url": data["app_url"]}
         if fingerprint(expected) != data["confirmation_token"]:
             raise ValueError("包、配置或资源发生变化，原部署确认已失效")
+        try:
+            delivery.validate_credential_references(data["proposal"]["contract"])
+        except ValueError as exc:
+            raise ValueError("旧交付包包含不支持的认证配置，请保留原源码并重新分析、打包后发布") from exc
         folder = self.path(job_id) / "bundle"
         summary = delivery.load(folder / "summary.json")
         if fingerprint(summary) != data["artifact_hash"]:

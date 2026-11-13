@@ -66,8 +66,8 @@ def validate_basic(value, schema, label):
 
 
 def _resolve_contract_auth_credential(contract, auth, credential_env=None):
+    """Use a supplied session token or exchange supplied credentials at the app login endpoint."""
     environment = os.environ if credential_env is None else credential_env
-    """Fallback to contract.auth_profile (discovered/decrypted admin credentials or auto-login) when env var is not externally set."""
     profile_id = auth.get("profile")
     profile = contract.get("auth_profiles", {}).get(profile_id) if profile_id else contract.get("auth_profile")
     if profile_id and not isinstance(profile, dict):
@@ -78,34 +78,15 @@ def _resolve_contract_auth_credential(contract, auth, credential_env=None):
     if token_key and environment.get(token_key):
         return str(environment[token_key])
 
-    username = ""
-    password = ""
     u_key = profile.get("username_env")
-    if u_key:
-        username = environment.get(u_key) or ""
-    if not username and profile.get("default_username"):
-        username = str(profile["default_username"])
-    if not username and u_key:
-        for cfg in contract.get("configs", []):
-            if cfg.get("key") == u_key and cfg.get("default"):
-                username = str(cfg["default"])
-                break
-
     p_key = profile.get("password_env")
-    if p_key:
-        password = environment.get(p_key) or ""
-    if not password and profile.get("default_password"):
-        password = str(profile["default_password"])
-    if not password and p_key:
-        for cfg in contract.get("configs", []):
-            if cfg.get("key") == p_key and cfg.get("default"):
-                password = str(cfg["default"])
-                break
+    username = environment.get(u_key, "") if u_key else ""
+    password = environment.get(p_key, "") if p_key else ""
 
     login_url = str(profile.get("login_url") or "").strip()
     if login_url and (not login_url.startswith("/") or login_url.startswith("//") or "\\" in login_url or any(c in login_url for c in "\r\n#")):
         raise ValueError("login URL must be a same-origin application path")
-    if login_url and (username or password):
+    if login_url and (u_key or p_key) and (not u_key or username) and (not p_key or password):
         try:
             body_tpl = profile.get("login_body_template") or profile.get("login_body")
             if not isinstance(body_tpl, dict) or not body_tpl:
