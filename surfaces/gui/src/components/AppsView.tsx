@@ -8,12 +8,10 @@ import {
   getAppVersionArtifactUrl,
   getDeployedApp,
   getModelControls,
-  getPlatformConfig,
   getSettings,
   listAppVersions,
   listDeployedApps,
   listOnlineResources,
-  platformBase,
   publishAppToPlatform,
   recheckAppHealth,
   rollbackAppVersion,
@@ -170,10 +168,6 @@ export function AppsView({ onBack }: Props) {
   const [step2Running, setStep2Running] = useState(false);
   const step2NextRef = useRef<(() => void) | null>(null);
 
-  // Platform Resource API Configuration state
-  const [showPlatformConfigModal, setShowPlatformConfigModal] = useState(false);
-  const [platformUrlInput, setPlatformUrlInput] = useState(platformBase());
-
   const loadAppVersions = async (appSlug: string) => {
     if (!appSlug) return;
     setLoadingVersions(true);
@@ -318,16 +312,10 @@ export function AppsView({ onBack }: Props) {
   }, []);
 
   useEffect(() => {
-    getPlatformConfig().then((cfg) => {
-      if (cfg?.platform_url) {
-        setPlatformUrlInput(cfg.platform_url);
-      }
-    }).catch(() => {}).finally(() => {
-      refreshApps();
-      listOnlineResources().then((res) => {
-        setOnlineResources(res.resources || []);
-      }).catch(() => {});
-    });
+    refreshApps();
+    listOnlineResources().then((res) => {
+      setOnlineResources(res.resources || []);
+    }).catch(() => {});
 
     getSettings().then((s) => {
       if (s?.models && s.models.length > 0) {
@@ -729,27 +717,6 @@ export function AppsView({ onBack }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
-          <a
-            href={`${platformBase()}/admin/deploy`}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink"
-            title="在 Platform 管理后台查看全局存储"
-          >
-            <Icon name="folder" size={13} />
-            存储管理中心
-          </a>
-          <button
-            onClick={() => {
-              setPlatformUrlInput(platformBase());
-              setShowPlatformConfigModal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors"
-            title="查看当前企微登录的 Platform 和资源"
-          >
-            <Icon name="sliders" size={13} />
-            平台资源
-          </button>
           <button
             onClick={refreshApps}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-xs font-medium text-muted hover:text-ink hover:bg-chromeHover transition-colors"
@@ -2699,84 +2666,6 @@ export function AppsView({ onBack }: Props) {
             </div>
           </div>
         )}
-
-      {/* Modal: Platform-OPC Resource API Configuration */}
-      {showPlatformConfigModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-panel w-full max-w-lg rounded-2xl border border-line shadow-2xl overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-accentSoft text-accent flex items-center justify-center">
-                  <Icon name="sliders" size={16} />
-                </div>
-                <div>
-                  <h2 className="text-ui font-semibold text-ink">Platform-OPC 资源</h2>
-                  <p className="text-xs text-muted">应用中心使用当前企微登录的平台。可在 OPC 设置中更改。</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowPlatformConfigModal(false)}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-paper"
-              >
-                <Icon name="x" size={16} />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4 text-ui">
-              <div>
-                <label className="block text-xs font-medium text-ink mb-1.5" htmlFor="platform-opc-url-input">
-                  Platform-OPC 网关基础地址 (Base URL)
-                </label>
-                <input
-                  id="platform-opc-url-input"
-                  type="text"
-                  value={platformUrlInput}
-                  readOnly
-                  placeholder="https://shtokendance.benlai.com"
-                  className="w-full rounded-xl border border-line bg-paper px-3.5 py-2 font-mono text-xs text-ink focus:outline-accent"
-                />
-              </div>
-
-              <div className="rounded-xl border border-line bg-paper/60 p-3.5 space-y-2.5 text-xs">
-                <div>
-                  <span className="text-muted block">基础服务资源获取 API (MySQL / PG / Redis / MQ)</span>
-                  <code className="font-mono text-accent break-all">
-                    {platformUrlInput.replace(/\/+$/, "")}/integration/v1/apps/resources
-                  </code>
-                </div>
-                <div>
-                  <span className="text-muted block">语言+版本 Dockerfile 模板获取 API</span>
-                  <code className="font-mono text-accent break-all">
-                    {platformUrlInput.replace(/\/+$/, "")}/integration/v1/apps/dockerfile-templates
-                  </code>
-                </div>
-                <div className="pt-1 border-t border-line/60 flex items-center justify-between">
-                  <span className="text-muted">当前已加载平台基础资源：{onlineResources.length} 项</span>
-                  <a
-                    href={`${platformUrlInput.replace(/\/+$/, "")}/admin/deploy`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-accent hover:underline font-medium"
-                  >
-                    打开 Deploy-OPC 治理后台 ↗
-                  </a>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 px-6 py-4 border-t border-line bg-paper/50">
-              <button
-                type="button"
-                onClick={() => setShowPlatformConfigModal(false)}
-                className="px-4 py-2 rounded-xl border border-line text-xs font-medium text-muted hover:text-ink hover:bg-paper"
-              >
-                取消
-              </button>
-
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );
