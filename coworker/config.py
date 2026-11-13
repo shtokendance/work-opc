@@ -143,6 +143,11 @@ class Config:
     # Optional dedicated web origin URL (Web console & knowledge base external links).
     # If empty, automatically inherits from opc_platform_base or default gateway.
     opc_web_origin: str = ""
+    # Optional dedicated app domain root suffix for generated app URLs (e.g. 10.101.102.116.nip.io:8080).
+    # If empty, automatically infers from deploy_base / platform_base or defaults to 10.101.102.116.nip.io:8080.
+    opc_app_domain_root: str = ""
+    # Default container listening port for new app deployments (defaults to 8080).
+    opc_app_default_port: int = 8080
     # Where agents' commands and file tools run: "direct" (in this process, unconfined),
     # "seatbelt" (macOS: a process on this Mac under the system sandbox), "openshell" (one
     # OpenShell sandbox per agent). Sessions are refused when the chosen sandbox is not
@@ -202,6 +207,8 @@ _FIELDS = {
     "opc_platform_base",
     "opc_deploy_base",
     "opc_web_origin",
+    "opc_app_domain_root",
+    "opc_app_default_port",
 }
 
 # These fields change what consequential actions can run without a prompt, so the normal
@@ -231,8 +238,8 @@ def global_config_path() -> Path:
     return state_dir() / "config.toml"
 
 
-def set_global_value(key: str, value: str, *, path: Optional[Path] = None) -> Path:
-    """Set one top-level string key in the machine's config.toml, keeping the rest of the
+def set_global_value(key: str, value: Any, *, path: Optional[Path] = None) -> Path:
+    """Set one top-level string or scalar key in the machine's config.toml, keeping the rest of the
     file as it is. The line goes at the top, because a top-level key must come before any
     table header."""
     if key not in _FIELDS:
@@ -241,8 +248,12 @@ def set_global_value(key: str, value: str, *, path: Optional[Path] = None) -> Pa
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = target.read_text(encoding="utf-8").splitlines() if target.is_file() else []
     kept = [line for line in lines if not re.match(rf"\s*{re.escape(key)}\s*=", line)]
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    target.write_text("\n".join([f'{key} = "{escaped}"', *kept]) + "\n", encoding="utf-8")
+    if isinstance(value, int) and not isinstance(value, bool):
+        new_line = f"{key} = {value}"
+    else:
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        new_line = f'{key} = "{escaped}"'
+    target.write_text("\n".join([new_line, *kept]) + "\n", encoding="utf-8")
     return target
 
 
@@ -444,6 +455,23 @@ def load_config(
     raw_opc = (os.environ.get("OPC_PLATFORM_BASE") or "").strip()
     if raw_opc:
         cfg.opc_platform_base = raw_opc
+    raw_domain_root = (os.environ.get("OPC_APP_DOMAIN_ROOT") or "").strip()
+    if raw_domain_root:
+        cfg.opc_app_domain_root = raw_domain_root
+    raw_default_port = (os.environ.get("OPC_APP_DEFAULT_PORT") or "").strip()
+    if raw_default_port:
+        try:
+            port_val = int(raw_default_port)
+            if 1 <= port_val <= 65535:
+                cfg.opc_app_default_port = port_val
+        except ValueError:
+            pass
+    try:
+        cfg.opc_app_default_port = int(cfg.opc_app_default_port)
+        if not (1 <= cfg.opc_app_default_port <= 65535):
+            cfg.opc_app_default_port = 8080
+    except (ValueError, TypeError):
+        cfg.opc_app_default_port = 8080
     return cfg
 
 

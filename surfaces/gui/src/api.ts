@@ -4743,10 +4743,16 @@ export interface OpcConfig {
   platform_base: string;
   deploy_base: string;
   web_origin: string;
+  app_domain_root?: string;
+  app_default_port?: number;
   effective_platform_base: string;
   effective_deploy_base: string;
   effective_web_origin: string;
+  effective_app_domain_root?: string;
+  effective_app_default_port?: number;
   default_platform_base: string;
+  default_app_domain_root?: string;
+  default_app_default_port?: number;
 }
 
 export interface TestOpcConnectionResult {
@@ -4768,6 +4774,16 @@ export async function getOpcConfig(): Promise<OpcConfig> {
       localStorage.setItem("opc_web_origin", data.effective_web_origin);
     } catch {}
   }
+  if (data?.effective_app_domain_root) {
+    try {
+      localStorage.setItem("opc_app_domain_root", data.effective_app_domain_root);
+    } catch {}
+  }
+  if (data?.effective_app_default_port) {
+    try {
+      localStorage.setItem("opc_app_default_port", String(data.effective_app_default_port));
+    } catch {}
+  }
   return data;
 }
 
@@ -4775,6 +4791,8 @@ export async function updateOpcConfig(payload: {
   platform_base: string;
   deploy_base?: string;
   web_origin?: string;
+  app_domain_root?: string;
+  app_default_port?: number;
 }): Promise<OpcConfig> {
   const res = await fetch(`${httpBase()}/v1/opc/config`, {
     method: "PUT",
@@ -4789,6 +4807,16 @@ export async function updateOpcConfig(payload: {
   if (data?.effective_web_origin) {
     try {
       localStorage.setItem("opc_web_origin", data.effective_web_origin);
+    } catch {}
+  }
+  if (data?.effective_app_domain_root) {
+    try {
+      localStorage.setItem("opc_app_domain_root", data.effective_app_domain_root);
+    } catch {}
+  }
+  if (data?.effective_app_default_port) {
+    try {
+      localStorage.setItem("opc_app_default_port", String(data.effective_app_default_port));
     } catch {}
   }
   return data;

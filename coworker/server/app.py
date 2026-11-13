@@ -2235,19 +2235,39 @@ def create_app(manager: SessionManager) -> FastAPI:
         p_base = (getattr(c, "opc_platform_base", "") or "").strip()
         d_base = (getattr(c, "opc_deploy_base", "") or "").strip()
         w_origin = (getattr(c, "opc_web_origin", "") or "").strip()
+        a_domain = (getattr(c, "opc_app_domain_root", "") or "").strip()
+        a_port = getattr(c, "opc_app_default_port", 8080)
+        try:
+            a_port = int(a_port)
+            if not (1 <= a_port <= 65535):
+                a_port = 8080
+        except Exception:
+            a_port = 8080
+
         def_p = "https://shtokendance.benlai.com"
         eff_p = p_base or enterprise_auth.platform_base or def_p
         eff_d = d_base or eff_p
         eff_w = w_origin or eff_p
+
+        # Derive default app domain root if not explicitly set
+        def_domain = "10.101.102.116.nip.io:8080"
+        eff_domain = a_domain or def_domain
+
         return {
             "ok": True,
             "platform_base": p_base or eff_p,
             "deploy_base": d_base,
             "web_origin": w_origin,
+            "app_domain_root": a_domain,
+            "app_default_port": a_port,
             "effective_platform_base": eff_p,
             "effective_deploy_base": eff_d,
             "effective_web_origin": eff_w,
+            "effective_app_domain_root": eff_domain,
+            "effective_app_default_port": a_port,
             "default_platform_base": def_p,
+            "default_app_domain_root": def_domain,
+            "default_app_default_port": 8080,
         }
 
     @app.get("/v1/opc/config")
@@ -2259,8 +2279,44 @@ def create_app(manager: SessionManager) -> FastAPI:
         raw_p = str((body or {}).get("platform_base") or "").strip().rstrip("/")
         raw_d = str((body or {}).get("deploy_base") or "").strip().rstrip("/")
         raw_w = str((body or {}).get("web_origin") or "").strip().rstrip("/")
+        raw_domain = str((body or {}).get("app_domain_root") or "").strip()
+        raw_port = (body or {}).get("app_default_port")
 
         from urllib.parse import urlparse
+
+        # Sanitize app_domain_root (strip scheme and trailing slashes if user pasted http://...)
+        if raw_domain:
+            if "://" in raw_domain:
+                parsed_d = urlparse(raw_domain)
+                raw_domain = (parsed_d.netloc or parsed_d.path).strip("/")
+            else:
+                raw_domain = raw_domain.strip("/")
+
+        target_port = 8080
+        if raw_port is not None:
+            try:
+                p_val = int(raw_port)
+                if not (1 <= p_val <= 65535):
+                    return JSONResponse(
+                        {
+                            "error": {
+                                "code": "INVALID_PORT",
+                                "message": "应用默认容器端口无效，须为 1~65535 之间的整数",
+                            }
+                        },
+                        status_code=400,
+                    )
+                target_port = p_val
+            except (ValueError, TypeError):
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": "INVALID_PORT",
+                            "message": "应用默认容器端口格式错误，须为数字",
+                        }
+                    },
+                    status_code=400,
+                )
 
         for label, val in [("平台网关", raw_p), ("部署服务", raw_d), ("Web控制台", raw_w)]:
             if val:
@@ -2280,6 +2336,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         set_global_value("opc_platform_base", target_p)
         set_global_value("opc_deploy_base", raw_d)
         set_global_value("opc_web_origin", raw_w)
+        set_global_value("opc_app_domain_root", raw_domain)
+        set_global_value("opc_app_default_port", target_port)
 
         # Sync app-delivery platform_config.json
         try:
@@ -2288,7 +2346,11 @@ def create_app(manager: SessionManager) -> FastAPI:
             cfg_file = cfg_dir / "platform_config.json"
             cfg_file.write_text(
                 json.dumps(
-                    {"platform_url": raw_d or target_p},
+                    {
+                        "platform_url": raw_d or target_p,
+                        "app_domain_root": raw_domain,
+                        "app_default_port": target_port,
+                    },
                     ensure_ascii=False,
                     indent=2,
                 )
