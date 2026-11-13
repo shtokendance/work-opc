@@ -901,3 +901,62 @@ async def test_adapter_recovers_from_stale_auth_citation_without_guessing_creden
     assert ready["status"] == "ready"
     with zipfile.ZipFile(service.path(data["id"]) / "bundle/skill.zip") as archive:
         assert b"FixturePassword123!" not in archive.read("references/operations.json")
+
+
+@pytest.mark.asyncio
+async def test_preparation_recovers_from_model_timeout_and_binds_wizard_identity(service):
+    class Provider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            if len(self.calls) == 1:
+                raise TimeoutError("Request timed out.")
+            candidate = proposal()
+            candidate["contract"].update(slug="wrong", base_url="https://wrong.example")
+            return AssistantTurn(tool_calls=[ToolCall("submit-after-timeout", "submit_proposal", {
+                "proposal_json": json.dumps(candidate),
+            })])
+
+    service.manager.provider = Provider()
+    result = await analyzed(service)
+    saved = service.load(result["id"])
+    assert saved["proposal"]["contract"]["base_url"] == saved["app_url"]
+    assert saved["proposal"]["contract"]["slug"] == saved["slug"]
+    assert result["revision"] == 1
+    assert any("AI 服务暂时中断" in event for event in result["events"])
+    assert [c["role"] for c in saved["conversation"]] == ["assistant"]
+
+
+@pytest.mark.asyncio
+async def test_resume_reuses_drafted_file_without_adding_user_feedback(service):
+    class DraftProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            self.calls.append(model)
+            if len(self.calls) == 1:
+                return AssistantTurn(tool_calls=[ToolCall("stage-file", "propose_file_change", proposal()["changes"][0])])
+            return AssistantTurn(text="Incomplete result")
+
+    service.manager.provider = DraftProvider()
+    job = create(service)
+    job_id = job["id"]
+    service.launch_analysis(job_id, "保留业务")
+    await service.tasks[job_id]
+    failed = service.load(job_id)
+    assert failed["status"] == "failed"
+    assert "C01" in failed["analysis_draft"]
+
+    class ResumeProvider(ConfiguredProvider):
+        def complete(self, *, model, messages, tools=None, **settings):
+            candidate = proposal()
+            candidate["changes"][0].pop("content")
+            return AssistantTurn(tool_calls=[ToolCall("resume-submit", "submit_proposal", {
+                "proposal_json": json.dumps(candidate),
+            })])
+
+    service.manager.provider = ResumeProvider()
+    service.launch_analysis(job_id, resume=True)
+    await service.tasks[job_id]
+    result = service.load(job_id)
+    assert result["status"] == "review", result["error"]
+    assert [item["text"] for item in result["conversation"] if item["role"] == "user"] == ["保留业务"]
+    assert result["proposal"]["changes"][0]["content"] == proposal()["changes"][0]["content"]
+    assert "analysis_draft" not in result

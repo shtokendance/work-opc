@@ -309,7 +309,7 @@ def register_app_delivery_routes(app, manager):
     @app.post("/v1/apps/jobs/{job_id}/analyze")
     async def analyze(job_id: str, body: dict):
         try:
-            service.launch_analysis(job_id, str(body.get("feedback", "")), repair=body.get("mode") == "repair")
+            service.launch_analysis(job_id, str(body.get("feedback", "")), repair=body.get("mode") == "repair", resume=body.get("mode") == "resume")
             return {"ok": True}
         except (ValueError, OSError) as exc:
             raise fail(exc)
@@ -738,12 +738,13 @@ def register_app_delivery_routes(app, manager):
                     isinstance(api, dict) and api.get("path") != health["path"]
                     for api in contract.get("apis", [])
                 )
-                if has_pages and body.get("confirm_page_verification") is True:
-                    service.enable_verified_skill(data)
+                if has_pages and not has_non_health_apis and body.get("confirm_page_verification") is True:
+                    skill_enabled = service.enable_verified_skill(data)
                     data["verified_config_fingerprint"] = config_fp
                     data["verified_version"] = status.get("current_version")
                     data["verification"] = {
                         "status": "verified-deployed-page",
+                        "skill_enabled": skill_enabled,
                         "base_url": data["app_url"],
                         "checks": [],
                         "pages_verified": True,
@@ -763,11 +764,12 @@ def register_app_delivery_routes(app, manager):
                     service.save(data)
                     return {"ok": True, "verification": data["verification"]}
                 raise ValueError("缺少实际只读业务验证，健康检查不能代替。请在改造报告补充业务查询条件及预期结果后重新确认；页面应用需先完成浏览器验证。")
-            service.enable_verified_skill(data)
+            skill_enabled = service.enable_verified_skill(data)
             data["verified_config_fingerprint"] = config_fp
             data["verified_version"] = status.get("current_version")
             data["verification"] = {
                 "status": "verified-deployed-api",
+                "skill_enabled": skill_enabled,
                 "base_url": data["app_url"],
                 "checks": checks,
                 "pages_verified": False,

@@ -4879,7 +4879,7 @@ export interface DeployedApp {
   dockerfile_content?: string;
   app_url: string;
   container_port: number;
-  status: "building" | "running" | "failed";
+  status: "building" | "running" | "failed" | "unhealthy";
   current_version?: number;
   app_config: AppConfigItem[];
   resource_ids: string[];

@@ -296,14 +296,14 @@ export function AppDeliveryReview({
   const canContinue = ready && !running && !questions.length && !needsConfig && !feedback.trim() && !error;
   const activeError = error || job?.error || "";
 
-  const sendFeedback = async (customText?: string) => {
+  const sendFeedback = async (customText?: string, resume = false) => {
     const content = (customText ?? feedback).trim();
-    if (!content || running) return;
+    if ((!content && !resume) || running || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      await appDeliveryRequest(`jobs/${jobId}/analyze`, { feedback: content, ...((repairMode || job?.analysis_mode === "repair") ? { mode: "repair" } : {}) });
+      await appDeliveryRequest(`jobs/${jobId}/analyze`, resume ? { mode: "resume" } : { feedback: content, ...((repairMode || job?.analysis_mode === "repair") ? { mode: "repair" } : {}) });
       onInvalidate?.();
       preparing.current = "";
       configurationVersion.current = "";
@@ -315,7 +315,7 @@ export function AppDeliveryReview({
         proposal: undefined,
         artifact_hash: undefined,
         preparation_checks: undefined,
-        conversation: [...(j.conversation || []), { role: "user", text: content, revision: j.revision || 1 }],
+        conversation: resume ? j.conversation : [...(j.conversation || []), { role: "user", text: content, revision: j.revision || 1 }],
       } : j);
       if (customText === undefined) setFeedback("");
       setHandoff(null);
@@ -329,12 +329,6 @@ export function AppDeliveryReview({
   };
 
   const retry = () => sendFeedback();
-
-  const handleAiFixError = () => {
-    if (!activeError || running) return;
-    const prompt = "请处理这次未完成的问题，保留原业务和已确认的选择：\n" + activeError;
-    void sendFeedback(prompt);
-  };
 
   const prepare = async () => {
     inFlight.current = true;
@@ -427,7 +421,7 @@ export function AppDeliveryReview({
   const title = running
     ? "AI 正在检查和改造"
     : activeError
-    ? "有一步没有完成"
+    ? "应用准备暂停"
     : questions.length
     ? `有 ${questions.length} 件事需要你决定`
     : awaitingDiscoveryConfirm
@@ -435,11 +429,18 @@ export function AppDeliveryReview({
     : needsConfig
     ? "补齐连接配置，就可以继续"
     : ready
-    ? "应用已准备好，可以核对部署内容"
+    ? "交付包已生成，可以核对部署内容"
     : "正在读取应用";
 
   const conversation = job?.conversation || [];
   const events = job?.events || [];
+  const isRejected = (event: string) => event.startsWith("提案校验未通过");
+  const isTechnicalEvent = (event: string) => isRejected(event) || event.includes("完整提案尚未通过");
+  const visibleEvents = events.filter(event => !isTechnicalEvent(event));
+  const technicalEvents = events.filter(isTechnicalEvent);
+  const recovering = running && events.some(event => isTechnicalEvent(event) || event.startsWith("🔄"));
+  const isConnectionError = /timed out|超时|connection reset|连接中断/i.test(activeError);
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const eventsScrollRef = useRef<HTMLDivElement>(null);
 
@@ -877,34 +878,32 @@ export function AppDeliveryReview({
                 </div>
                 <span className="text-[11px] text-muted font-mono">
                   {running
-                    ? `正在执行第 ${events.length || 1} 步`
+                    ? `已记录 ${visibleEvents.length} 项进度`
                     : activeError
-                    ? `执行到第 ${events.length} 步`
-                    : `共完成 ${events.length} 个处理步骤`}
+                    ? `已记录 ${visibleEvents.length} 项进度`
+                    : `已记录 ${visibleEvents.length} 项进度`}
                 </span>
               </div>
 
+              {recovering && <p role="status" className="text-xs text-muted">AI 正在处理检查发现的问题，你的选择已保留。</p>}
               {/* Step Items List */}
               <div
                 ref={eventsScrollRef}
                 className="space-y-1.5 max-h-60 overflow-y-auto pr-1 pb-1 text-xs scroll-smooth"
               >
-                {events.map((ev, idx) => {
-                  const isLatest = idx === events.length - 1;
-                  const isFailedStep = !running && activeError && isLatest;
+                {visibleEvents.map((ev, idx) => {
+                  const isLatest = idx === visibleEvents.length - 1;
                   return (
                     <div
                       key={idx}
                       className={`flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 transition-colors ${
                         running && isLatest
                           ? "bg-accentSoft border border-accent/30 text-accent font-medium shadow-2xs"
-                          : isFailedStep
-                          ? "bg-danger/10 border border-danger/25 text-danger font-medium"
                           : "bg-panel/40 text-muted"
                       }`}
                     >
                       <span className="shrink-0 text-[11px] mt-0.5">
-                        {running && isLatest ? "▶" : isFailedStep ? "✕" : "✓"}
+                        {running && isLatest ? "▶" : "·"}
                       </span>
                       <span className="break-all flex-1 leading-relaxed">
                         {ev}
@@ -1012,6 +1011,15 @@ export function AppDeliveryReview({
           </div>
         )}
 
+        {technicalEvents.length > 0 && !activeError && (
+          <details className="text-xs text-muted">
+            <summary className="cursor-pointer">查看技术检查记录</summary>
+            <ul className="mt-2 space-y-1 break-words">
+              {technicalEvents.map((event, index) => <li key={index}>{isRejected(event) ? "× " : ""}{event}</li>)}
+            </ul>
+          </details>
+        )}
+
         {/* Error / Unfinished Step Bubble in Chat Stream */}
         {activeError && (
           <div className="flex items-start gap-3">
@@ -1022,17 +1030,27 @@ export function AppDeliveryReview({
               role="alert"
               className="flex-1 rounded-2xl rounded-tl-xs border border-danger/30 bg-danger/5 p-4 space-y-3"
             >
-              <div className="text-xs font-medium text-danger">技术准备未通过。你已回答的选择会保留，无需重复确认；AI 需要修正下面的检查问题。</div>
-              <p className="text-ink whitespace-pre-wrap leading-relaxed font-mono text-xs bg-panel/80 p-3 rounded-xl border border-danger/20">
-                {activeError}
+              <p className="text-xs font-medium text-ink">
+                {isConnectionError ? "暂时无法连接 AI 服务。" : "这次应用准备没有完成。"}
+                {job?.status === "failed" ? " 原始源码和你的选择已保留，可以继续准备。" : " 请重试当前操作。"}
               </p>
-              {job?.status === "review" && !questions.length && (
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" className={button + " bg-panel"} disabled={running} onClick={prepare}>
-                    重试准备
-                  </button>
-                </div>
+              {job?.status === "failed" && (
+                <button type="button" className={button + " bg-accent text-white"} disabled={running} onClick={() => void sendFeedback("", true)}>
+                  继续准备
+                </button>
               )}
+              {job?.status === "review" && !questions.length && (
+                <button type="button" className={button + " bg-panel"} disabled={running} onClick={prepare}>
+                  重试准备
+                </button>
+              )}
+              <details className="text-xs text-muted">
+                <summary className="cursor-pointer">查看技术详情</summary>
+                <p className="mt-2 whitespace-pre-wrap break-words">{activeError}</p>
+                {technicalEvents.length > 0 && <ul className="mt-2 space-y-1 break-words">
+                  {technicalEvents.map((event, index) => <li key={index}>{isRejected(event) ? "× " : ""}{event}</li>)}
+                </ul>}
+              </details>
             </div>
           </div>
         )}
@@ -1211,17 +1229,6 @@ export function AppDeliveryReview({
         {/* Quick Actions Toolbar above Composer */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            {activeError && (
-              <button
-                type="button"
-                disabled={running}
-                onClick={handleAiFixError}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-accent text-white text-xs font-medium shadow-xs hover:opacity-90 transition-opacity disabled:opacity-40 cursor-pointer"
-              >
-                <Icon name="sparkle" size={13} />
-                请 AI 帮我处理
-              </button>
-            )}
             <button
               type="button"
               disabled={running || !plan}

@@ -63,8 +63,8 @@ async def test_packaging_validation_is_repaired_in_same_round_or_stops(service, 
     assert (service.path(job['id']) / 'review/source/main.py').read_text() == "print('original')\n"
     if always_invalid:
         assert result['status'] == 'failed'
-        assert '停止自动重试' in result['error']
-        assert len(service.manager.provider.calls) == 6
+        assert 'request body needs schema and required flag' in result['error']
+        assert len(service.manager.provider.calls) == 2
     else:
         assert result['status'] == 'review'
         assert len(service.manager.provider.calls) == 2

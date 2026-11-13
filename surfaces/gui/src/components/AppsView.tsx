@@ -285,7 +285,7 @@ export function AppsView({ onBack }: Props) {
         seen.add(job.slug);
         return true;
       });
-      setLastDraft(latest?.find(job => ["review", "failed", "analyzing", "ready"].includes(job.status) && !job.published) || null);
+      setLastDraft(latest?.find(job => job.verification?.status === "awaiting_page_verification" || (["review", "failed", "analyzing", "ready"].includes(job.status) && !job.published)) || null);
     } catch (err: any) {
       if (version !== catalogRequestVersion.current) return;
       setApps([]);
@@ -427,17 +427,21 @@ export function AppsView({ onBack }: Props) {
     if (job.manifest?.container_port) setContainerPort(job.manifest.container_port);
   };
 
-  const verifyDeployedSkill = async (logs: string) => {
+  const verifyDeployedSkill = async (logs: string, confirmPage = false) => {
     setDeploying(true);
     setDeployStatus("verifying");
     try {
-      const res = await appDeliveryRequest<{ ok: boolean; verification?: { status?: string; detail?: string } }>("enable-skill", { slug: slug.trim(), job_id: jobId, verification_credentials: probeCredentials });
+      const res = await appDeliveryRequest<{ ok: boolean; verification?: { status?: string; detail?: string; skill_enabled?: boolean } }>("enable-skill", { slug: slug.trim(), job_id: jobId, verification_credentials: probeCredentials, ...(confirmPage ? { confirm_page_verification: true } : {}) });
       setProbeCredentials({});
-      setDeployStatus("running");
       if (res?.verification?.status === "awaiting_page_verification") {
+        setDeployStatus("awaiting_page_verification");
         setBuildLogs(logs + "\n" + (res.verification.detail || "容器与健康身份已就绪，待页面验收后启用技能。"));
+      } else if (res?.verification?.skill_enabled === false) {
+        setDeployStatus("skill_disabled");
+        setBuildLogs(logs + "\n应用验证通过，技能保留你的停用设置。");
       } else {
-        setBuildLogs(logs + "\n业务验证通过，应用技能已启用。");
+        setDeployStatus("running");
+        setBuildLogs(logs + "\n应用验证通过，应用技能已启用。");
       }
     } catch (e) {
       setDeployStatus("verification_failed");
@@ -486,14 +490,18 @@ export function AppsView({ onBack }: Props) {
         try {
           const appData = await getDeployedApp(slug.trim());
           if (appData) {
-            setDeployStatus(appData.status);
+            if (appData.status === "unhealthy") {
+              setDeployStatus("failed");
+            } else if (appData.status !== "running") {
+              setDeployStatus(appData.status);
+            }
             setBuildLogs(appData.build_log || appData.error_message || "");
 
             if (appData.status === "running") {
               clearInterval(timer);
               setDeploymentReachedRunning(true);
               await verifyDeployedSkill(appData.build_log || "");
-            } else if (appData.status === "failed") {
+            } else if (["failed", "unhealthy"].includes(appData.status)) {
               clearInterval(timer);
               setDeploying(false);
               refreshApps();
@@ -610,7 +618,16 @@ export function AppsView({ onBack }: Props) {
     if (job.thinking !== undefined) setSelectedSpeed(job.thinking ? "thinking" : "speed");
     setJobId(job.id); setDeliveryJob(null); readyArtifact.current = "";
     setConfigs([]); setSelectedResourceIds([]);
-    setStep(2); setIsModalOpen(true);
+    if (job.verification?.status === "awaiting_page_verification") {
+      setDeliveryJob(job);
+      setDeployStatus("awaiting_page_verification");
+      setDeploymentReachedRunning(true);
+      setBuildLogs("");
+      setStep(4);
+    } else {
+      setStep(2);
+    }
+    setIsModalOpen(true);
   };
 
   const saveDrawerConfig = async () => {
@@ -692,6 +709,7 @@ export function AppsView({ onBack }: Props) {
     setSlug(val);
   };
   const plan = deliveryJob?.proposal;
+  const canVerifyPage = !!plan?.pages?.length && !plan.apis?.some(api => api.path !== plan.health_path);
   const hasBusinessProbe = plan?.verification_plan?.cases?.some(c => plan.apis.some(api => api.id === c.operation && api.effect === "read" && api.path !== plan.health_path));
 
   return (
@@ -943,7 +961,7 @@ export function AppsView({ onBack }: Props) {
         )}
       </div>
 
-      {lastDraft && !isModalOpen && <div className="mx-6 mb-4 p-3 rounded-xl border border-line bg-paper flex items-center justify-between gap-3"><span className="text-ui">还有一份可继续的应用改造：{lastDraft.name} <code className="text-xs text-muted">{lastDraft.slug}</code></span><button className="shrink-0 text-ui text-accent" onClick={() => resumeDraft(lastDraft)}>继续上次分析</button></div>}
+      {lastDraft && !isModalOpen && <div className="mx-6 mb-4 p-3 rounded-xl border border-line bg-paper flex items-center justify-between gap-3"><span className="text-ui">还有一份可继续的应用改造：{lastDraft.name} <code className="text-xs text-muted">{lastDraft.slug}</code></span><button className="shrink-0 text-ui text-accent" onClick={() => resumeDraft(lastDraft)}>{lastDraft.verification?.status === "awaiting_page_verification" ? "继续页面验收" : "继续上次分析"}</button></div>}
       {/* 4-Step New App Modal */}
       {isModalOpen && (
         <div className="absolute inset-0 z-20 bg-canvas flex items-center justify-center p-0">
@@ -1375,7 +1393,7 @@ export function AppsView({ onBack }: Props) {
 
                     {plan?.verification_plan && !hasBusinessProbe && (
                       <p className="text-xs text-warnInk bg-warnSoft/40 border border-warnInk/20 rounded-xl px-3 py-2">
-                        部署后的业务验证仍待补充：当前没有实际业务查询探针。若需自动启用业务技能，请返回改造报告补充只读查询条件和预期结果；健康检查不能代替业务验证。
+                        {canVerifyPage ? "部署后打开应用，确认页面正常使用即可启用技能。" : "应用上线后可以打开访问地址。要启用业务技能，请先在改造步骤补充一项只读查询验证。"}
                       </p>
                     )}
 
@@ -1576,21 +1594,23 @@ export function AppsView({ onBack }: Props) {
                   <div className="flex items-center gap-3 p-3.5 rounded-xl border bg-paper/70 border-line shrink-0">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label font-medium ${
-                        deployStatus === "running"
+                        ["running", "skill_disabled"].includes(deployStatus)
                           ? "bg-okSoft text-ok border border-okLine"
                           : ["failed", "verification_failed"].includes(deployStatus)
                           ? "bg-danger/10 text-danger border border-danger/25"
                           : "bg-warnSoft text-warnInk border border-warnInk/25 animate-pulse"
                       }`}
                     >
-                      <span className={`w-2 h-2 rounded-full ${deployStatus === "running" ? "bg-ok" : ["failed", "verification_failed"].includes(deployStatus) ? "bg-danger" : "bg-warnInk"}`} />
-                      {deployStatus === "running" ? "部署成功" : deployStatus === "verification_failed" ? "应用已运行 · 技能待验证" : deployStatus === "failed" ? "部署未通过" : deployStatus === "verifying" ? "正在验证业务..." : "正在构建部署..."}
+                      <span className={`w-2 h-2 rounded-full ${["running", "skill_disabled"].includes(deployStatus) ? "bg-ok" : ["failed", "verification_failed"].includes(deployStatus) ? "bg-danger" : "bg-warnInk"}`} />
+                      {["running", "skill_disabled"].includes(deployStatus) ? "部署成功" : deployStatus === "verification_failed" ? "应用已运行 · 技能待验证" : deployStatus === "failed" ? "部署未通过" : deployStatus === "awaiting_page_verification" ? "应用已运行 · 待页面验收" : deployStatus === "verifying" ? "正在验证业务..." : "正在构建部署..."}
                     </span>
                     <span className="text-meta text-muted">
                       {deployStatus === "running"
-                        ? "应用健康与只读业务验证通过，本地技能已启用"
+                        ? "应用验证通过，本地技能已启用"
+                        : deployStatus === "skill_disabled" ? "应用验证通过，技能仍按你的设置停用"
                         : ["failed", "verification_failed"].includes(deployStatus)
                         ? (deploymentReachedRunning ? "应用已启动；业务验证尚未通过，不能使用技能" : "构建或健康检查未通过，请查看下方实际日志")
+                        : deployStatus === "awaiting_page_verification" ? "请打开应用，确认页面可正常使用。"
                         : deployStatus === "verifying" ? "正在核对交付版本并执行只读业务验证…" : "服务器正在构建并启动应用，请稍候。"}
                     </span>
                   </div>
@@ -1625,9 +1645,8 @@ export function AppsView({ onBack }: Props) {
                             try {
                               const res = await recheckAppHealth(slug.trim(), appUrl);
                               if (res.ok) {
-                                setDeployStatus("running");
                                 setDeploymentReachedRunning(true);
-                                alert("✅ 健康检查通过，应用已成功运行！");
+                                await verifyDeployedSkill(buildLogs);
                               } else {
                                 alert(`⚠️ 健康检查未通过：${res.error || "服务尚未就绪"}`);
                               }
@@ -1669,37 +1688,38 @@ export function AppsView({ onBack }: Props) {
                     </div>
                   )}
 
-                  {deployStatus === "running" && (
-                    <div className="p-4 rounded-xl bg-okSoft/40 border border-okLine text-ink space-y-2 shrink-0">
-                      <div className="font-semibold text-ui text-ok flex items-center gap-1.5">
-                        🎉 应用已成功上线！
+                  {(deploymentReachedRunning || deployStatus === "running") && (
+                    <section aria-label="应用访问地址" className="p-4 rounded-xl border border-line bg-panel text-ink space-y-2 shrink-0">
+                      <h3 className="font-semibold">应用访问地址</h3>
+                      <div className="flex flex-wrap items-center gap-3 text-meta">
+                        <a href={appUrl} target="_blank" rel="noreferrer" className="underline text-accent break-all">{appUrl}</a>
+                        <button type="button" onClick={() => copyToClipboard(appUrl, "应用地址")} className="text-accent">
+                          {copyFeedback === "应用地址" ? "已复制地址" : "复制地址"}
+                        </button>
                       </div>
-                      <div className="text-meta">
-                        内网访问地址:{" "}
-                        <a href={appUrl} target="_blank" rel="noreferrer" className="underline font-mono text-accent">
-                          {appUrl}
-                        </a>
-                      </div>
-                      <div className="text-label text-muted">
-                        提示: 现在可以在任意对话窗口中直接调用 <code>app-{slug}</code> 技能！
-                      </div>
-                    </div>
+                      {deployStatus === "awaiting_page_verification" && (
+                        <button type="button" onClick={() => void verifyDeployedSkill(buildLogs, true)} disabled={deploying}
+                          className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-meta">
+                          页面可用，启用应用技能
+                        </button>
+                      )}
+                      {deployStatus === "running" && (
+                        <p className="text-label text-muted">
+                          在 Work OPC 对话中可以说「用 app-{slug} 查看这个应用能做什么」。
+                        </p>
+                      )}
+                    </section>
                   )}
 
-                  <div className="flex flex-col flex-1 min-h-0 text-xs text-muted">
-                    <div className="flex items-center justify-between mb-1.5 shrink-0">
-                      <label className="text-meta font-medium text-ink">服务器构建与部署日志</label>
-                      <span className="text-label text-muted font-mono">
-                        {deploying ? "每 2 秒更新" : "日志已归档"}
-                      </span>
-                    </div>
+                  <details className="min-h-0 text-xs text-muted">
+                    <summary className="cursor-pointer text-meta font-medium text-ink">查看服务器部署日志</summary>
                     <pre
                       ref={logContainerRef}
-                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label flex-1 min-h-0 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
+                      className="p-3.5 rounded-xl bg-neutral-950 text-emerald-400 font-mono text-label mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed selection:bg-emerald-900 selection:text-white"
                     >
                       {formatLogOutput(buildLogs) || "等待输出..."}
                     </pre>
-                  </div>
+                  </details>
                 </div>
               )}
             </div>
@@ -1768,15 +1788,16 @@ export function AppsView({ onBack }: Props) {
                       返回配置修改
                     </button>
                     <button
-                      onClick={handlePublish}
+                      onClick={() => deployStatus === "verification_failed" ? void verifyDeployedSkill(buildLogs) : void handlePublish()}
+                      disabled={deploying}
                       className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs transition-all flex items-center gap-1.5"
                     >
                       <Icon name="refresh" size={13} />
-                      重试部署
+                      {deployStatus === "verification_failed" ? "重试业务验证" : "重试部署"}
                     </button>
                   </>
                 )}
-                {step === 4 && deployStatus === "running" && (
+                {step === 4 && ["running", "skill_disabled"].includes(deployStatus) && (
                   <button
                     onClick={closeWizard}
                     className="px-5 py-2 rounded-xl bg-accent hover:opacity-90 text-white text-ui font-medium shadow-xs transition-all"

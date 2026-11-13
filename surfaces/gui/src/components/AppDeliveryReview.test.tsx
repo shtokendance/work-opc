@@ -81,7 +81,7 @@ it("blocks next for unsent changes and invalidates old parent readiness on reana
   vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
   const invalidate=vi.fn();
   render(<AppDeliveryReview jobId="job" onReady={vi.fn()} onInvalidate={invalidate} />);
-  await screen.findByText("应用已准备好，可以核对部署内容");
+  await screen.findByText("交付包已生成，可以核对部署内容");
   fireEvent.change(screen.getByLabelText("给 AI 的回答或要求"),{target:{value:"保留原数据库"}});
   expect((screen.getByRole("button",{name:"下一步：核对部署内容"}) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button",{name:"发送"}));
@@ -116,7 +116,7 @@ it("exports versioned external AI handoff without deployment approval", async ()
   vi.mocked(getAppDeliveryJob).mockResolvedValue(ready);
   vi.mocked(appDeliveryRequest).mockResolvedValue({prompt:"保留原配置",source_path:"/tmp/handoff-v1"});
   render(<AppDeliveryReview jobId="job" onReady={vi.fn()} />);
-  await screen.findByText("应用已准备好，可以核对部署内容");
+  await screen.findByText("交付包已生成，可以核对部署内容");
   fireEvent.click(screen.getByRole("button",{name:"复制交接说明"}));
   await waitFor(()=>expect(copy).toHaveBeenCalledWith("保留原配置"));
   expect(screen.getByText(/handoff-v1/)).toBeTruthy();
@@ -133,7 +133,7 @@ it("uses a short editable answer and replaces a previous suggestion for the same
   expect(appDeliveryRequest).not.toHaveBeenCalled();
 });
 
-it("displays multi-round conversation as chat messages and sends AI fix request directly on click", async () => {
+it("keeps technical failures in details and resumes preparation without creating a chat reply", async () => {
   vi.mocked(getAppDeliveryJob).mockResolvedValue({
     ...plan,
     status: "failed",
@@ -149,10 +149,13 @@ it("displays multi-round conversation as chat messages and sends AI fix request 
   expect(await screen.findByText("第一轮分析结论")).toBeTruthy();
   expect(screen.getByText("不切换保留现有存储")).toBeTruthy();
   expect(screen.getByText("第二轮分析结论")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "请 AI 帮我处理" }));
+  const details = screen.getByText("查看技术详情").closest("details");
+  expect(details?.open).toBe(false);
+  expect(details?.textContent).toContain("possible secret in build input");
+  fireEvent.click(screen.getByRole("button", { name: "继续准备" }));
   await waitFor(() =>
     expect(appDeliveryRequest).toHaveBeenCalledWith("jobs/job/analyze", {
-      feedback: "请处理这次未完成的问题，保留原业务和已确认的选择：\npossible secret in build input: package.json",
+      mode: "resume",
     })
   );
 });

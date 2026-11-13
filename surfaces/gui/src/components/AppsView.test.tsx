@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AppsView } from "./AppsView";
 import { appDeliveryRequest, checkAppSlug, getAppDeliveryJob, listDeployedApps, publishAppToPlatform, recheckAppHealth, transformApp, updateDeployedAppConfig } from "../api";
 
@@ -219,10 +219,33 @@ describe("AppsView Component", () => {
     fireEvent.change(username, { target: { value: "test-user" } });
     fireEvent.change(password, { target: { value: "test-password" } });
     fireEvent.click(await screen.findByRole("button", { name: "仅重试业务验证" }, { timeout: 5000 }));
-    await waitFor(() => expect(screen.getByText("应用健康与只读业务验证通过，本地技能已启用")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("应用验证通过，本地技能已启用")).toBeTruthy());
     expect(verifies).toBe(2);
     expect(appDeliveryRequest).toHaveBeenCalledWith("enable-skill", expect.objectContaining({verification_credentials:{APP_USER:"test-user",APP_PASSWORD:"test-password"}}));
     expect(publishAppToPlatform).toHaveBeenCalledTimes(1);
+    vi.mocked(appDeliveryRequest).mockResolvedValue({ jobs: [] });
+  });
+
+  it("shows the address for a page app and waits for page confirmation before presenting the skill", async () => {
+    const original = await listDeployedApps();
+    vi.mocked(listDeployedApps).mockResolvedValueOnce({ apps: original.apps.map(app => ({ ...app, status: "failed" })) });
+    vi.mocked(appDeliveryRequest).mockImplementation(async <T,>(path: string, body?: unknown) => {
+      if (path.startsWith("jobs?")) return { jobs: [{ id: "page-job", artifact_hash: "hash" }] } as T;
+      if (path === "enable-skill") {
+        const confirmed = (body as { confirm_page_verification?: boolean }).confirm_page_verification;
+        return { ok: true, verification: { status: confirmed ? "verified-deployed-page" : "awaiting_page_verification", skill_enabled: confirmed === true } } as T;
+      }
+      return { confirmation_token: "confirmed", ok: true } as T;
+    });
+    render(<AppsView />);
+    fireEvent.click(await screen.findByRole("button", { name: /修复.*部署|重新部署/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认并上传部署" }));
+    const confirm = await screen.findByRole("button", { name: "页面可用，启用应用技能" }, { timeout: 4000 });
+    expect(within(screen.getByRole("region", { name: "应用访问地址" })).getByRole("link", { name: /expense-app/ }).getAttribute("href")).toContain("expense-app");
+    expect(screen.queryByText(/本地技能已启用/)).toBeNull();
+    fireEvent.click(confirm);
+    await screen.findByText("应用验证通过，本地技能已启用");
+    expect(appDeliveryRequest).toHaveBeenCalledWith("enable-skill", expect.objectContaining({ confirm_page_verification: true }));
     vi.mocked(appDeliveryRequest).mockResolvedValue({ jobs: [] });
   });
 
